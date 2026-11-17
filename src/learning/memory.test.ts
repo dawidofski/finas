@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import { writeAnnotation } from '../db/annotations'
-import type { LearningEventRow, TransactionRow } from '../db/schema'
+import type { LearningEventRow, MerchantRow, TransactionRow } from '../db/schema'
 import { categoryMemory, rememberedCategoryFor } from './memory'
 
 const tx = (id: string, over: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -136,6 +136,70 @@ describe('categoryMemory', () => {
       bad('b5', { transactionId: 't2', new: 42 }),
     ])
     expect((await categoryMemory()).get('m1')).toMatchObject({ categoryId: 'groceries', corrections: 1 })
+  })
+
+  describe('merchant pattern fallback', () => {
+    const merchant = (id: string, pattern: string): MerchantRow => ({
+      id, canonicalName: id, kind: 'merchant', matchPatterns: [pattern], defaultCategoryId: null, isSubscription: false, createdAt: 1,
+    })
+    beforeEach(async () => {
+      await db.merchants.bulkAdd([merchant('uno', 'TIENDA UNO'), merchant('sol', 'FARMACIA SOL')])
+      await db.transactions.bulkDelete(['t1', 't2', 't3', 't4'])
+      await db.transactions.bulkAdd([
+        tx('t1', { description: 'COMPRA TIENDA UNO MADRID' }), tx('t2', { description: 'TIENDA UNO BARCELONA' }),
+        tx('t3', { description: 'COMPRA TIENDA UNO VALENCIA' }), tx('t4', { description: 'UNRELATED PLACE 99' }),
+      ])
+    })
+    const noMerchant = (id: string, categoryId: string) => writeAnnotation(id, { categoryId }, 'owner')
+
+    it('attributes corrections on rows with no stored merchant to the merchant whose pattern matches', async () => {
+      await noMerchant('t1', 'groceries')
+      await noMerchant('t2', 'groceries')
+      // The premise of this test: neither row carries a merchant, so only the fallback can attribute them.
+      expect((await db.annotations.bulkGet(['t1', 't2'])).map(a => a?.merchantId)).toEqual([null, null])
+      expect(rememberedCategoryFor('uno', await categoryMemory())).toBe('groceries')
+    })
+
+    it('lets a stored merchantId win over a pattern that matches a different merchant', async () => {
+      await writeAnnotation('t1', { categoryId: 'groceries', merchantId: 'sol' }, 'owner')
+      await writeAnnotation('t2', { categoryId: 'groceries', merchantId: 'sol' }, 'owner')
+      const m = await categoryMemory()
+      expect(m.get('sol')).toMatchObject({ categoryId: 'groceries', corrections: 2 })
+      expect(m.has('uno')).toBe(false)
+    })
+
+    it('uses the bank description, not a description override', async () => {
+      await writeAnnotation('t4', { categoryId: 'groceries', descriptionOverride: 'TIENDA UNO' }, 'owner')
+      await noMerchant('t1', 'groceries')
+      expect((await categoryMemory()).get('uno')).toMatchObject({ corrections: 1 })
+    })
+
+    it('still skips a row that matches no pattern and has no stored merchant', async () => {
+      await noMerchant('t4', 'groceries')
+      await noMerchant('t1', 'groceries')
+      const m = await categoryMemory()
+      expect([...m.keys()]).toEqual(['uno'])
+      expect(m.get('uno')).toMatchObject({ corrections: 1 })
+    })
+
+    it('reads db.merchants once per call, not once per event', async () => {
+      await noMerchant('t1', 'groceries')
+      await noMerchant('t2', 'groceries')
+      await noMerchant('t3', 'groceries')
+      const spy = vi.spyOn(db.merchants, 'toArray')
+      await categoryMemory()
+      expect(spy).toHaveBeenCalledTimes(1)
+    })
+
+    it('reads no merchants at all when the caller supplies the list, and matches against that list', async () => {
+      await noMerchant('t1', 'groceries')
+      await noMerchant('t2', 'groceries')
+      const spy = vi.spyOn(db.merchants, 'toArray')
+      const m = await categoryMemory([merchant('other', 'TIENDA UNO')])
+      expect(spy).not.toHaveBeenCalled()
+      expect(rememberedCategoryFor('other', m)).toBe('groceries')
+      expect(m.has('uno')).toBe(false)
+    })
   })
 
   it('scans the log once, and is the only module that reads learningEvents', async () => {

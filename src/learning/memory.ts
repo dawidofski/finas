@@ -1,4 +1,6 @@
 import { db } from '../db/db'
+import type { MerchantRow } from '../db/schema'
+import { matchMerchant } from './merchants'
 
 /**
  * Frequency memory (§11): what the owner has taught the app about each merchant's category.
@@ -31,7 +33,11 @@ function readCategoryPayload(payload: unknown): { transactionId: string; categor
   return { transactionId: p.transactionId, categoryId: p.new, isCorrection: p.intent !== 'confirmation' }
 }
 
-export async function categoryMemory(): Promise<CategoryMemory> {
+/**
+ * `merchants` is optional: a caller that has already read the merchant list (the import preview does) passes it
+ * so the table is read once per operation. Omitted, the memory reads it itself, once.
+ */
+export async function categoryMemory(knownMerchants?: MerchantRow[]): Promise<CategoryMemory> {
   // One scan of the log (the single sanctioned one).
   const rows = await db.learningEvents.toArray()
 
@@ -54,7 +60,7 @@ export async function categoryMemory(): Promise<CategoryMemory> {
   if (taught.length === 0) return new Map()
 
   const ids = taught.map(([id]) => id)
-  const [txs, anns] = await Promise.all([db.transactions.bulkGet(ids), db.annotations.bulkGet(ids)])
+  const [txs, anns, merchants] = await Promise.all([db.transactions.bulkGet(ids), db.annotations.bulkGet(ids), knownMerchants ?? db.merchants.toArray()])
 
   // merchantId -> categoryId -> tally
   const tallies = new Map<string, Map<string, { corrections: number; lastAt: number }>>()
@@ -62,9 +68,13 @@ export async function categoryMemory(): Promise<CategoryMemory> {
     // A soft-deleted (or vanished) transaction no longer reflects the owner's current books.
     const tx = txs[i]
     if (tx === undefined || tx.deletedAt !== null) return
-    // No merchant means nothing to attribute the correction to, so it cannot feed per-merchant memory.
-    const merchantId = anns[i]?.merchantId
-    if (merchantId === null || merchantId === undefined) return
+    // A stored merchantId always wins. Without one, fall back to matching the BANK description (never
+    // descriptionOverride: stored patterns are anchored to the bank text) against the owner's merchant patterns,
+    // so one naming covers every later correction on a matching row and nothing has to be written (§34.3).
+    // A row that matches no merchant cannot feed per-merchant memory and is skipped.
+    const stored = anns[i]?.merchantId
+    const merchantId = stored !== null && stored !== undefined ? stored : matchMerchant(tx.description, merchants)?.id
+    if (merchantId === undefined) return
     const categoryId = l.categoryId as string
     const byCategory = tallies.get(merchantId) ?? new Map<string, { corrections: number; lastAt: number }>()
     const t = byCategory.get(categoryId) ?? { corrections: 0, lastAt: 0 }
