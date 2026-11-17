@@ -130,7 +130,7 @@ describe('scrubDescription', () => {
     const merchants = [
       'SUPERMERCADO EJEMPLO LOCALIDAD ES',
       'Compra EN SUPERMERCADO EJEMPLO, MADRID',
-      'Recibo AMAZON EU S.A R.L., MADRID BRANCH AMAZON EU S.A R.L., MADRID B',
+      'Recibo COMERCIO EJEMPLO S.A R.L., LOCALIDAD BRANCH COMERCIO EJEMPLO S.A',
       'Tu ahorro crece otra vez con tu compra de 34 EUR y 78 cts',
     ]
     for (const m of merchants) expect(scrubDescription(m, TOKENS)).toBe(m)

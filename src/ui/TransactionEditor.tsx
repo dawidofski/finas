@@ -5,6 +5,9 @@ import { addDays, formatSpanishDate } from '../lib/dates'
 import type { RefundContext } from '../import/refunds'
 import type { RoundupContext } from '../import/pairing'
 import { centsToTypedString, formatEur, parseTypedAmount } from '../lib/money'
+// The threshold is imported, never retyped: the sentence beside a control is part of the behaviour (§45), so a
+// hard-coded "twice" here would quietly lie to the owner if the rule changed, with the suite still green.
+import { CORRECTIONS_NEEDED } from '../learning/memory'
 import MoodRow from './annotations/MoodRow'
 import ReasonChips from './annotations/ReasonChips'
 import WorthwhileButtons from './annotations/WorthwhileButtons'
@@ -272,7 +275,8 @@ export default function TransactionEditor(props: Props): ReactNode {
             <p>
               The Merchant list above holds the merchants you have already named. Name the shop behind this transaction and
               the app remembers your bank&apos;s wording for it, so the same shop is recognised on later statements too.
-              Once you have corrected that merchant&apos;s category the same way twice, it becomes the category assumed for it.
+              Once you have corrected that merchant&apos;s category the same way {CORRECTIONS_NEEDED} times, it becomes the
+              category assumed for it.
             </p>
             <label htmlFor={field('merchant-name')}>Merchant name</label>
             <input id={field('merchant-name')} type="text" value={merchantName}

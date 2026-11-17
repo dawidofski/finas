@@ -126,11 +126,11 @@ describe('suggestCategory inputs', () => {
   it('uses the memory of the merchant that matched, not another merchant', () => {
     const other = merchant({ id: 'm2', canonicalName: 'Otra Tienda', matchPatterns: ['otra tienda'] })
     const memory: CategoryMemory = new Map([
-      ['m1', { categoryId: 'cat-ah', corrections: 2, lastAt: 1 }],
-      ['m2', { categoryId: 'cat-jumbo', corrections: 5, lastAt: 1 }],
+      ['m1', { categoryId: 'cat-tienda', corrections: 2, lastAt: 1 }],
+      ['m2', { categoryId: 'cat-otra', corrections: 5, lastAt: 1 }],
     ])
     const s = suggestCategory(tx(), loud({ ownerCategoryFor: () => null, merchants: [other, merchant()], memory }))
-    expect(s?.categoryId).toBe('cat-ah')
+    expect(s?.categoryId).toBe('cat-tienda')
   })
 })
 
