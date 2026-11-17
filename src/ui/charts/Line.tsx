@@ -22,7 +22,7 @@ export function Line({ points, title }: ChartProps): ReactNode {
   const min = Math.min(0, ...points.map((p) => p.cents))
   const span = Math.max(1, max - min)
   const yOf = (cents: number) => PLOT_TOP + divRound((max - cents) * PLOT_H, span)
-  const xOf = (i: number) => (points.length === 1 ? VIEW_W / 2 : PAD_X + divRound(i * (VIEW_W - 2 * PAD_X), points.length - 1))
+  const xOf = (i: number) => (points.length === 1 ? divRound(VIEW_W, 2) : PAD_X + divRound(i * (VIEW_W - 2 * PAD_X), points.length - 1))
   const baseY = yOf(0)
   const first = points[0]
   const last = points[points.length - 1]

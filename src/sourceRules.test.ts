@@ -89,6 +89,27 @@ describe('source rules, over every file in src/', () => {
     expect(matches(/\b(parseFloat|toFixed)\b/g)).toEqual([])
   })
 
+  it('writes no decimal literal and no ** anywhere, and says why where it does', () => {
+    // Money and shares are integers; a decimal literal (`+ 0.5` to round, `* 0.01` to take a percent) is the footprint of float
+    // arithmetic, and that is how a float rounding helper got past the parseFloat/toFixed rule above. This is the whole-tree
+    // version of the scan src/learning/bayes.test.ts runs on its own file. It reads the code with comments and strings removed,
+    // so a doc comment may mention a decimal. Division is NOT banned here: it is legitimate in too many places, and the rule
+    // for it lives per file. file -> why a decimal in its code is not arithmetic.
+    const allowed: Record<string, string> = {
+      'ui/TransactionEditor.tsx': 'JSX hint copy that shows the example amount -1.850,00 (a thousands separator, not a number)',
+    }
+    const floatish = /(?<![\w.])\d*\.\d+|\*\*/g
+    expect(' x + 0.5 '.match(floatish)).not.toBeNull() // the detector sees the footprint it exists to forbid
+    expect(' x * .25 '.match(floatish)).not.toBeNull()
+    expect(' x ** 2 '.match(floatish)).not.toBeNull()
+    expect(code('const ok = 1 // rounds up by 0.5').match(floatish)).toBeNull() // prose in a comment is not code
+    expect(code('const r = floor(q + 0.5)').match(floatish)).not.toBeNull()
+    expect(' a[0].b + v1.2x '.match(floatish)).toBeNull() // member access and identifiers are not literals
+    const users = files.filter((f) => (f.code.match(floatish) ?? []).length > 0).map((f) => f.rel)
+    expect(users.filter((rel) => !(rel in allowed))).toEqual([])
+    expect(Object.keys(allowed).filter((rel) => !users.includes(rel))).toEqual([]) // an exemption that is no longer needed
+  })
+
   it('reads the clock only where it is sanctioned, and says why', () => {
     // Everything else takes "today" as an argument, so it can be tested with a fixed date: a new module is covered the moment it
     // exists. Each entry is a file that stamps or supplies "now" at a boundary; none reasons about calendar dates with it.

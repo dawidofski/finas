@@ -1,3 +1,4 @@
+import { divRound } from '../lib/money'
 import { cached } from './cache'
 import { monthSummary, type MonthSummary } from './monthly'
 
@@ -56,13 +57,6 @@ export interface Change {
 /** The money and count fields of a MonthSummary: the ones that can be subtracted. */
 export type NumericField = { [K in keyof MonthSummary]: MonthSummary[K] extends number ? K : never }[keyof MonthSummary]
 
-/** Integer division rounding half away from zero. */
-function roundedDiv(n: number, d: number): number {
-  const q = Math.abs(n) / Math.abs(d)
-  const r = Math.floor(q + 0.5)
-  return (n < 0) !== (d < 0) ? -r : r
-}
-
 /**
  * How `current` moved from `previous`. Without a previous month, or when the previous month is a gap (no data), there is no
  * basis: bp is null and basis is 'none', so a screen says "no earlier month" instead of a 100% rise. A previous VALUE of zero
@@ -74,6 +68,6 @@ export function changeFrom(previous: MonthSummary | null, current: MonthSummary,
     return { cents: null, bp: null, basis: 'none' }
   }
   const cents = current[field] - previous[field]
-  const bp = previous[field] === 0 ? null : roundedDiv(cents * 10000, Math.abs(previous[field]))
+  const bp = previous[field] === 0 ? null : divRound(cents * 10000, Math.abs(previous[field]))
   return { cents, bp, basis: 'month' }
 }
