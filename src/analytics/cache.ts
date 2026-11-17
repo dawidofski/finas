@@ -23,28 +23,30 @@ const isEnvelope = (payload: unknown): payload is Envelope =>
   typeof payload === 'object' && payload !== null && (payload as Envelope).shape === PAYLOAD_SHAPE && 'value' in payload
 
 /**
- * A digest of what the figures are computed from: the live transaction count, the soft-deleted count, the annotation count and
- * the newest annotations.updatedAt. An import, a soft delete, a restore, and an owner edit each move at least one of these.
+ * A digest of what the figures are computed from: the live transaction count, the soft-deleted count, the newest deletedAt, the
+ * annotation count and the newest annotations.updatedAt. Every add, soft delete, restore and annotation write moves at least one.
  *
- * The limit, stated rather than glossed over: this is a summary, not a content hash, so two different changes that leave all
- * four numbers equal give the same digest and a cached figure would then be served stale. Known cases:
- *   - two annotation edits inside the same millisecond (updatedAt does not move), with the annotation count unchanged;
- *   - one soft delete plus one restore between two reads (both counts return to their old values), which needs no clock
- *     coincidence at all;
- *   - a hard delete plus an add (nothing in the app does this to transactions, and a restore of a backup clears this table).
- * That is why rebuildAnalytics exists: the owner can always force a recompute.
+ * Counts alone are not enough: soft-deleting one row and restoring another leaves both counts as they were. The newest deletedAt
+ * closes that: the delete lands a newer timestamp than any before it, and the restore removes the old entry, so the pair moves it
+ * either way, while deleting and restoring the same row returns it to its old value, as the state really is.
+ *
+ * What is left is a summary, not a content hash: two different annotation edits in the same millisecond that keep the annotation
+ * count (updatedAt does not move) collide, as would a delete-and-restore pair stamped with the same millisecond as the old newest
+ * deletedAt. A person acting through the interface cannot do either, so no realistic collision remains; rebuildAnalytics still
+ * exists to force a recompute.
  */
 export async function inputsHash(): Promise<string> {
   const total = await db.transactions.count()
   // deletedAt is indexed, and an index never holds null, so the index holds exactly the soft-deleted rows.
   const deleted = await db.transactions.where('deletedAt').above(-Infinity).count()
+  const newestDeleted = (await db.transactions.orderBy('deletedAt').last())?.deletedAt ?? 0
   let annotations = 0
   let newest = 0
   await db.annotations.each((a) => {
     annotations++
     if (a.updatedAt > newest) newest = a.updatedAt
   })
-  const joined = [`live=${total - deleted}`, `deleted=${deleted}`, `annotations=${annotations}`, `newest=${newest}`].join('|')
+  const joined = [`live=${total - deleted}`, `deleted=${deleted}`, `newestDeleted=${newestDeleted}`, `annotations=${annotations}`, `newest=${newest}`].join('|')
   return sha256Hex(new TextEncoder().encode(joined))
 }
 

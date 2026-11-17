@@ -79,6 +79,15 @@ describe('cached', () => {
     expect(await cached('k', c.compute, 6)).toBe('figure-4')
   })
 
+  it('recomputes after one transaction is soft-deleted and a different one restored', async () => {
+    await tx('a'); await tx('b', 10)
+    const c = counter()
+    expect(await cached('k', c.compute, 1)).toBe('figure-1')
+    await db.transactions.update('a', { deletedAt: 20 })
+    await db.transactions.update('b', { deletedAt: null })
+    expect(await cached('k', c.compute, 2)).toBe('figure-2')
+  })
+
   it('recomputes when an annotation changes', async () => {
     await tx('a')
     const c = counter()
@@ -128,6 +137,26 @@ describe('inputsHash', () => {
     const before = await inputsHash()
     await annotate('b', 5)
     expect(await inputsHash()).not.toBe(before)
+  })
+
+  it('moves on a soft delete plus a restore of a different row, though both counts are unchanged', async () => {
+    await tx('a'); await tx('b', 10)
+    const counts = async () => [await db.transactions.count(), await db.transactions.where('deletedAt').above(-Infinity).count()]
+    expect(await counts()).toEqual([2, 1])
+    const before = await inputsHash()
+    await db.transactions.update('a', { deletedAt: 20 })
+    await db.transactions.update('b', { deletedAt: null })
+    expect(await counts()).toEqual([2, 1]) // the swap leaves the counts as they were, so only the newest deletedAt can see it
+    expect(await inputsHash()).not.toBe(before)
+  })
+
+  it('returns to the original digest when a deleted row is restored, because the state is identical', async () => {
+    await tx('a'); await tx('b', 10)
+    const before = await inputsHash()
+    await db.transactions.update('a', { deletedAt: 20 })
+    expect(await inputsHash()).not.toBe(before)
+    await db.transactions.update('a', { deletedAt: null })
+    expect(await inputsHash()).toBe(before)
   })
 
   it('does not tell apart two edits that leave every count and the newest updatedAt equal (the stated limit)', async () => {
