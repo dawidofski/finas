@@ -124,18 +124,24 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
       // A round-up arriving in savings whose spending-account leg was never imported is the only record of the saving.
       // The outflow carries the saving when it is present, because it is the movement that actually left the spending
       // account, so which inflows are still owed is decided below, once every outflow has been counted.
-      if (t.kind === 'roundup' && t.amountCents > 0 && !transferLegIds.has(t.id)) pendingInflows.push(t)
+      //
+      // The RESOLVED kind (§43.4), because which rows carry a saving IS a figure, and income.ts gates the income sum
+      // on the same resolved kind. With the bank's kind here the two readers disagreed in both directions: an inflow
+      // re-kinded to `income` was counted by income AND credited to savings (one movement in two figures), and an
+      // arrival re-kinded to `roundup` left income and entered nothing, although §43's case list says a row re-kinded
+      // to `roundup` is savings. The amount, the sign (`t.amountCents > 0`) and the date below stay the BANK's.
+      if (r.kind === 'roundup' && t.amountCents > 0 && !transferLegIds.has(t.id)) pendingInflows.push(t)
       continue
     }
     // Deliberately the BANK's kind, not the resolved one: this is not a figure but the round-up PAIRING, a statement
-    // about two bank events (the importer's `transfers` row, or the date/amount/account match below). Both sides of
-    // that match read the bank kind, so they stay symmetric, and the carve-out on the next line keeps a paired
-    // round-up outflow in the figures instead of dropping it as an excluded transfer leg. Were this the resolved kind,
-    // re-kinding a round-up to `spend` would make the outflow neither savings nor spending: counted nowhere.
+    // about two bank events (the importer's `transfers` row, or the date/amount/account match below), which no later
+    // correction can change. The carve-out on the next line keeps a paired round-up outflow in the figures instead of
+    // dropping it as an excluded transfer leg. Were this the resolved kind, re-kinding a round-up to `spend` would
+    // make the outflow neither savings nor spending: counted nowhere.
     const isRoundup = t.kind === 'roundup'
     // Whether the outflow was credited to savings AS A ROUND-UP, which is what registering it below records. It asks
     // the RESOLVED kind because that is the kind the crediting decision above used (§43): a spend the owner re-kinded
-    // to `roundup` is credited, so it has to be registered, or an unpaired bank round-up inflow of the same date and
+    // to `roundup` is credited, so it has to be registered, or an unpaired round-up inflow of the same date and
     // amount is credited as well and one movement of 35 shows as 70 (finding B1 of the previous plan, arriving through
     // the new path). The bank kind stays in the test as well as the resolved one, because an outflow the bank filed as
     // a round-up can reach the savings branch for the other reason — a savings CATEGORY, with the owner's kind saying

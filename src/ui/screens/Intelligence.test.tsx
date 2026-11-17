@@ -53,19 +53,19 @@ afterEach(() => { vi.restoreAllMocks() })
 
 describe('Intelligence screen: what has been learned', () => {
   it('says what was learned per merchant, with the number of corrections behind it, and what is still short', async () => {
-    await merchant('m1', 'Mercadona'); await merchant('m2', 'Zara')
+    await merchant('m1', 'Supermercado Ejemplo'); await merchant('m2', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries'); await correct('c', 'm1', 'cat.groceries')
     await correct('d', 'm2', 'cat.shopping')
     render(<Intelligence today={TODAY} />)
     await settled()
     const learned = within(await screen.findByRole('list', { name: 'Learned merchants' })).getAllByRole('listitem')
     expect(learned).toHaveLength(1)
-    expect(learned[0]).toHaveTextContent(/Mercadona: .*Corrected 3 times/)
+    expect(learned[0]).toHaveTextContent(/Supermercado Ejemplo: .*Corrected 3 times/)
     const groceries = (await db.categories.get('cat.groceries'))!.name
     expect(learned[0]).toHaveTextContent(groceries)
     const pending = within(screen.getByRole('list', { name: 'Merchants still being learned' })).getAllByRole('listitem')
     expect(pending).toHaveLength(1)
-    expect(pending[0]).toHaveTextContent(/Zara: .*Corrected once; 1 more of the same correction/)
+    expect(pending[0]).toHaveTextContent(/Tienda Ejemplo: .*Corrected once; 1 more of the same correction/)
     // Something is learned, so the "nothing learned" message must not be shown beside it.
     expect(screen.queryByText(/Nothing learned yet/)).not.toBeInTheDocument()
   })
@@ -82,17 +82,17 @@ describe('Intelligence screen: what has been learned', () => {
   })
 
   it('still says nothing is learned when every merchant has only one correction, and says how many are one short', async () => {
-    await merchant('m1', 'Zara')
+    await merchant('m1', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.shopping')
     render(<Intelligence today={TODAY} />)
     await settled()
     expect(screen.getByText(/Nothing learned yet/)).toHaveTextContent(/1 merchant has one correction so far/)
     expect(screen.queryByRole('list', { name: 'Learned merchants' })).not.toBeInTheDocument()
-    expect(screen.getByRole('list', { name: 'Merchants still being learned' })).toHaveTextContent('Zara')
+    expect(screen.getByRole('list', { name: 'Merchants still being learned' })).toHaveTextContent('Tienda Ejemplo')
   })
 
   it('reads the merchants table once for what was learned, however many merchants there are', async () => {
-    await merchant('m1', 'Mercadona'); await merchant('m2', 'Zara')
+    await merchant('m1', 'Supermercado Ejemplo'); await merchant('m2', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries'); await correct('c', 'm2', 'cat.shopping')
     const reads = vi.spyOn(db.merchants, 'toArray')
     render(<Intelligence today={TODAY} />)
@@ -105,7 +105,7 @@ describe('Intelligence screen: what has been learned', () => {
   })
 
   it('shows dates in Spanish format', async () => {
-    await merchant('m1', 'Mercadona')
+    await merchant('m1', 'Supermercado Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries')
     render(<Intelligence today={TODAY} />)
     await settled()

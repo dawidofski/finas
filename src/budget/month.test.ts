@@ -296,6 +296,44 @@ describe('monthlyBudget spending', () => {
     expect(b.income.cents).toBe(200000) // and no leg of it reached income
   })
 
+  // §43.4: the third direction of the same asymmetry. The pending-inflow gate used to ask the BANK's kind while
+  // income.ts asked the resolved one, so a re-kinded arrival was in two figures or in none. Both tests below assert
+  // income and savings together, because that is where the euro went or failed to go.
+  it('does not credit savings for a round-up inflow the owner re-kinded to income (§43.4)', async () => {
+    // The bank filed this arrival as a round-up and its outflow was never imported, so it is the only record of the
+    // movement. The owner says it is really earnings: income counts it (the resolved kind), so crediting savings as
+    // well would put one movement of 0.35 EUR in two figures and read the savings rate off money nobody saved.
+    await tx('ru-in', '2026-11-05', 35, ROUNDUP, 'roundup', 'acc.2')
+    expect((await monthlyBudget(NOV, TODAY)).totals.savingsCents).toBe(35) // before the correction: savings, once
+    await annotate('ru-in', { typeOverride: 'income' })
+    const b = await monthlyBudget(NOV, TODAY)
+    expect(b.totals).toMatchObject({ savingsCents: 0, spentCents: 0 }) // it left savings...
+    expect(b.income.cents).toBe(200035) // ...and is in income alone: the salary plus this arrival, counted once
+  })
+
+  it('credits savings for an arrival the owner re-kinded to a round-up, which income has dropped (§43.4)', async () => {
+    // The bank called it income; the owner says it is a round-up into savings. §43's case list says a row re-kinded to
+    // `roundup` IS savings, and income stops counting it, so 50.00 EUR must be in the savings figure or in none at all.
+    await tx('odd', '2026-11-05', 5000, null, 'income', 'acc.2')
+    expect((await monthlyBudget(NOV, TODAY)).income.cents).toBe(205000)
+    await annotate('odd', { typeOverride: 'roundup' })
+    const b = await monthlyBudget(NOV, TODAY)
+    expect(b.income.cents).toBe(200000) // it left income...
+    expect(b.totals).toMatchObject({ savingsCents: 5000, spentCents: 0 }) // ...and arrived in savings
+  })
+
+  it('accounts a re-kinded inflow against its own outflow when that outflow was imported (§43.4)', async () => {
+    // The admitted inflow still goes through the splice below the loop, so an inflow that reaches the pending set only
+    // because of a correction cannot be credited on top of the outflow that already carried the saving. (This one does
+    // not turn on the gate's kind — it pins the splice, which the gate change puts on a new path.)
+    await tx('ru-out', '2026-11-05', -5000, ROUNDUP, 'roundup') // the movement that actually left the account
+    await tx('ru-in', '2026-11-05', 5000, null, 'income', 'acc.2') // the bank filed the arrival as income
+    await annotate('ru-in', { typeOverride: 'roundup' }) // the owner says it is the savings leg of that movement
+    const b = await monthlyBudget(NOV, TODAY)
+    expect(b.totals).toMatchObject({ savingsCents: 5000, spentCents: 0 }) // 5000, not 10000
+    expect(b.income.cents).toBe(200000)
+  })
+
   it('credits an outflow whose inflow was never imported', async () => {
     await tx('ru-out', '2026-11-05', -35, ROUNDUP, 'roundup')
     expect((await monthlyBudget(NOV, TODAY)).totals.savingsCents).toBe(35)

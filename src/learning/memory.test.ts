@@ -79,6 +79,27 @@ describe('categoryMemory', () => {
     expect((await categoryMemory()).get('m1')).toMatchObject({ categoryId: 'transport', corrections: 2 })
   })
 
+  it('breaks a tie on corrections AND time by the category id, so the order is total (§11)', async () => {
+    // The module promises an answer that never depends on read order. Corrections and lastAt can both tie — two
+    // corrections written in the same millisecond, as a restored backup or a bulk write can produce — and before the
+    // final tie-break the winner was whichever category the tally map happened to hold first, i.e. the read order.
+    await writeAnnotation('t1', { merchantId: 'm1' }, 'engine')
+    await writeAnnotation('t2', { merchantId: 'm1' }, 'engine')
+    const ev = (id: string, transactionId: string, categoryId: string): LearningEventRow => ({
+      id, at: 5000, type: 'category', outcome: null,
+      payload: { transactionId, field: 'categoryId', old: null, new: categoryId, intent: 'correction' },
+    })
+    await db.learningEvents.bulkAdd([ev('e1', 't1', 'groceries'), ev('e2', 't2', 'transport')])
+    const stored = await db.learningEvents.toArray()
+    const spy = vi.spyOn(db.learningEvents, 'toArray')
+    spy.mockResolvedValue(stored)
+    const forward = (await categoryMemory()).get('m1')
+    spy.mockResolvedValue([...stored].reverse())
+    const backward = (await categoryMemory()).get('m1')
+    expect(forward).toMatchObject({ categoryId: 'transport', corrections: 1, lastAt: 5000 })
+    expect(backward).toEqual(forward)
+  })
+
   it('prefers the category with more corrections over a more recent one', async () => {
     await correct('t1', 'groceries')
     await correct('t2', 'groceries')

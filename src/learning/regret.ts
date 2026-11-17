@@ -16,6 +16,25 @@ export interface RegretCluster {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 
 /**
+ * Every live transaction the owner has ANSWERED the worth-it question on, for the whole-history branch.
+ *
+ * Driven from `annotations`, never from `transactions`: §39.4 forbids a screen reading the whole ledger, and this
+ * branch is the Intelligence screen's default view on a route that sits in the mobile tab bar, re-run on every period
+ * toggle. `worthwhile` cannot be indexed (IndexedDB has no boolean keys), so the rows still have to be filtered in
+ * memory — but an annotation exists only for a row the owner has TOUCHED, so what is read is bounded by the owner's own
+ * activity rather than by the length of their history: three more years of imports add nothing to it. That is the sense
+ * in which this read is bounded, and it is the same trick `src/import/pipeline.ts` uses for the classifier's training
+ * set. `bulkGet` can return undefined for an annotation whose transaction was hard-deleted; soft-deleted rows are
+ * dropped here exactly as the month branch's `liveTransactionsBetween` drops them.
+ */
+async function answeredTransactions(): Promise<TransactionRow[]> {
+  const answered = (await db.annotations.toArray()).filter((a) => a.worthwhile !== null)
+  if (answered.length === 0) return []
+  const rows = await db.transactions.bulkGet(answered.map((a) => a.transactionId))
+  return rows.filter((t): t is TransactionRow => t !== undefined && t.deletedAt === null)
+}
+
+/**
  * §41, whole module: which month a spend belongs to, its weekday and its amount are the BANK's. A `dateOverride` or
  * `amountCentsOverride` never moves or resizes a cluster. The owner-corrected values used are the classifications
  * (kind, category, merchant, mood, reason, worthwhile), which resolveMany supplies.
@@ -32,8 +51,11 @@ const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
  */
 export async function regretClusters(month: string | null): Promise<RegretCluster[]> {
   if (month !== null && !MONTH_RE.test(month)) throw new Error(`Invalid month, expected YYYY-MM: ${month}`)
+  // Both branches are bounded (§39.4): the month by its date range, all history by the owner's own answers. Resolving
+  // goes through resolveMany either way, so there is one resolution path and the loop below cannot tell them apart —
+  // an unanswered row would be dropped by `worthwhile === null` anyway, so no cluster depends on which branch ran.
   const candidates: TransactionRow[] = month === null
-    ? (await db.transactions.toArray()).filter((t) => t.deletedAt === null)
+    ? await answeredTransactions()
     : await liveTransactionsBetween(month, month)
   const bank = new Map(candidates.map((t) => [t.id, t]))
   const rows = await resolveMany(candidates)

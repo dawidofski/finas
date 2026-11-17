@@ -1650,6 +1650,20 @@ re-runs after every single edit. At three years (~9,000 rows) that is four table
 reads per save on a phone. Not a defect in Plan 2; it is the pattern Plans 3-5
 would copy, so it should be bounded before they do.
 
+Plan 4 copied it once and the whole-branch review caught it: `regretClusters`
+read `db.transactions.toArray()` on its all-history branch, which is the
+Intelligence screen's default view on a route in the mobile tab bar, re-run on
+every period toggle. **The read is now driven from `annotations`**: regret only
+concerns rows the owner has answered, `worthwhile` cannot be indexed (IndexedDB
+has no boolean keys), but an annotation exists only for a row the owner has
+touched — so reading the annotations and `bulkGet`ting just the answered
+transactions costs what the owner's own activity costs, not what their history
+costs. That is the sense of "bounded" that matters here, and it is the same
+trick `src/import/pipeline.ts` uses for the classifier's training set. The two
+unbounded reads this plan sanctioned stay sanctioned and stay commented as such:
+`learningEvents` in `src/learning/memory.ts`, and the pass over categorised
+annotations at import time.
+
 **39.5 `AnnotationRow.subcategoryId` is vestigial** (P2-R51). It is carried
 through `resolve`, listed in `OWNER_FIELDS`, `EVENT_FOR_FIELD` and
 `LearningEventType`, and derived or read by nothing, because `categoryId` holds
@@ -1876,6 +1890,34 @@ honouring the override in the figures left each of them disagreeing with it:
 
 Neither fix moved a figure anywhere else, and the round-up pairing itself still reads the
 bank kind: it is a statement about two bank events, not a figure.
+
+**43.4 The third direction of the same asymmetry: the pending round-up inflow.** §43.3
+found two readers outside `treatmentOf`; there was a third, in `month.ts` itself. The gate
+admitting a round-up **inflow** to the pending set — the one that credits savings for a
+round-up whose spending-account leg was never imported — asked the **bank's** kind, while
+the income sum next to it asked the resolved one. That disagreed in both directions, and
+neither case was pinned:
+
+- **Counted twice.** A bank arrival filed as `roundup`, with no `transfers` row, which the
+  owner re-kinds to `income`. Income counts it, because income asks the resolved kind; the
+  gate still saw the bank's `roundup`, found no credited outflow to account for it, and
+  credited savings as well. One movement in two figures, with the savings rate computed off
+  money nobody saved.
+- **Counted nowhere.** A bank arrival filed as `income` which the owner re-kinds to
+  `roundup`. Income drops it, and the bank-kind gate would not admit it, so it was in no
+  figure at all — contradicting §43's own case list, which says a row re-kinded to
+  `roundup` is savings.
+
+**The gate now asks the resolved kind**, like every other figure. The amount, the sign
+(`amountCents > 0`, §43.1) and the date stay the bank's. The round-up **pairing** keeps the
+bank kind, for §43.3's reason: it is a statement about two bank events. The two therefore
+no longer read the same value, and that is deliberate — crediting is a figure, pairing is
+not. What keeps them consistent is the registration rule §43.3 installed:
+`creditedOutflows` is keyed on the bank kind **or** the resolved one, so it covers both the
+inflows the gate has stopped admitting and the ones it now admits. An inflow that reaches
+the pending set only because of a correction is still accounted against its own registered
+outflow by the same splice, so a re-kinded arrival whose outflow **was** imported credits
+the movement once, not twice.
 
 ---
 

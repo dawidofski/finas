@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { resolveMany, type ResolvedTransaction } from '../db/annotations'
 import { loadCategoryKinds, worthAnnotating } from '../analysis/queues'
+import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { regretClusters } from './regret'
 
 // 2026-11-16 is a Monday; 2026-11-17 a Tuesday; 2026-11-21 a Saturday; 2026-12-05 a Saturday.
@@ -22,7 +23,10 @@ const ann = (transactionId: string, over: Partial<AnnotationRow> = {}): Annotati
 type Clusters = Awaited<ReturnType<typeof regretClusters>>
 const find = (cs: Clusters, by: string, key: string) => cs.find((c) => c.by === by && c.key === key)
 
+afterEach(() => { vi.restoreAllMocks() })
+
 beforeEach(async () => {
+  vi.restoreAllMocks()
   await db.delete(); await db.open(); await seedDatabase()
   await db.merchants.add({
     id: 'm1', canonicalName: 'Bar Pepe', kind: 'merchant', matchPatterns: [], defaultCategoryId: null, isSubscription: false, createdAt: 1,
@@ -125,6 +129,25 @@ describe('regretClusters', () => {
     expect(find(await regretClusters(null), 'weekday', '1')).toMatchObject({ regretted: 1, total: 1 })
   })
 
+  it('reads only the transactions the owner answered, never the whole history (§39.4)', async () => {
+    // This is the Intelligence screen's DEFAULT view, on a route in the mobile tab bar, re-run on every period
+    // toggle, so it must not scale with the length of the history. 60 imported rows, 2 of them answered: the
+    // transaction rows read have to be the 2, driven from `annotations`, and the whole table must not be read at all.
+    const ids = Array.from({ length: 60 }, (_, i) => `h${i}`)
+    await db.transactions.bulkAdd(ids.map((id) => tx(id)))
+    await db.annotations.bulkAdd([
+      ann('h7', { worthwhile: false, moodId: 'mood.sad' }),
+      ann('h9', { worthwhile: true, moodId: 'mood.sad' }),
+      ann('h11', { worthwhile: null, moodId: 'mood.sad' }), // touched but unanswered: not read, and in no figure
+    ])
+    const whole = vi.spyOn(db.transactions, 'toArray')
+    const byId = vi.spyOn(db.transactions, 'bulkGet')
+    const cs = await regretClusters(null)
+    expect(find(cs, 'mood', 'mood.sad')).toMatchObject({ regretted: 1, total: 2 })
+    expect(whole).not.toHaveBeenCalled()
+    expect(byId.mock.calls.flatMap(([keys]) => keys)).toEqual(['h7', 'h9'])
+  })
+
   it('names a weekday in Spanish, derived from the ISO string', async () => {
     await db.transactions.bulkAdd([
       tx('a', { valueDate: '2026-11-17' }), tx('b', { valueDate: '2026-11-21' }), tx('c', { valueDate: '2026-11-22' }),
@@ -149,15 +172,24 @@ describe('regretClusters', () => {
       ['a', '2026-11-16', -100], ['b', '2026-11-16', -200], ['c', '2026-11-17', -900],
       ['d', '2026-11-18', -900], ['e', '2026-11-19', -100],
     ]
-    const make = async (order: typeof rows) => {
+    // What varies the read order is the ACCOUNT, not the insertion order: the read is one [accountId+valueDate] range
+    // per account, in accountId order, so reversing the inserts returns the very same rows in the very same order (an
+    // earlier version of this test "reversed" them and proved nothing). The row named `first` is put alone on the lowest
+    // accountId, so it is read before every other row whatever its date, and the assertion inside `make` checks that.
+    const make = async (first: string) => {
       await db.transactions.clear(); await db.annotations.clear()
-      await db.transactions.bulkAdd(order.map(([id, valueDate, amountCents]) => tx(id, { valueDate, amountCents })))
-      await db.annotations.bulkAdd(order.map(([id]) => ann(id, { worthwhile: false })))
+      await db.transactions.bulkAdd(rows.map(([id, valueDate, amountCents]) =>
+        tx(id, { valueDate, amountCents, accountId: id === first ? 'acc.a' : 'acc.z' })))
+      await db.annotations.bulkAdd(rows.map(([id]) => ann(id, { worthwhile: false })))
+      expect((await liveTransactionsBetween('2026-11', '2026-11'))[0]?.id).toBe(first)
       return (await regretClusters('2026-11')).map((c) => c.key)
     }
-    const forward = await make(rows)
-    expect(forward).toEqual(['1', '2', '3', '4'])
-    expect(await make([...rows].reverse())).toEqual(forward)
+    expect(await make('a')).toEqual(['1', '2', '3', '4']) // read in date order: Monday first
+    expect(await make('e')).toEqual(['1', '2', '3', '4']) // Thursday read first, and comes out last anyway
+    // Wednesday read before Tuesday, and the two tie on regrets and cents: this is the case that pins the key
+    // tiebreak. Removing it gives ['1', '3', '2', '4'] here. (The cents tiebreak is pinned by the test below, where
+    // the keys contradict it; here the keys and the cents agree, so this case says nothing about cents.)
+    expect(await make('d')).toEqual(['1', '2', '3', '4'])
   })
 
   it('breaks ties on cents and then key even when the read order says otherwise', async () => {

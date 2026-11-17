@@ -79,7 +79,9 @@ async function buildCategoriserContext(index: CategoryIndex): Promise<Categorise
     db.categories.toArray(),
     db.annotations.where('categoryId').aboveOrEqual('').toArray(),
   ])
-  // Only a leaf can be chosen in the preview's picker, so only a leaf may be suggested.
+  // Only a leaf may be suggested, because only a leaf classifies: §21.2 assigns essential-versus-discretionary at
+  // subcategory level, so a parent groups and carries no classification to suggest. The preview's picker is NOT the
+  // reason — it lists every category, parent groups included — so this set is the only thing enforcing it.
   const assignable = new Set(categories.filter((c) => c.parentId !== null).map((c) => c.id))
   const history = await db.transactions.bulkGet(categorised.map((a) => a.transactionId))
   const examples = categorised.flatMap((a, i) => {

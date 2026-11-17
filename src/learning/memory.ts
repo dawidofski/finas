@@ -92,8 +92,11 @@ export async function categoryMemory(knownMerchants?: MerchantRow[]): Promise<Ca
   for (const [merchantId, byCategory] of tallies) {
     let best: { categoryId: string; corrections: number; lastAt: number } | null = null
     for (const [categoryId, t] of byCategory) {
-      // Most corrections wins; a tie goes to the most recent correction.
-      if (best === null || t.corrections > best.corrections || (t.corrections === best.corrections && t.lastAt > best.lastAt)) {
+      // Total order, like the per-transaction fold above: most corrections wins, a tie goes to the most recent
+      // correction, and a tie on both falls back to the category id — so the answer never depends on read order.
+      if (best === null || t.corrections > best.corrections
+        || (t.corrections === best.corrections && t.lastAt > best.lastAt)
+        || (t.corrections === best.corrections && t.lastAt === best.lastAt && categoryId > best.categoryId)) {
         best = { categoryId, ...t }
       }
     }

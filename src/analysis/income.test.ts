@@ -206,6 +206,23 @@ describe("netIncome and the owner's kind correction (§43)", () => {
     expect(b.totals).toMatchObject({ spentCents: 0, savingsCents: 0 })
   })
 
+  // The other half of §43, and the one the implementation makes easy to break: honouring the kind means `income.ts`
+  // holds the resolved rows in the same scope as the sum, where `r.amountCents` is the OWNER's and reads as if it were
+  // the row's amount. §41 says the amount and the sign are the bank's, absolutely. The budget's side of this invariant
+  // is pinned twice in month.test.ts; this is income's.
+  it("keeps the income sum on the BANK's amount when the owner corrects it (§41)", async () => {
+    await tx('pay', 'acc.1', '2026-11-01', 200000)
+    await annotate('pay', { amountCentsOverride: 999999 })
+    expect((await netIncome('2026-11')).cents).toBe(200000)
+    expect(await incomeBasisFor('2026-11')).toBe(200000)
+    expect((await budget()).income.cents).toBe(200000)
+    // And an override that flips the sign cannot take an arrival out of income either: 205000, never 195000.
+    await tx('bonus', 'acc.1', '2026-11-10', 5000)
+    await annotate('bonus', { amountCentsOverride: -5000 })
+    expect((await netIncome('2026-11')).cents).toBe(205000)
+    expect((await budget()).income.cents).toBe(205000)
+  })
+
   it('keeps both legs of a matched transfer out of income however they are re-kinded', async () => {
     await tx('pay', 'acc.1', '2026-11-01', 100000)
     await tx('out', 'acc.1', '2026-11-10', -50000, 'internal')
