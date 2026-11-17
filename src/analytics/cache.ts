@@ -92,9 +92,12 @@ const allocationText = (a: BudgetAllocationRow): string =>
  *   least one new transaction (commitPreview refuses an import with nothing new), which moves the digest anyway. Nothing in
  *   the app creates or edits a savings goal at all — the Goals screen is a stub. The same holds for the two label tables
  *   `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else does.
- *   SO: THE FIRST SCREEN THAT RENAMES A CATEGORY, A MOOD OR A REASON, OR THAT CREATES OR EDITS A SAVINGS GOAL, MUST ADD ITS
- *   TABLE TO THIS DIGEST — a rename leaves a cached figure carrying the old label, and an edited goal makes a budget line
- *   wrong, not merely mislabelled. A goal screen should digest savingsGoals by content, for the same reason allocations are:
+ *   So the first screen that renames a category, a mood or a reason, or that creates or edits a savings goal, has to add its
+ *   table to this digest — a rename leaves a cached figure carrying the old label, and an edited goal makes a budget line
+ *   wrong rather than merely mislabelled. That is not left to this comment to enforce: the durable-truth guard in
+ *   cache.test.ts still counts a read of any of those four tables as a violation, so adding one fails the suite until
+ *   whoever adds it edits the allowlist, which is where they will find this paragraph. A goal screen should digest
+ *   savingsGoals by content, for the same reason allocations are:
  *   editing a goal's target is an in-place put. A rename screen for a label table could get away with a count plus a hash of
  *   the names.
  * Merchant naming is not in that list: it goes through rememberMerchantName, which writes an annotation as part of the same
