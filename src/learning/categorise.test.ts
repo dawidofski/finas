@@ -8,12 +8,12 @@ import {
 
 const tx = (over: Partial<TransactionRow> = {}): TransactionRow => ({
   id: 't1', accountId: 'acc', valueDate: '2026-11-16', amountCents: -1000, balanceCents: 50000,
-  description: 'Albert Heijn 1234 Amsterdam NLD', comment: null, ingCategory: 'Food', ingSubcategory: 'Groceries',
+  description: 'Tienda Ejemplo 1234 Localidad ESP', comment: null, ingCategory: 'Food', ingSubcategory: 'Groceries',
   kind: 'spend', dedupKey: 'K1', importId: 'imp', fileSeq: 1, roundupParentId: null, createdAt: 1, deletedAt: null,
   ...over,
 })
 const merchant = (over: Partial<MerchantRow> = {}): MerchantRow => ({
-  id: 'm1', canonicalName: 'Albert Heijn', kind: 'merchant', matchPatterns: ['albert heijn'],
+  id: 'm1', canonicalName: 'Tienda Ejemplo', kind: 'merchant', matchPatterns: ['tienda ejemplo'],
   defaultCategoryId: null, isSubscription: false, createdAt: 1, ...over,
 })
 const memoryOf = (corrections: number, categoryId = 'cat-memory'): CategoryMemory =>
@@ -111,7 +111,7 @@ describe('suggestCategory inputs', () => {
 
   it('asks the classifier with the merchant tokens of the description', () => {
     const classify = vi.fn((_t: string[]): { categoryId: string; confidence: number } | null => null)
-    const description = 'Albert Heijn 1234 Amsterdam NLD'
+    const description = 'Tienda Ejemplo 1234 Localidad ESP'
     suggestCategory(tx({ description }), silent({ classify }))
     const expected = merchantTokens(description)
     expect(expected.length).toBeGreaterThan(0)
@@ -162,7 +162,7 @@ describe('suggestCategory because', () => {
     const guess = suggestCategory(tx(), silent({ classify: () => ({ categoryId: 'cat-guess', confidence: 65 }) }))
 
     expect(owner?.because).toBe('You chose this category for this transaction yourself.')
-    expect(memory?.because).toBe('You have put Albert Heijn in this category 3 times.')
+    expect(memory?.because).toBe('You have put Tienda Ejemplo in this category 3 times.')
     expect(ing?.because).toBe('ING files this under Food, Groceries.')
     expect(guess?.because).toBe('It looks like other transactions you have put in this category.')
     for (const s of [owner, memory, ing, guess]) {
