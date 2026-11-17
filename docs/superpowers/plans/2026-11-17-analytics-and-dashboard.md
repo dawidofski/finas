@@ -128,6 +128,7 @@ The fifth is the conservation property for this module and must hold by construc
 **Files:** Create `src/analytics/series.ts`, `src/analytics/series.test.ts`
 
 **Interfaces:**
+- Consumes: `monthSummary` (Task 2) for each month in the range, and `cached` (Task 1) for the series itself.
 - Produces:
 ```ts
 export interface MonthPoint extends MonthSummary { hasData: boolean }
@@ -273,6 +274,9 @@ it('lays out without overflow at 320px', () => {})
 
 **Files:** Create `src/ui/screens/Dashboard.tsx`, `src/ui/screens/Dashboard.test.tsx`; modify `src/ui/routes.tsx` (replace `screen('/', 'Dashboard', true)` with an explicit route, keeping `primary: true`), and `README.md` ("Seven of the fourteen" becomes eight).
 
+**Interfaces:**
+- Consumes: `monthSummary` (Task 2) for this month and last; `changeFrom` (Task 3) for every figure it compares; `Bars` and `Line` (Task 7). It must not call `monthlyBudget` or `netIncome` directly — those reach the database, and this screen reads the cache.
+
 `/` is currently a `<Stub>` and is the **first screen the owner sees**. Follow `src/ui/screens/Budget.tsx` for loading, the empty state and the not-enough-data voice.
 
 - [ ] **Step 1: Write the failing tests**
@@ -296,6 +300,9 @@ The fifth spies on `db.transactions` and is the §39.4 guard for this screen. Th
 
 **Files:** Create `src/ui/screens/Reports.tsx`, `src/ui/screens/Reports.test.tsx`; modify `src/ui/routes.tsx` and `README.md` (eight becomes nine).
 
+**Interfaces:**
+- Consumes: `monthSeries` and `changeFrom` (Task 3); `unusualIn` (Task 4) — this screen is what supplies its rows and chooses `minSample`, so it owns that decision and must state it on screen; `smallPurchases` and `afterPayday` (Task 5); `moodBreakdown`, `reasonBreakdown` and `worthwhileBreakdown` (Task 6); `Bars` and `Line` (Task 7).
+
 One chart plus its reading per panel (§13.1). Panels: the month series, the category breakdown, essential versus discretionary, unusual spending, small purchases, the days after payday, and the mood/reason/hindsight descriptions. **Omit recurring expenses** and say in a comment that it waits on recurring detection, rather than leaving an empty panel.
 
 - [ ] **Step 1: Write the failing tests**
@@ -315,6 +322,9 @@ it('reads the cache, not the transactions table', async () => {})
 ### Task 10: Rebuild analytics, and make the engine version visible
 
 **Files:** Modify `src/ui/screens/Settings.tsx` and `src/ui/screens/Settings.test.tsx`
+
+**Interfaces:**
+- Consumes: `rebuildAnalytics` and `ENGINE_VERSION` (Task 1). Nothing else — this task adds a control, not a calculation.
 
 §7.1 promises an "always-safe rebuild analytics action", and ruling R-B makes it the backstop for a hash collision rather than a convenience. §19 also requires derived-figure machinery to be surfaced rather than hidden.
 
