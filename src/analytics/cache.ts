@@ -94,9 +94,11 @@ const allocationText = (a: BudgetAllocationRow): string =>
  *   `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else does.
  *   So the first screen that renames a category, a mood or a reason, or that creates or edits a savings goal, has to add its
  *   table to this digest — a rename leaves a cached figure carrying the old label, and an edited goal makes a budget line
- *   wrong rather than merely mislabelled. That is not left to this comment to enforce: the durable-truth guard in
- *   cache.test.ts still counts a read of any of those four tables as a violation, so adding one fails the suite until
- *   whoever adds it edits the allowlist, which is where they will find this paragraph. A goal screen should digest
+ *   wrong rather than merely mislabelled. Nothing enforces this yet. The durable-truth guard in cache.test.ts scans only
+ *   this file, so it fires only if someone adds a read of one of those four tables inside this module; a new Goals or
+ *   rename screen that writes to them (a put on the categories table, say) trips no test at all. A rule over every writer of
+ *   those tables, across the whole source tree, does not exist; until it does, noticing this paragraph is on whoever adds
+ *   such a screen. A goal screen should digest
  *   savingsGoals by content, for the same reason allocations are:
  *   editing a goal's target is an in-place put. A rename screen for a label table could get away with a count plus a hash of
  *   the names.

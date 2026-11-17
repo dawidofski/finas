@@ -213,6 +213,32 @@ describe('Dashboard screen', () => {
     expect(text()).not.toContain('is not counted as spending')
   })
 
+  it('explains a spending bar below zero when a categorised purchase has been returned', async () => {
+    // A 300 EUR jacket bought in October and returned in November, with 800 EUR of groceries and 50 EUR of restaurants:
+    // discretionary is -250, nothing is uncategorised, and the amount spent is 550.
+    await returnedInNovember({ ing: SHOPPING, cents: 30000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+    await mount()
+    expect(screen.getByText(`Spent: ${formatEur(55000)}`)).toBeInTheDocument()
+    const rows = [...document.querySelectorAll('g[data-label]')].map((g) => [g.getAttribute('data-label'), Number(g.getAttribute('data-cents'))])
+    expect(rows).toEqual([['Essentials', 80000], ['Discretionary', -25000]])
+    await waitFor(() => expect(screen.getByText(`Money returned to you in November 2026 came to more than was spent on discretionary spending, and its bar is drawn below zero. Essentials come to ${formatEur(80000)} and discretionary spending to ${formatEur(-25000)}.`)).toBeInTheDocument())
+    expect(text()).not.toContain('is not filed under a spending category') // the uncategorised notice is a different case
+    expect(text()).not.toMatch(causalWords)
+    expect(text()).not.toMatch(jargonWords)
+  })
+
+  it('names essentials when the returned purchase was groceries, and says nothing when no bar is below zero', async () => {
+    await returnedInNovember({ ing: GROCERIES, cents: 30000 }, [['r', 50000, RESTAURANTS]])
+    const first = await mount()
+    expect(screen.getByText(/came to more than was spent on essentials, and its bar is drawn below zero/)).toBeInTheDocument()
+    first.unmount()
+    await db.delete(); await db.open(); await seedDatabase()
+    uid = 0
+    await twoMonths()
+    await mount()
+    expect(text()).not.toContain('Money returned to you')
+  })
+
   it('uses no causal wording and no technical terms, including when money has been returned', async () => {
     await twoMonths()
     const first = await mount()

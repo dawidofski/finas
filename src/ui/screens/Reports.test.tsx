@@ -296,6 +296,32 @@ describe('Reports screen', () => {
     expect(within(p).getByText(/came to more than was spent on essentials, so the split cannot be given as a percentage/)).toBeInTheDocument()
   })
 
+  it('says money returned came to more than was spent, and gives no split, when the month holds only a refund', async () => {
+    // October groceries of 300 EUR, and nothing in November but the refund: essentials -300, spent -300, nothing uncategorised.
+    await tx('oct-pay', '2026-10-01', 100000)
+    await tx('buy', '2026-10-10', -30000, GROCERIES)
+    await tx('ref', '2026-11-05', 30000, null)
+    await link('r1', 'buy', 'ref', 30000)
+    await mount()
+    const p = panel('Essential and discretionary')
+    expect(p.querySelector('g[data-label="Essentials"]')).toBeNull() // no bars are drawn for a month with no spending
+    const said = 'Money returned to you in November 2026 came to more than was spent, and there is nothing to split.'
+    await waitFor(() => expect(within(p).getByText(said)).toBeInTheDocument())
+    expect(p.textContent).not.toContain('No spending is recorded')
+    expect(p.textContent).not.toContain('cannot be given as a percentage')
+    expect(p.textContent).not.toContain(formatEur(-30000)) // the contradictory second sentence is gone
+    expect(p.textContent).not.toMatch(causalWords)
+    expect(p.textContent).not.toMatch(jargonWords)
+  })
+
+  it('still says no spending is recorded when nothing was spent and nothing was returned', async () => {
+    await tx('pay', '2026-11-01', 200000)
+    await mount()
+    const p = panel('Essential and discretionary')
+    expect(within(p).getByText('No spending is recorded in November 2026, so there is nothing to split.')).toBeInTheDocument()
+    expect(p.textContent).not.toContain('Money returned')
+  })
+
   it('still gives the percentage when both parts are spending', async () => {
     await tx('pay', '2026-11-01', 200000)
     await tx('g', '2026-11-02', -30000, GROCERIES)
@@ -378,8 +404,8 @@ describe('Reports screen', () => {
   })
 
   it('uses no causal wording and no technical terms in any reading', async () => {
-    const causal = /\b(because|cause[sd]?|causing|due to|owing to|leads? to|led to|results? in|resulted|as a result|therefore|thus|so that|drives?|driven|explains?|explained|why|makes you|made you|since you|which is why)\b/i
-    const jargon = /\b(cache|cached|basis|engine|z-score|median|deviation|outlier|percentile|standard)\b/i
+    const causal = causalWords
+    const jargon = jargonWords
     await rich()
     const first = await mount()
     const rich1 = text()

@@ -90,8 +90,11 @@ describe('source rules, over every file in src/', () => {
   })
 
   it('writes no decimal literal and no ** anywhere, and says why where it does', () => {
-    // Money and shares are integers; a decimal literal (`+ 0.5` to round, `* 0.01` to take a percent) is the footprint of float
-    // arithmetic, and that is how a float rounding helper got past the parseFloat/toFixed rule above. This is the whole-tree
+    // Money and shares are integers; a decimal literal (`+ 0.5` to round, `* 0.01` to take a percent) is one footprint of float
+    // arithmetic, and that is how a float rounding helper got past the parseFloat/toFixed rule above. It catches only that
+    // spelling: it does NOT catch an exponent literal such as 1e-9, nor integer-looking rounding such as Math.round(n / d),
+    // which is the same rounding bug written another way. Both are uncovered; Math.round and Math.ceil have benign call
+    // sites that would need allowlisting first, so extending the rule is left to a later plan. This is the whole-tree
     // version of the scan src/learning/bayes.test.ts runs on its own file. It reads the code with comments and strings removed,
     // so a doc comment may mention a decimal. Division is NOT banned here: it is legitimate in too many places, and the rule
     // for it lives per file. file -> why a decimal in its code is not arithmetic.

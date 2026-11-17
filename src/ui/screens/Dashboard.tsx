@@ -142,6 +142,11 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
     ...(current.uncategorisedCents === 0 ? [] : [{ label: current.uncategorisedCents > 0 ? 'Not categorised' : 'Money returned', cents: current.uncategorisedCents }]),
   ]
 
+  // Money returned in the month can take essentials or discretionary spending below zero even when nothing is uncategorised. Reports says the same, in the same words.
+  const returnedGroups = [current.essentialCents < 0 ? 'essentials' : null, current.discretionaryCents < 0 ? 'discretionary spending' : null].filter((x): x is string => x !== null)
+  const returnedFrom = returnedGroups.join(' and ')
+  const returnedCount = returnedGroups.length
+
   return (
     <section className="dashboard">
       {heading}
@@ -157,6 +162,13 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
         <p>
           {formatEur(-current.uncategorisedCents)} of money returned to you is not filed under a spending category. It has been taken off the amount spent
           {current.spentCents > 0 ? `, and is shown as its own bar below zero; the bars add up to ${formatEur(current.spentCents)}.` : '.'}
+        </p>
+      )}
+
+      {returnedFrom !== '' && (
+        <p>
+          Money returned to you in {title} came to more than was spent on {returnedFrom}
+          {current.spentCents > 0 ? `, and ${returnedCount === 1 ? 'its bar is' : 'their bars are'} drawn below zero` : ''}. Essentials come to {formatEur(current.essentialCents)} and discretionary spending to {formatEur(current.discretionaryCents)}.
         </p>
       )}
 

@@ -216,6 +216,14 @@ function returnedNotice(uncategorisedCents: number, spentCents: number): string 
   return spentCents > 0 ? `${head}, and is shown as its own bar below zero; the bars add up to ${formatEur(spentCents)}.` : `${head}.`
 }
 
+/** Why a month with no spending to draw has nothing to split: either nothing was spent, or money returned came to as much as or more than was spent. */
+function nothingToSplit(current: MonthPoint, title: string): string {
+  if (current.spentCents < 0) return `Money returned to you in ${title} came to more than was spent, and there is nothing to split.`
+  const anyMovement = current.essentialCents !== 0 || current.discretionaryCents !== 0 || current.uncategorisedCents !== 0
+  if (anyMovement) return `Money returned to you in ${title} came to as much as was spent, and there is nothing to split.`
+  return `No spending is recorded in ${title}, so there is nothing to split.`
+}
+
 function SplitPanel({ current, title }: { current: MonthPoint; title: string }): ReactNode {
   const classified = current.essentialCents + current.discretionaryCents
   const split = [
@@ -229,8 +237,8 @@ function SplitPanel({ current, title }: { current: MonthPoint; title: string }):
   return (
     <Panel id="reports-split" title="Essential and discretionary">
       {current.spentCents > 0 && <Bars points={split} title={`Essential and discretionary spending in ${title}`} />}
-      {current.spentCents <= 0 && <p>No spending is recorded in {title}, so there is nothing to split.</p>}
-      {returnedFrom !== '' && <p>Money returned to you in {title} came to more than was spent on {returnedFrom}, so the split cannot be given as a percentage. Essentials come to {formatEur(current.essentialCents)} and discretionary spending to {formatEur(current.discretionaryCents)}.</p>}
+      {current.spentCents <= 0 && <p>{nothingToSplit(current, title)}</p>}
+      {returnedFrom !== '' && current.spentCents > 0 && <p>Money returned to you in {title} came to more than was spent on {returnedFrom}, so the split cannot be given as a percentage. Essentials come to {formatEur(current.essentialCents)} and discretionary spending to {formatEur(current.discretionaryCents)}.</p>}
       {returnedFrom === '' && classified > 0 && <p>Of the {formatEur(classified)} filed as essential or discretionary, {formatBp(percentBpOf(current.essentialCents, classified))} is essential.</p>}
       {current.uncategorisedCents > 0 && <p>{formatEur(current.uncategorisedCents)} is not filed as either, so it is shown on its own.</p>}
       {current.uncategorisedCents < 0 && <p>{returnedNotice(current.uncategorisedCents, current.spentCents)}</p>}
