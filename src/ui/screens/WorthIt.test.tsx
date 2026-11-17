@@ -178,6 +178,10 @@ describe('WorthIt screen', () => {
     vi.spyOn(db.annotations, 'put').mockRejectedValue(new Error('disk full'))
     tap('Worth it')
     expect(await screen.findByRole('alert')).toHaveTextContent('nothing was changed')
+    // The refusal is shown before the screen has finished: `busy` clears afterwards and the focus effect runs then.
+    // Waiting for the controls to come back settles both and pins that a failed save leaves the queue usable rather
+    // than stuck disabled — the same defect class as ruling P3-R32. Only CI timing exposed this one.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Skip for now' })).toBeEnabled())
     vi.restoreAllMocks()
     expect(await worthwhile('a')).toBeNull()
   })

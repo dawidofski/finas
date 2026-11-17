@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react'
 import Settings from './Settings'
 import { db } from '../../db/db'
 import { seedDatabase, getSettings } from '../../db/seed'
@@ -232,6 +232,10 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
     expect(toggle).toBeChecked()
     fireEvent.click(toggle)
     expect(await screen.findByText(/removed from 2 accounts/)).toBeInTheDocument()
+    // The notice appears partway through: the toggle then re-reads the accounts, which is what rewrites the name
+    // fields below. Without this wait the "Cuenta 1234 is gone" assertion at the end of this test passes only if the
+    // reload happens to have landed during the awaits above — true today, by luck, and not a thing to rely on.
+    await waitFor(() => expect(screen.getByRole('switch', { name: /last four digits/i })).toBeEnabled())
 
     expect((await getSettings()).privacy.storeLast4).toBe(false)
     const rows = Object.fromEntries((await db.accounts.toArray()).map((a) => [a.id, a]))
@@ -285,6 +289,11 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Give the account a name.')
     expect((await db.accounts.get('acc.a'))?.label).toBe('Cuenta nómina')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save name' })).toBeEnabled())
+    // The screen reloads its accounts fire-and-forget after a rename (`onRenamed={() => { void load() }}`), so past
+    // the waits above there is no further visible change to key on. This flushes what is still in flight under act(),
+    // which is the supported way to settle it. Used here only because the component gives nothing else to await —
+    // everywhere else in this file the wait is on something the owner would actually see.
+    await act(async () => {})
   })
 
   it('says plainly that a name the owner typed keeps its digits, and that the guard speaks to the owner', async () => {
