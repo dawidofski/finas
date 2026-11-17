@@ -99,7 +99,8 @@ describe('Dashboard screen', () => {
     const running = await mount()
     expect(screen.getByText(`Spending: down ${formatEur(5000)}`)).toBeInTheDocument()
     expect(document.querySelector('.dashboard-changes')?.textContent).not.toMatch(/%/)
-    expect(screen.getByText(/still running and only counts up to the day shown above/)).toBeInTheDocument()
+    expect(screen.getByText(/This compares the first 10 days of November 2026 with all of October 2026\./)).toBeInTheDocument()
+    expect(screen.getByText(/November 2026 is still running, so the changes are in euros only/)).toBeInTheDocument()
     running.unmount()
 
     // The same data a month later: November is over, so it is compared with October as a whole month against a whole month.
@@ -108,6 +109,17 @@ describe('Dashboard screen', () => {
     expect(screen.getByText(`Income: up ${formatEur(100000)} (100 %)`)).toBeInTheDocument()
     expect(screen.getByText('Figures for the whole month.')).toBeInTheDocument()
     expect(screen.queryByText(/still running/)).toBeNull()
+    expect(screen.queryByText(/This compares/)).toBeNull()
+    expect(screen.getByText('Both months are complete.')).toBeInTheDocument()
+  })
+
+  it('counts the days from today, and says so in the singular on the first', async () => {
+    await twoMonths()
+    const first = await mount('2026-11-03')
+    expect(screen.getByText(/the first 3 days of November 2026 with all of October 2026/)).toBeInTheDocument()
+    first.unmount()
+    await mount('2026-11-01')
+    expect(screen.getByText(/the first day of November 2026 with all of October 2026/)).toBeInTheDocument()
   })
 
   it('reads a month that spent exactly what the last one did as unchanged', async () => {

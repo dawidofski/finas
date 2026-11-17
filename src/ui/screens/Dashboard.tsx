@@ -39,7 +39,8 @@ function movement(c: Change, partial: boolean): string | null {
   return `${c.cents > 0 ? 'up' : 'down'} ${formatEur(Math.abs(c.cents))}${pct}`
 }
 
-function Comparison({ previous, current, partial }: { previous: MonthPoint; current: MonthPoint; partial: boolean }): ReactNode {
+/** `days`: how many days of the current month have passed, counting today. Only meaningful while `partial`. */
+function Comparison({ previous, current, partial, days }: { previous: MonthPoint; current: MonthPoint; partial: boolean; days: number }): ReactNode {
   const last = formatMonthTitle(previous.month)
   const line = (label: string, field: NumericField, estimate: boolean): ReactNode => {
     const text = movement(changeFrom(previous, current, field), partial)
@@ -58,7 +59,12 @@ function Comparison({ previous, current, partial }: { previous: MonthPoint; curr
       </ul>
       {!incomeKnown && <p>Income and what is left over are not compared, because income is not recorded for both months.</p>}
       {partial
-        ? <p>{last} is the whole month, but {formatMonthTitle(current.month)} is still running and only counts up to the day shown above. That is why the changes are in euros only, with no percentage.</p>
+        ? (
+          <p>
+            This compares {days === 1 ? 'the first day' : `the first ${days} days`} of {formatMonthTitle(current.month)} with all of {last}.
+            {' '}{formatMonthTitle(current.month)} is still running, so the changes are in euros only, with no percentage.
+          </p>
+        )
         : <p>Both months are complete.</p>}
     </>
   )
@@ -153,7 +159,7 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
       )}
 
       {previous && previous.hasData
-        ? <Comparison previous={previous} current={current} partial={partial} />
+        ? <Comparison previous={previous} current={current} partial={partial} days={Number(today.slice(8, 10))} />
         : <p>There is no earlier month with records to compare {title} with.</p>}
 
       {current.spentCents > 0 && <Bars points={split} title={`Where ${title} spending went`} />}
