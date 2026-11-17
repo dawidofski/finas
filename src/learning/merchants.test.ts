@@ -34,9 +34,9 @@ describe('matchMerchant', () => {
   })
 
   it('prefers the longest matching pattern, so a specific pattern beats a general one', () => {
-    const general = merchant('g', 'Mercadona', ['mercadona'], 1)
-    const specific = merchant('s', 'Mercadona Online', ['mercadona online'], 2)
-    const d = 'Compra en MERCADONA ONLINE'
+    const general = merchant('g', 'Supermercado', ['supermercado'], 1)
+    const specific = merchant('s', 'Supermercado Online', ['supermercado online'], 2)
+    const d = 'Compra en SUPERMERCADO ONLINE'
     expect(matchMerchant(d, [general, specific])?.id).toBe('s')
     expect(matchMerchant(d, [specific, general])?.id).toBe('s')
     // Equal lengths: older createdAt wins, whatever the array order (ids chosen to disagree with createdAt).

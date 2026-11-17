@@ -119,12 +119,12 @@ describe('suggestCategory inputs', () => {
   })
 
   it('does not use memory when the description matches no merchant', () => {
-    const s = suggestCategory(tx({ description: 'Some Other Shop Utrecht NLD' }), loud({ ownerCategoryFor: () => null }))
+    const s = suggestCategory(tx({ description: 'Some Other Shop Localidad NLD' }), loud({ ownerCategoryFor: () => null }))
     expect(s?.tier).toBe('ing') // memory is keyed by m1, which this description is not
   })
 
   it('uses the memory of the merchant that matched, not another merchant', () => {
-    const other = merchant({ id: 'm2', canonicalName: 'Jumbo', matchPatterns: ['jumbo'] })
+    const other = merchant({ id: 'm2', canonicalName: 'Otra Tienda', matchPatterns: ['otra tienda'] })
     const memory: CategoryMemory = new Map([
       ['m1', { categoryId: 'cat-ah', corrections: 2, lastAt: 1 }],
       ['m2', { categoryId: 'cat-jumbo', corrections: 5, lastAt: 1 }],
