@@ -262,6 +262,10 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
     expect(await screen.findByText('Saved.')).toBeInTheDocument()
     expect((await db.accounts.get('acc.a'))?.label).toBe('Cuenta nómina')
+    // A successful rename reloads the accounts above this field, which rewrites the field from the stored row. Waiting
+    // for it is not only hygiene: it pins that the field ends up showing the name the database actually kept, trimmed,
+    // rather than the untrimmed text that was typed. Without the wait that reload lands after the test has finished.
+    await waitFor(() => expect(field).toHaveValue('Cuenta nómina'))
 
     // The guard's own wording, read from the guard itself rather than copied: there is one rule and it is not repeated here.
     const guardMessage = await db.accounts.update('acc.a', { label: '9999 0418 4502 0005 1332' }).then(() => '', (e: Error) => e.message)
@@ -271,12 +275,16 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
       expect(await screen.findByRole('alert')).toHaveTextContent(guardMessage)
       expect((await db.accounts.get('acc.a'))?.label).toBe('Cuenta nómina')
+      // The refusal is shown before the form has finished: it clears `busy` afterwards. Waiting for the button to come
+      // back settles that update and pins that a refused save leaves the form usable instead of stuck disabled.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save name' })).toBeEnabled())
     }
     // An empty name is not a name. That is the only thing this screen decides for itself.
     fireEvent.change(field, { target: { value: '   ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Give the account a name.')
     expect((await db.accounts.get('acc.a'))?.label).toBe('Cuenta nómina')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save name' })).toBeEnabled())
   })
 
   it('says plainly that a name the owner typed keeps its digits, and that the guard speaks to the owner', async () => {
@@ -285,6 +293,9 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
     expect(await screen.findByText(/A name you typed yourself is left exactly as you wrote it/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('switch', { name: /last four digits/i }))
     await screen.findByText(/removed from 1 account/)
+    // The notice appears partway through: the toggle then re-reads the accounts and clears `busy`. Waiting for the
+    // switch to come back settles both, and pins that the control is usable again after the privacy change.
+    await waitFor(() => expect(screen.getByRole('switch', { name: /last four digits/i })).toBeEnabled())
     // The digits in a typed label are the owner's to keep; only the stored last4 went.
     expect(await db.accounts.get('acc.a')).toMatchObject({ last4: null, label: 'Cuenta nómina 5566' })
     fireEvent.change(screen.getByLabelText('Name for account 1'), { target: { value: '9999 0418 4502 0005 1332' } })

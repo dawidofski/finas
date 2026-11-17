@@ -76,8 +76,13 @@ describe('shell', () => {
   it('responds to the browser changing the hash (back/forward)', async () => {
     render(<App />)
     expect(await screen.findByRole('heading', { level: 1, name: /dashboard/i })).toBeInTheDocument()
-    window.location.hash = '#/reports'
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    // The dispatch synchronously runs useRoute's listener, which sets state in Nav and Screen. Outside act() that
+    // update lands after the assertion below has already read the DOM, so the test would be pinning the pre-navigation
+    // render and still pass. React says so with a warning; src/test/setup.ts turns it into a failure.
+    act(() => {
+      window.location.hash = '#/reports'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
     expect(await screen.findByRole('heading', { level: 1, name: 'Reports' })).toBeInTheDocument()
   })
   it('exposes exactly five primary destinations for the mobile tab bar', () => {
