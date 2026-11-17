@@ -31,7 +31,22 @@ export interface Unusual {
 /** 0.6745 in ten-thousandths: makes the MAD comparable to a standard deviation for roughly normal data. */
 const MAD_SCALE_BP = 6745
 
-/** The smallest spread (in cents) a category is judged against: see the comment where it is applied. */
+/**
+ * The smallest spread a category is judged against, and it is a decision about money rather than about statistics.
+ *
+ * Its first job is to make a degenerate scale harmless: several identical charges give a MAD of zero, and without a
+ * floor the one genuine one-off beside them divides by zero. That shape is not exotic — it is what a subscription
+ * looks like, and §13.1 asks for exactly that one-off to be noticed.
+ *
+ * Its second job is the one worth stating out loud. A floor of one euro means a purchase must sit about 5,19 € away
+ * from the usual before it is called unusual, **whatever** the category's own spread. For a category whose real
+ * spread is a few cents that is the floor talking rather than the data — deliberately, because "you spent 52 cents
+ * more than usual" is not a finding, it is noise wearing a statistic's clothes. The owner reads euros, so the
+ * smallest deviation worth a sentence is set in euros.
+ *
+ * `madCents` in the output still reports the TRUE spread, zero included, so the figure stays honest about the data
+ * even where the score is set by this floor.
+ */
 export const MIN_SCALE_CENTS = 100
 
 /** A modified z-score of 3.5 or more is the conventional "outlier" line. Only the high side is reported. */
