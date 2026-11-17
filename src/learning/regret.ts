@@ -1,6 +1,6 @@
 import { db } from '../db/db'
 import { resolveMany } from '../db/annotations'
-import type { TransactionRow } from '../db/schema'
+import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { isoWeekday, spanishWeekdayName } from '../lib/dates'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 
@@ -16,7 +16,8 @@ export interface RegretCluster {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 
 /**
- * Every live transaction the owner has ANSWERED the worth-it question on, for the whole-history branch.
+ * Every live transaction whose annotation satisfies `keep`, for a whole-history branch. The regret screen passes "worth-it answered";
+ * the mood, reason and worth-it breakdowns in src/analytics/annotated.ts pass their own field. One bounded read, shared.
  *
  * Driven from `annotations`, never from `transactions`: §39.4 forbids a screen reading the whole ledger, and this
  * branch is the Intelligence screen's default view on a route that sits in the mobile tab bar, re-run on every period
@@ -27,8 +28,8 @@ const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
  * set. `bulkGet` can return undefined for an annotation whose transaction was hard-deleted; soft-deleted rows are
  * dropped here exactly as the month branch's `liveTransactionsBetween` drops them.
  */
-async function answeredTransactions(): Promise<TransactionRow[]> {
-  const answered = (await db.annotations.toArray()).filter((a) => a.worthwhile !== null)
+export async function annotatedTransactions(keep: (a: AnnotationRow) => boolean): Promise<TransactionRow[]> {
+  const answered = (await db.annotations.toArray()).filter(keep)
   if (answered.length === 0) return []
   const rows = await db.transactions.bulkGet(answered.map((a) => a.transactionId))
   return rows.filter((t): t is TransactionRow => t !== undefined && t.deletedAt === null)
@@ -55,7 +56,7 @@ export async function regretClusters(month: string | null): Promise<RegretCluste
   // goes through resolveMany either way, so there is one resolution path and the loop below cannot tell them apart —
   // an unanswered row would be dropped by `worthwhile === null` anyway, so no cluster depends on which branch ran.
   const candidates: TransactionRow[] = month === null
-    ? await answeredTransactions()
+    ? await annotatedTransactions((a) => a.worthwhile !== null)
     : await liveTransactionsBetween(month, month)
   const bank = new Map(candidates.map((t) => [t.id, t]))
   const rows = await resolveMany(candidates)
