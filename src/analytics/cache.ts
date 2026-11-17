@@ -34,6 +34,13 @@ const isEnvelope = (payload: unknown): payload is Envelope =>
  * count (updatedAt does not move) collide, as would a delete-and-restore pair stamped with the same millisecond as the old newest
  * deletedAt. A person acting through the interface cannot do either, so no realistic collision remains; rebuildAnalytics still
  * exists to force a recompute.
+ *
+ * It also covers the transactions and annotations ONLY — not the reference tables. Renaming a mood, a purchase reason, a category
+ * or a merchant therefore leaves a cached figure carrying the old LABEL, because nothing it digests has moved. The numbers stay
+ * right; the word beside them goes stale. Accepted rather than fixed, for three reasons: renaming is rare, any later annotation
+ * or import write invalidates the entry anyway, and rebuildAnalytics is offered in Settings for exactly this. The alternative
+ * worth considering if it ever bites is to stop caching labels at all — hold keys and numbers here and look the names up at read
+ * time — which removes the whole class rather than adding more tables to this digest.
  */
 export async function inputsHash(): Promise<string> {
   const total = await db.transactions.count()
