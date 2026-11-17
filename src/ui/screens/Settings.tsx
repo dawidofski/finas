@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { rebuildAnalytics } from '../../analytics/cache'
 import { exportBundle, inspectBundle, restoreBundle, type RestoreReport } from '../../db/backup'
 import { db } from '../../db/db'
 import { renameAccount, setStoreLast4 } from '../../db/privacy'
@@ -122,6 +123,48 @@ function Accounts() {
       {notice && <p role="status">{notice}</p>}
       {accounts !== null && accounts.length === 0 && <p>Accounts appear here once you import a statement.</p>}
       {accounts?.map((a, i) => <AccountName key={a.id} account={a} index={i} onRenamed={() => { void load() }} />)}
+    </>
+  )
+}
+
+/**
+ * Recomputes every remembered figure. It writes nothing the owner entered: rebuildAnalytics only clears the analytics store
+ * (design 7.1). It is also the stated remedy for a stale label after a rename, which the stored figures cannot detect themselves.
+ * `aria-disabled` plus a guard rather than `disabled`: a disabled button that has focus drops it to the page, which strands a
+ * keyboard user mid-action. The busy state is always left in `finally`, so a failure cannot leave the control stuck.
+ */
+function RebuildFigures() {
+  const [busy, setBusy] = useState(false)
+  const [cleared, setCleared] = useState<number | null>(null)
+  const [failed, setFailed] = useState(false)
+  async function rebuild() {
+    if (busy) return
+    setBusy(true); setCleared(null); setFailed(false)
+    try { setCleared(await rebuildAnalytics()) } catch { setFailed(true) } finally { setBusy(false) }
+  }
+  return (
+    <>
+      <h2>Recalculate figures</h2>
+      <p>
+        So that screens open quickly, the app remembers the totals and averages it works out. This recalculates all of them from
+        scratch. Use it if a figure still shows an old name after you renamed a mood, a reason, a category or a merchant.
+      </p>
+      <p><strong>Nothing you entered is touched.</strong> Your transactions, notes, tags and everything the app has learned from you stay exactly as they are.</p>
+      <button type="button" className="btn" aria-disabled={busy} onClick={() => { void rebuild() }}>
+        {busy ? 'Recalculating…' : 'Recalculate figures'}
+      </button>
+      {failed && (
+        <div role="alert" className="notice notice-refusal">
+          <p>The figures could not be recalculated. Nothing you entered was changed. Try again.</p>
+        </div>
+      )}
+      {cleared !== null && (
+        <p role="status">
+          {cleared === 0
+            ? 'Done. No figures were remembered, so there was nothing to clear. Each screen works its figures out fresh as you open it.'
+            : `Done. ${cleared} remembered ${cleared === 1 ? 'figure was' : 'figures were'} cleared. Each screen works its figures out again as you open it.`}
+        </p>
+      )}
     </>
   )
 }
@@ -254,6 +297,8 @@ export default function Settings(): ReactNode {
           <p>The backup could not be created. Nothing on this device was changed. Try again, and if it keeps failing, reload the page first.</p>
         </div>
       )}
+
+      <RebuildFigures />
 
       <h2>Restore</h2>
       <fieldset className="modes" disabled={busy}>

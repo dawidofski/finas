@@ -320,3 +320,107 @@ describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
     }
   })
 })
+
+describe('Settings recalculate figures (spec 7.1)', () => {
+  const tx = (id: string) => ({
+    id, accountId: 'acc.a', valueDate: '2026-03-01', amountCents: -1250, balanceCents: 10000, description: `Shop ${id}`, comment: null,
+    ingCategory: null, ingSubcategory: null, kind: 'expense', dedupKey: `dk-${id}`, importId: 'imp.1', fileSeq: 1,
+    roundupParentId: null, createdAt: 5, deletedAt: null,
+  })
+  const note = (transactionId: string) => ({
+    transactionId, categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
+    note: 'bought on impulse', moodId: null, purchaseReasonId: null, worthwhile: true, reviewed: true, dateOverride: null,
+    amountCentsOverride: null, descriptionOverride: 'My own words', updatedAt: 77,
+  })
+  const figure = (key: string) => ({ key, engineVersion: 1, inputsHash: 'h', computedAt: 1, payload: { shape: 1, value: key } })
+  const button = () => screen.getByRole('button', { name: /recalculate figures|recalculating/i })
+
+  async function seedOwnerData() {
+    await db.transactions.bulkAdd([tx('t1'), tx('t2')] as never)
+    await db.annotations.bulkAdd([note('t1'), note('t2')] as never)
+    await db.learningEvents.bulkAdd([
+      { id: 'e1', at: 10, type: 'merchant_named', payload: { merchant: 'Bakery' }, outcome: null },
+      { id: 'e2', at: 20, type: 'merchant_named', payload: { merchant: 'Bike shop' }, outcome: 'improved' },
+    ] as never)
+    await db.analyticsCache.bulkAdd([figure('a'), figure('b'), figure('c')])
+  }
+  const durable = async () => JSON.stringify([
+    await db.transactions.orderBy('id').toArray(), await db.annotations.orderBy('transactionId').toArray(), await db.learningEvents.orderBy('id').toArray(),
+  ])
+
+  it('rebuilds the analytics and says how many figures were cleared', async () => {
+    await seedOwnerData()
+    render(<Settings />)
+    fireEvent.click(button())
+    expect(await screen.findByText(/3 remembered figures were cleared/)).toBeInTheDocument()
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+    expect(await db.analyticsCache.count()).toBe(0)
+  })
+
+  it('says so, rather than staying silent, when there was nothing to clear', async () => {
+    render(<Settings />)
+    fireEvent.click(button())
+    expect(await screen.findByText(/No figures were remembered/)).toBeInTheDocument()
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+  })
+
+  it('touches no transaction, annotation or learning event when it rebuilds', async () => {
+    await seedOwnerData()
+    // A vacuous pass is the risk: prove the fixture really holds rows in all three tables first.
+    expect(await db.transactions.count()).toBe(2)
+    expect(await db.annotations.count()).toBe(2)
+    expect(await db.learningEvents.count()).toBe(2)
+    const before = await durable()
+    render(<Settings />)
+    fireEvent.click(button())
+    await screen.findByText(/3 remembered figures were cleared/)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+    expect(await durable()).toBe(before) // full contents, not counts
+  })
+
+  it('says what the action is for, without jargon', async () => {
+    render(<Settings />)
+    const heading = screen.getByRole('heading', { name: /recalculate figures/i })
+    const text = [heading.nextElementSibling, heading.nextElementSibling?.nextElementSibling].map(e => e?.textContent ?? '').join(' ')
+    expect(text).toMatch(/renamed a mood, a reason, a category or a merchant/)
+    expect(text).toMatch(/Nothing you entered is touched/)
+    expect(text).not.toMatch(/cache|digest|engine|version|invalidat|hash/i)
+    fireEvent.click(button())
+    const status = await screen.findByRole('status')
+    expect(status.textContent).not.toMatch(/cache|digest|engine|version|invalidat|hash/i)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+  })
+
+  it('keeps focus on the control and does not leave it stuck busy', async () => {
+    await seedOwnerData()
+    let release!: (n: number) => void
+    const gate = new Promise<number>(r => { release = r })
+    const toCollection = vi.spyOn(db.analyticsCache, 'toCollection')
+    toCollection.mockImplementationOnce((() => ({ delete: () => gate })) as never)
+    render(<Settings />)
+    button().focus()
+    fireEvent.click(button())
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'true'))
+    expect(button()).not.toBeDisabled()
+    expect(document.activeElement).toBe(button())
+    fireEvent.click(button()) // a second press while busy is ignored
+    expect(toCollection).toHaveBeenCalledTimes(1)
+    release(3)
+    await screen.findByText(/3 remembered figures were cleared/)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+    expect(document.activeElement).toBe(button())
+
+    // A failure must not strand the control either, and must say nothing was changed.
+    toCollection.mockImplementationOnce((() => ({ delete: () => Promise.reject(new Error('IDB boom')) })) as never)
+    fireEvent.click(button())
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/could not be recalculated.*Nothing you entered was changed/)
+    expect(alert).not.toHaveTextContent(/IDB|boom/)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+    fireEvent.click(button()) // and it works again; the spied runs never deleted anything, so the three rows are still there
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    await screen.findByText(/3 remembered figures were cleared/)
+    expect(await db.analyticsCache.count()).toBe(0)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+  })
+})
