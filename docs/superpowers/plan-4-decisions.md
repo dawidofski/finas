@@ -35,7 +35,7 @@ that caught them: after writing a test, ask what *else* could make it green.
 | R1 | **Plan 4 is the learning engine alone**, not the dashboard and the statistical battery too. Those three stages together would have been two or three times the size of Plan 3, which took a full day. They become Plan 5, and the remaining features Plan 6. | Low. The plan count grows by one; no work is wasted either way. |
 | R3 | **A merchant name is cleaned up by a rule that sometimes guesses wrong** — a three-word shop followed by a country code loses its last word. Accepted because renaming it once fixes it permanently: a wrong guess you can correct beats a cleverer guess you cannot. | Low. Some shops need one manual rename, once. |
 | R9 | **The pattern the app remembers is the name *you type*, not the bank's wording** — when your words appear in the bank's text. Otherwise correcting one branch of a shop would leave every other branch to be corrected separately, one town at a time. | Low, and bounded by your own words. |
-| R13 | **No minimum length on a name you type.** Real shops have short names — Zara, IKEA — and no rule separates those from a word so short it would match half your statement. Three things limit the damage: whole-word matching, a more specific shop always winning, and nothing rewriting your history. | Low. Some future rows land on the wrong shop until you rename one. |
+| R13 | **No minimum length on a name you type.** Real shops often have short single-word names, and no rule separates those from a word so short it would match half your statement. Three things limit the damage: whole-word matching, a more specific shop always winning, and nothing rewriting your history. | Low. Some future rows land on the wrong shop until you rename one. |
 | R15 | **Shops are matched on the bank's wording, not on a description you rewrote.** The bank's text is what recurs every month and is what your saved patterns are anchored to; matching on a rewrite would break matching altogether. | Low; it is the behaviour you would expect. |
 | R16 | **A category you chose that has since been deleted falls through to a suggestion** rather than leaving the row with nothing. The screen already shows it as removed, so a suggestion beside it is help, and you still confirm it. | Low. |
 | R18 | **You accept suggestions one row at a time.** The friction is smaller than it sounds: a row you leave alone still shows ING's own category, so accepting is only needed to override that. A single "accept all" would manufacture agreement for rows you never read, and that agreement is what later plans learn from. | Low. Several clicks when you want many. |
@@ -69,10 +69,14 @@ that caught them: after writing a test, ask what *else* could make it green.
 
 ## 4. Privacy — the third incomplete list
 
-A real merchant from your statements — `AMAZON EU S.A R.L., MADRID BRANCH…`, cut
-mid-word at seventy characters by ING's own truncation — was still in a test file,
-beside neighbours I had already made synthetic. **Neither of this morning's two
-redaction passes included it, because neither pattern list did.**
+A real receipt line from your statements — a named international merchant,
+repeated twice inside one description — was still in a test file, beside
+neighbours I had already made synthetic. **Neither of this morning's two
+redaction passes included it, because neither pattern list did.** It was also
+quoted in the spec as evidence about description lengths, which means it has been
+in the public repository since this morning's push; the measurement it supported
+is kept, the string is not. I am not repeating it here either, which is a mistake
+I made in the first draft of this very section.
 
 That is the third time my enumeration has been incomplete: the fake IBAN that
 survived the first history rewrite, your balances that survived the second, and

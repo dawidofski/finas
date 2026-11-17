@@ -139,10 +139,13 @@ Seven columns: `F. VALOR`, `CATEGORÍA`, `SUBCATEGORÍA`, `DESCRIPCIÓN`,
 - **Descriptions are NOT truncated at 68 characters. This document previously
   claimed they were, and that claim was false** — see §33.1. They run to 97
   characters in the current account; 19 of 50 exceed 68 and none is exactly 68.
-  The `Recibo AMAZON EU S.A R.L., MADRID BRANCH AMAZON EU S.A R.L., MADRID B`
-  row that prompted the claim is 69 characters and merely *looks* clipped
-  because ING repeats the merchant name. Nothing may truncate a description
-  before comparing it.
+  The row that prompted the claim is 69 characters and merely *looks* clipped,
+  because ING repeats the merchant name inside the same description — so a
+  reader sees the name begin a second time and assumes the field was cut.
+  Nothing may truncate a description before comparing it. (The row itself is not
+  quoted here: it is a real receipt line from the owner's statement, and §14.0
+  keeps those out of this repository. The measurements above are the finding; the
+  string was only ever an illustration of it.)
 - **Every round-up is exactly `(ceil_to_euro(parent) − parent) × 2`** in all 18
   observed cases. This is a second, independent way to corroborate a parent
   link. The multiplier is an ING setting the owner could change, so the
