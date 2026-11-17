@@ -73,9 +73,9 @@ export function redactAccountNumbers(text: string): string {
  * the classifier stays silent by itself.
  */
 async function buildCategoriserContext(index: CategoryIndex): Promise<CategoriserContext> {
-  const [merchants, memory, categories, categorised] = await Promise.all([
-    db.merchants.toArray(),
-    categoryMemory(),
+  const merchants = await db.merchants.toArray()
+  const [memory, categories, categorised] = await Promise.all([
+    categoryMemory(merchants),
     db.categories.toArray(),
     db.annotations.where('categoryId').aboveOrEqual('').toArray(),
   ])
