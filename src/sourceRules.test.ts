@@ -19,10 +19,39 @@ function sourceFiles(dir: string): string[] {
     return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) && e.name !== 'vite-env.d.ts' ? [path] : []
   })
 }
-const files = sourceFiles(SRC).map((path) => ({ rel: relative(SRC, path).split(sep).join('/'), text: readFileSync(path, 'utf8') }))
-const matches = (re: RegExp) => files.flatMap((f) => (f.text.match(re) ?? []).map((m) => `${f.rel}: ${m}`))
+/**
+ * These rules are about what the code DOES, so they are scanned against the code with comments and string literals removed.
+ * Without this, prose trips them: a doc comment that merely mentions `Date.now` to explain why the module does not call it was
+ * reported as a clock read, which is a guard crying wolf about its own documentation. Strings go first so that a `//` inside
+ * one cannot be mistaken for a comment. No rule here looks inside a string — they all match identifiers and calls — so
+ * removing them loses no detection.
+ */
+export function code(text: string): string {
+  return text
+    .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/gs, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+}
+
+const files = sourceFiles(SRC).map((path) => {
+  const text = readFileSync(path, 'utf8')
+  return { rel: relative(SRC, path).split(sep).join('/'), text, code: code(text) }
+})
+const matches = (re: RegExp) => files.flatMap((f) => (f.code.match(re) ?? []).map((m) => `${f.rel}: ${m}`))
 
 describe('source rules, over every file in src/', () => {
+  it('strips comments and strings before judging, and still sees real code', () => {
+    // The stripper is what stops these rules crying wolf about their own documentation, so it needs its own check: a guard
+    // whose detector has quietly stopped working reads as coverage. Prose must not trip; code must.
+    expect(code('// mentions Date.now in a comment')).not.toMatch(/Date\.now/)
+    expect(code('/* a block comment about getFullYear */')).not.toMatch(/getFullYear/)
+    expect(code("const why = 'we never call Date.now here'")).not.toMatch(/Date\.now/)
+    expect(code('const t = Date.now() // and a trailing comment')).toMatch(/Date\.now/)
+    expect(code('const d = new Date(ms)')).toMatch(/new Date/)
+    // A `//` inside a string is not a comment, so the code after it must survive.
+    expect(code("const u = 'https://example.test'; const t = Date.now()")).toMatch(/Date\.now/)
+  })
+
   it('actually scans the code (a scan of nothing proves nothing)', () => {
     const names = files.map((f) => f.rel)
     expect(names.length).toBeGreaterThan(40)
@@ -72,7 +101,7 @@ describe('source rules, over every file in src/', () => {
       'ui/screens/Settings.tsx': 'names the backup file with the UTC day (a file name, not a date the owner reads)',
       'ui/screens/Transactions.tsx': 'stamps deletedAt when the owner deletes a row, and createdAt when the owner names a merchant',
     }
-    const users = files.filter((f) => /\bDate\.now\b/.test(f.text)).map((f) => f.rel)
+    const users = files.filter((f) => /\bDate\.now\b/.test(f.code)).map((f) => f.rel)
     expect(users.filter((rel) => !(rel in allowed))).toEqual([]) // a clock read nobody sanctioned
     expect(Object.keys(allowed).filter((rel) => !users.includes(rel))).toEqual([]) // an exemption that is no longer needed
   })
