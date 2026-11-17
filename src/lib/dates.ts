@@ -108,3 +108,19 @@ export function formatMonthTitle(month: string): string {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return month
   return `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`
 }
+
+/**
+ * ISO weekday of 'YYYY-MM-DD': 1 = Monday ... 7 = Sunday. Pure arithmetic on the UTC day count (1970-01-01 was a
+ * Thursday), so no Date accessor and no timezone is involved. This is computation, not display.
+ */
+export function isoWeekday(iso: string): number {
+  const days = Math.floor(isoToMs(iso) / MS_PER_DAY)
+  return (((days + 3) % 7) + 7) % 7 + 1
+}
+
+const SPANISH_WEEKDAYS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+
+/** An ISO weekday number (1 = Monday ... 7 = Sunday) as Spanish text, for display. Anything else comes back as its own string. */
+export function spanishWeekdayName(weekday: number): string {
+  return SPANISH_WEEKDAYS[weekday - 1] ?? String(weekday)
+}

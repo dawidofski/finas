@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeAll } from 'vitest'
-import { excelSerialToIso, isoToExcelSerial, parseSpanishDate, monthKeyOf, daysBetween, addDays, formatSpanishDate, formatMonthTitle } from './dates'
+import { excelSerialToIso, isoToExcelSerial, parseSpanishDate, monthKeyOf, daysBetween, addDays, formatSpanishDate, formatMonthTitle, isoWeekday, spanishWeekdayName } from './dates'
 
 // Local hour of 2026-01-01T00:00Z in each zone: UTC+0, UTC+14, UTC-11 (not the 1970 epoch: Kiritimati was UTC-10:40 then).
 const EXPECTED_EPOCH_HOUR: Record<string, number> = { 'UTC': 0, 'Pacific/Kiritimati': 14, 'Pacific/Niue': 13 }
@@ -72,5 +72,19 @@ describe('formatSpanishDate (display only)', () => {
     const marker = src.indexOf('DISPLAY ONLY')
     expect(marker).toBeGreaterThan(src.indexOf('export function epochMsToIso'))
     expect(marker).toBeLessThan(src.indexOf('export function formatSpanishDate'))
+  })
+})
+
+describe('isoWeekday', () => {
+  it('numbers Monday 1 to Sunday 7, across leap days and before the epoch', () => {
+    expect(isoWeekday('2026-11-16')).toBe(1)
+    expect(isoWeekday('2026-11-22')).toBe(7)
+    expect(isoWeekday('1970-01-01')).toBe(4)
+    expect(isoWeekday('2024-02-29')).toBe(4)
+    expect(isoWeekday('1969-12-31')).toBe(3)
+    expect(() => isoWeekday('2026-02-31')).toThrow()
+  })
+  it('names the weekdays in Spanish', () => {
+    expect([1, 2, 3, 4, 5, 6, 7].map(spanishWeekdayName)).toEqual(['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'])
   })
 })
