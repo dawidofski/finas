@@ -215,7 +215,8 @@ export default function TransactionEditor(props: Props): ReactNode {
             <select id={field('kind')} value={form.kind} onChange={(e) => set('kind', e.target.value as TransactionKind)}>
               {(Object.keys(KIND_LABEL) as TransactionKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
             </select>
-            <small>The kind changes how this transaction is shown and whether the mood and worth-it questions ask about it. It does not change your budget figures.</small>
+            <small>The kind decides which figure this transaction counts in: spending, income, savings, or none of them.
+              Changing it changes your budget, in the month the bank dated it. The amount, the sign and that month stay the bank's.</small>
 
             <label htmlFor={field('method')}>Payment method</label>
             <input id={field('method')} type="text" value={form.paymentMethod} onChange={(e) => set('paymentMethod', e.target.value)} />

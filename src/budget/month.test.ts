@@ -204,10 +204,35 @@ describe('monthlyBudget spending', () => {
     expect((await monthlyBudget(NOV, TODAY)).income.cents).toBe(200000) // and it is not income either
   })
 
-  it('keeps the bank kind: re-kinding a purchase does not move a closed month', async () => {
+  // CHANGED in the §43 ruling (Plan 4, task 9). This test used to be "keeps the bank kind: re-kinding a purchase does
+  // not move a closed month" and asserted 5000, because the override changed no figure. `kind` is now the owner's
+  // classification, like `categoryId`, so the same data gives 0. The §41 half this test also stood for — a kind
+  // correction must not move a row between months — is pinned by the next test, which honours the kind in the bank's
+  // month and nowhere else.
+  it('a spend re-kinded to internal leaves spending without appearing as income', async () => {
     await tx('a', '2026-11-05', -5000, GROCERIES)
-    await annotate('a', { typeOverride: 'internal' })
     expect((await line('cat.groceries')).spentCents).toBe(5000)
+    await annotate('a', { typeOverride: 'internal' })
+    const b = await monthlyBudget(NOV, TODAY)
+    expect((await line('cat.groceries')).spentCents).toBe(0)
+    // It left spending and arrived in NO other figure: not income, not savings.
+    expect(b.totals).toMatchObject({ spentCents: 0, savingsCents: 0, essentialCents: 0, discretionaryCents: 0 })
+    expect(b.income.cents).toBe(200000)
+  })
+
+  it('a re-kinded row stays in the month the bank dated it', async () => {
+    // The bank filed an October arrival as a movement between accounts; the owner says it is real income and also
+    // re-dated it into November. The kind correction counts; the month it counts in is October's, the bank's.
+    await tx('moved', '2026-10-31', 4000, INTERNAL, 'internal')
+    await annotate('moved', { typeOverride: 'income', dateOverride: '2026-11-02' })
+    expect((await monthlyBudget('2026-10', TODAY)).income.cents).toBe(4000)
+    expect((await monthlyBudget(NOV, TODAY)).income.cents).toBe(200000) // November's own salary, not a cent more
+    // And the same the other way round, for spending: a November-bank row re-kinded INTO spending and re-dated into
+    // December is November's spending.
+    await tx('back', '2026-11-28', -2500, GROCERIES, 'internal')
+    await annotate('back', { typeOverride: 'spend', dateOverride: '2026-12-02' })
+    expect((await line('cat.groceries')).spentCents).toBe(2500)
+    expect((await line('cat.groceries', '2026-12')).spentCents).toBe(0)
   })
 
   it('credits a round-up that arrived in savings before its spending-account leg was imported', async () => {
@@ -341,6 +366,53 @@ describe('monthlyBudget spending', () => {
     expect(b.totals.savingsCents).toBe(35)
     expect(b.income.cents).toBe(200000)
     expect(b.lines.reduce((n, l) => n + l.spentCents, 0)).toBe(b.totals.spentCents)
+  })
+
+  // The money-conservation table the Plan 3 review built, EXTENDED with the §43 re-kinded cases: every arrangement the
+  // app can produce, in one month, with income, spending and savings all asserted at once. Each arrangement has its own
+  // test above; this one exists because a euro counted twice or counted nowhere shows up as a changed total here even
+  // when each arrangement in isolation still looks right. Every figure the earlier version asserted is unchanged.
+  it('every euro is still counted exactly once across the eleven arrangements', async () => {
+    await tx('plain', '2026-11-03', -9000, GROCERIES) // 1 an ordinary spend: 9000 of spending
+    await tx('amount', '2026-11-04', -4000, GROCERIES) // 2 an amount override: the BANK's 4000, not 999 (§41)
+    await annotate('amount', { amountCentsOverride: -999 })
+    await tx('flip', '2026-11-05', -5000, GROCERIES) // 3 an override that flips the sign: still 5000 going out (§41)
+    await annotate('flip', { amountCentsOverride: 5000 })
+    await tx('as-internal', '2026-11-06', -6000, GROCERIES) // 4 a spend re-kinded to internal: in no figure (§43)
+    await annotate('as-internal', { typeOverride: 'internal' })
+    await tx('in-internal', '2026-11-07', 7000, GROCERIES, 'income') // 5 a positive re-kinded to internal: in none
+    await annotate('in-internal', { typeOverride: 'internal' })
+    await tx('in-spend', '2026-11-08', 8000, GROCERIES, 'income') // 6 a positive re-kinded to spend: money that
+    await annotate('in-spend', { typeOverride: 'spend' }) //        arrived is never spending, so it is in none either
+    await tx('buy', '2026-11-09', -10000, RESTAURANTS) // 7 a linked refund: 10000 - 2500 in the purchase's category
+    await tx('ref', '2026-11-12', 2500, RESTAURANTS, 'income')
+    await link('rf', 'buy', 'ref', 2500, 'refund')
+    await tx('ru-out', '2026-11-10', -35, ROUNDUP, 'roundup') // 8 a matched round-up pair: 35 of savings, once
+    await tx('ru-in', '2026-11-10', 35, ROUNDUP, 'roundup', 'acc.2')
+    await link('ru', 'ru-out', 'ru-in', 35, 'roundup')
+    await tx('ru-lone', '2026-11-13', 80, ROUNDUP, 'roundup', 'acc.2') // 9 an unpaired round-up leg: 80 of savings
+    await tx('t-out', '2026-11-11', -50000, INTERNAL, 'internal') // 10 a matched internal transfer: in no figure
+    await tx('t-in', '2026-11-11', 50000, INTERNAL, 'income', 'acc.2')
+    await link('tr', 't-out', 't-in', 50000)
+    await tx('nocat', '2026-11-14', -700, null) // 11 an uncategorised spend: 700 of spending, under 'Uncategorised'
+
+    const b = await monthlyBudget(NOV, TODAY)
+    expect(b.income.cents).toBe(200000) // the salary alone: 5, 6, 7's refund, 8, 9 and 10 are all out of income
+    expect(b.totals.spentCents).toBe(9000 + 4000 + 5000 + 7500 + 700)
+    expect(b.totals.savingsCents).toBe(35 + 80)
+    expect(b.totals).toMatchObject({ essentialCents: 18000, discretionaryCents: 7500 })
+    const spent = (id: string) => b.lines.find((l) => l.targetId === id)?.spentCents
+    expect(spent('cat.groceries')).toBe(9000 + 4000 + 5000) // 1, 2, 3 only: 4, 5 and 6 are filed there and count nowhere
+    expect(spent('cat.restaurants')).toBe(7500)
+    expect(spent('')).toBe(700)
+    expect(b.lines.reduce((n, l) => n + l.spentCents, 0)).toBe(b.totals.spentCents)
+
+    // The three rows the owner re-kinded out of every figure are now worth exactly what deleting them is worth:
+    // nothing. If any one of them were still being counted anywhere, one of these totals would move.
+    for (const id of ['as-internal', 'in-internal', 'in-spend']) await db.transactions.update(id, { deletedAt: 9 })
+    const after = await monthlyBudget(NOV, TODAY)
+    expect(after.totals).toEqual(b.totals)
+    expect(after.income).toEqual(b.income)
   })
 
   it('reports no overcommitment figure when there is no income basis', async () => {

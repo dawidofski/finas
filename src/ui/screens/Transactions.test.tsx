@@ -444,11 +444,15 @@ describe('Refund links', () => {
     ])
   }
 
-  it('says what the Kind control does today: it does not change the budget figures (§43)', async () => {
+  // CHANGED in the §43 ruling (Plan 4, task 9). This test used to assert the opposite sentence — "It does not change
+  // your budget figures" — which was honest while the figures ignored typeOverride. They honour it now, so the editor
+  // must say so, and must still say what stays the bank's.
+  it('says what the Kind control does: it decides which figure the transaction counts in (§43)', async () => {
     await setup()
     render(<Transactions />)
     const dialog = await openEditor('Invented shoe refund')
-    expect(within(dialog).getByText(/does not change your budget figures/)).toBeTruthy()
+    expect(within(dialog).getByText(/decides which figure this transaction counts in/)).toBeTruthy()
+    expect(within(dialog).getByText(/amount, the sign and that month stay the bank's/)).toBeTruthy()
   })
 
   it('lists payments counted as income and offers the link in the editor, then unlinks it', async () => {

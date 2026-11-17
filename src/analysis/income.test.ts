@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
-import type { TransactionRow, TransferRow } from '../db/schema'
+import type { AnnotationRow, TransactionRow, TransferRow } from '../db/schema'
+import { monthlyBudget } from '../budget/month'
 import { excludedTransactionIds, incomeBasisFor, netIncome } from './income'
 
 let uid = 0
@@ -21,6 +22,14 @@ const link = async (id: string, out: string, inn: string, amountCents: number, l
   await db.transfers.add({
     id, outTransactionId: out, inTransactionId: inn, amountCents, matchScore: 100, confirmedByUser: true, matchedAt: 1,
     ...(linkKind ? { linkKind } : {}),
+  })
+}
+
+const annotate = async (transactionId: string, over: Partial<AnnotationRow>): Promise<void> => {
+  await db.annotations.add({
+    transactionId, categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
+    note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false, dateOverride: null,
+    amountCentsOverride: null, descriptionOverride: null, updatedAt: 1, ...over,
   })
 }
 
@@ -152,5 +161,59 @@ describe('netIncome', () => {
   it('rejects a malformed month', async () => {
     await expect(netIncome('2026-13')).rejects.toThrow()
     await expect(excludedTransactionIds('nov')).rejects.toThrow()
+  })
+})
+
+/**
+ * §43, ruled in Plan 4: `kind` is the owner's classification, so the income sum honours a `typeOverride` — and the
+ * budget honours the same value through the same `treatmentOf`, which is the condition that makes it safe. Every test
+ * here checks BOTH figures, because a euro leaving one without arriving in the other is the defect this rule risks.
+ */
+describe("netIncome and the owner's kind correction (§43)", () => {
+  const budget = () => monthlyBudget('2026-11', '2026-12-05')
+
+  it('a positive re-kinded to internal leaves income without appearing as spending', async () => {
+    await tx('pay', 'acc.1', '2026-11-01', 200000)
+    await tx('moved', 'acc.1', '2026-11-09', 4200, 'income')
+    expect((await netIncome('2026-11')).cents).toBe(204200)
+    await annotate('moved', { typeOverride: 'internal' })
+    expect((await netIncome('2026-11')).cents).toBe(200000)
+    const b = await budget()
+    expect(b.income.cents).toBe(200000) // the budget's income says the same thing as netIncome, as it must
+    expect(b.totals).toMatchObject({ spentCents: 0, savingsCents: 0 }) // and it is in no other figure
+    expect(b.lines.reduce((n, l) => n + l.spentCents, 0)).toBe(0)
+  })
+
+  it("counts an arrival the owner re-kinded to income, in the bank's month", async () => {
+    await tx('odd', 'acc.1', '2026-11-09', 4200, 'internal') // the bank called it a movement; the owner says earnings
+    expect(await netIncome('2026-11')).toMatchObject({ cents: 0, basis: 'none' })
+    await annotate('odd', { typeOverride: 'income', dateOverride: '2026-12-02' })
+    expect(await netIncome('2026-11')).toEqual({ cents: 4200, provisional: false, basis: 'actual', monthsAveraged: 0 })
+    expect(await netIncome('2026-12')).toMatchObject({ cents: 4200, basis: 'trailing-average' }) // averaged, not moved
+    expect((await budget()).income.cents).toBe(4200)
+  })
+
+  it('never lets a kind correction put money that left the account into income', async () => {
+    await tx('pay', 'acc.1', '2026-11-01', 200000)
+    await tx('out', 'acc.1', '2026-11-05', -5000)
+    expect((await budget()).totals.spentCents).toBe(5000)
+    await annotate('out', { typeOverride: 'income' })
+    // The classification is honoured where it can be — the money is no longer spending — but the SIGN is the bank's
+    // (§41), so a row that took money out of the account can never be added to income: 200000, never 195000.
+    expect((await netIncome('2026-11')).cents).toBe(200000)
+    const b = await budget()
+    expect(b.income.cents).toBe(200000)
+    expect(b.totals).toMatchObject({ spentCents: 0, savingsCents: 0 })
+  })
+
+  it('keeps both legs of a matched transfer out of income however they are re-kinded', async () => {
+    await tx('pay', 'acc.1', '2026-11-01', 100000)
+    await tx('out', 'acc.1', '2026-11-10', -50000, 'internal')
+    await tx('in', 'acc.2', '2026-11-10', 50000, 'internal')
+    await link('t1', 'out', 'in', 50000)
+    await annotate('in', { typeOverride: 'income' }) // §9.2's pairing still speaks: the transfers row is a bank fact
+    expect((await netIncome('2026-11')).cents).toBe(100000)
+    expect(await excludedTransactionIds('2026-11')).toEqual(new Set(['out', 'in']))
+    expect((await budget()).totals).toMatchObject({ spentCents: 0, savingsCents: 0 })
   })
 })

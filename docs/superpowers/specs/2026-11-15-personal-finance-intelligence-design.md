@@ -1717,8 +1717,11 @@ savings, refunds, allocations, and anything a later plan adds. `dateOverride` ch
 the owner sees and how rows sort; it does not change which month a figure belongs to.
 
 **What this rule does not govern.** It is about *which month a figure belongs to*, and
-about every value that figure is computed from — amounts and signs as much as dates. It is
-not about workflow timing or display. The annotation queues age a purchase by the
+about every **fact about what the bank did** that figure is computed from — amounts and
+signs as much as dates. It is not about the owner's **classifications**: the category, and
+since §43 the kind, are theirs to correct, and a figure honours both. A classification
+moves a row between figures; it cannot move one between months, which is what this rule
+protects. It is not about workflow timing or display either. The annotation queues age a purchase by the
 **resolved** date deliberately: the question "has enough time passed for hindsight to be
 honest?" is better answered by the date the owner says the purchase happened than by one
 they have explicitly corrected, and no money moves either way. The same goes for sort
@@ -1778,7 +1781,7 @@ that shouts louder.
 
 ---
 
-## 43. Facts come from the bank; `typeOverride` is inert for figures, and that is a gap
+## 43. Facts come from the bank; classifications come from the owner, and a kind correction counts
 
 §41 said every value a figure is computed from takes the bank's version. Applying it
 exposed a distinction the rule had not drawn: **a date, an amount and a sign are facts
@@ -1786,28 +1789,59 @@ about what the bank did; a category and a kind are classifications**. The annota
 exists so the owner can correct classifications, and `categoryId` is deliberately taken
 from the owner's correction — the budget would be useless otherwise.
 
-`kind` is a classification too, and it is now taken from the bank anyway. The reason is
-consistency rather than principle: `income.ts` and `month.ts` must agree about which rows
-are income and which are spending, or money leaves one figure without arriving in another,
-and making both follow the owner's override is a larger change than this plan should make
-at its end.
+`kind` is a classification too. Plan 3 nonetheless took it from the bank, for consistency
+rather than principle: `income.ts` and `month.ts` must agree about which rows are income
+and which are spending, or money leaves one figure without arriving in another, and making
+both follow the owner's override was a larger change than that plan should make at its end.
+It left two honest options — both readers honour the override, or the control is removed
+because the app ignores it — and gave the decision to Plan 4, noting that offering a
+correction and ignoring it is the one option that is not honest.
 
-**The consequence, stated rather than hidden:** `annotations.typeOverride` currently
-changes what the owner sees in the list and which transactions the annotation queues ask
-about, and it changes **no figure**. An owner who marks a mis-filed transfer as internal
-still sees it in their spending.
+**The decision, taken in Plan 4: honour it.** Every figure takes the **resolved** kind.
+`kind` is the same species of value as `categoryId`, which is deliberately the owner's,
+and the reason §41 exists does not reach it: §41 stops a correction moving money between
+**months**, and a kind correction moves no row between months — it moves a row between
+**figures**, which is exactly what the owner means when they mark a mis-filed transfer as
+internal. The amount, the sign and the date stay the bank's, absolutely.
 
-That gap is narrower than it first appears. §9.2's transfer pairing already excludes both
-legs of a matched internal transfer automatically, by the `transfers` row rather than by
-`kind`, so the common case is handled without the owner touching anything. What remains is
-an unpaired movement the bank did not label `Movimientos excluidos` — real, but a minority
-of a minority.
+**The condition that makes it safe, and it is the whole of the implementation.** There is
+one function, `treatmentOf(kind, categoryKind)` in `src/analysis/income.ts`. It takes the
+resolved kind at its one definition, and all three readers pass that same value:
+`income.ts` (the income sum and the refund rule), `src/budget/month.ts` (spending and
+savings) and `src/import/refunds.ts` (which links the owner may make). Had one reader
+honoured the override while another did not, a euro would be counted twice or counted
+nowhere — the defect class §41 was written against. A reader added later asks this function
+too, or it is wrong by construction.
 
-**Plan 4 owns the decision**, because it builds the learning engine that reads owner
-corrections and will have to answer the same question for every other derived figure.
-Either both readers honour the override, or `typeOverride` is removed from the owner's
-controls so the app stops offering a correction it ignores. Offering it and ignoring it is
-the one option that is not honest, and it is where this plan leaves it.
+**Where the money goes, case by case.** A spend re-kinded to `internal` or `income` leaves
+spending and enters nothing. A positive re-kinded to `internal` or `spend` leaves income
+and enters nothing: money that arrived can never be spending, because the sign is the
+bank's. An arrival re-kinded to `income` enters income, in the bank's month. A row
+re-kinded to `roundup` is savings. In every case the row stays in the month the bank dated
+it, and no euro is in two figures at once.
+
+**Two consequences worth stating plainly.**
+
+**43.1 Income is money in.** The income sum counts a row only when the bank's amount is
+positive. Without that, an owner re-kinding a purchase to `income` would subtract its
+amount from income while also taking it out of spending — one correction, two figures
+moved, which is precisely what this section exists to prevent. The sign is the bank's, so
+it decides which side of the ledger a row can be on and the kind decides only which figure
+within that side.
+
+**43.2 A refund link follows the resolved kind too, and goes inert when it stops
+matching.** `linkRefund` refuses a purchase the owner has re-kinded out of spending and a
+positive they have re-kinded out of income, through the same `treatmentOf`. A link that
+was valid when it was made and is later contradicted by a correction behaves exactly as a
+link with a deleted leg does: the positive returns to income, nothing is subtracted from
+any category, and the `transfers` row is left alone so putting the kind back revives it.
+
+**The one gap left, stated rather than hidden.** `unconfirmedPositives` — the queue
+offering payments that might be refunds — finds its candidates through an index read on the
+**bank's** kind (§39.4, bounded reads). It therefore misses a row the bank filed otherwise
+and the owner re-kinded **to** income, even though the income figure counts it. Linking it
+from its own editor still works, because that path asks the resolved kind. Closing the gap
+needs an index on `annotations.typeOverride`, and §29 is shut.
 
 ---
 
@@ -1850,3 +1884,29 @@ Three things follow, and they are the actual content of this section:
 The cost of the miss was bounded by luck rather than by process: a repository three hours
 old, with no forks and no stars. That is not a mitigation, and it is recorded here so it
 is not mistaken for one.
+
+---
+
+## 45. The editor sentence changed with §43, and why that matters more than it looks
+
+While `typeOverride` moved no figure, the Kind control in the transaction editor said so:
+"The kind changes how this transaction is shown and whether the mood and worth-it questions
+ask about it. It does not change your budget figures." That sentence was honest, and a test
+pinned it, which is why the §43 decision could not be made in the readers alone.
+
+It now reads: **the kind decides which figure this transaction counts in — spending,
+income, savings, or none of them; changing it changes your budget, in the month the bank
+dated it; the amount, the sign and that month stay the bank's.** Three facts in one
+sentence, because an owner about to re-file a transaction needs all three: that it counts,
+where it counts, and what their correction cannot move.
+
+**The rule this is an instance of.** A control's own description is part of the behaviour.
+When a figure changes, the sentence beside the control that changes it is not
+documentation to update afterwards — it is the half of the change the owner actually sees,
+and it belongs in the same commit and in the same test run. Four tests changed with this
+one ruling: the budget's "re-kinding a purchase does not move a closed month", the two
+refund tests that asserted "the bank kind decides", and the editor's sentence. Each had
+been written as a statement of the old
+ruling rather than of a money invariant, and each was rewritten in place with the figure it
+used to assert recorded in a comment above it, so the reversal is legible in the diff
+instead of looking like a test that was quietly relaxed.

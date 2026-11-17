@@ -201,14 +201,21 @@ describe('the amount taken off income is the amount taken off the category', () 
     expect(await groceries()).toBe(7500)
   })
 
-  it("keeps a purchase the owner re-kinded counted, because the kind is the bank's (§41), and the refund still moves both", async () => {
+  // CHANGED in the §43 ruling (Plan 4, task 9). This test used to be "keeps a purchase the owner re-kinded counted,
+  // because the kind is the bank's (§41)" and asserted income 200000 with groceries 7500 — the override moved nothing.
+  // The kind is the owner's now, so re-kinding the purchase out of spending makes the link inert, exactly as deleting
+  // a leg does, and BOTH figures move back together, which is the invariant this describe is named for.
+  it('makes a live link inert when the owner re-kinds the purchase out of spending, moving both figures together', async () => {
     await tx('pay', '2026-11-01', 200000)
     await tx('buy', '2026-11-05', -10000)
     await tx('ref', '2026-11-20', 2500)
     await linkRefund('ref', 'buy')
-    await annotateOverride('buy', { typeOverride: 'internal' }) // after the link: the reviewed month must not move
     expect((await netIncome(NOV)).cents).toBe(200000)
     expect(await groceries()).toBe(7500)
+    await annotateOverride('buy', { typeOverride: 'internal' })
+    expect((await netIncome(NOV)).cents).toBe(202500) // the positive is income again: never counted nowhere
+    expect(await groceries()).toBeUndefined() // and nothing is taken off any category
+    expect(await transferRows()).toHaveLength(1) // the link itself is untouched: putting the kind back revives it
   })
 
   const handMade = (out: string, inn: string) => db.transfers.add({
@@ -242,12 +249,36 @@ describe('the amount taken off income is the amount taken off the category', () 
     expect((await monthlyBudget(NOV, '2026-12-05')).totals.spentCents).toBe(0) // and nothing was taken off anything
   })
 
-  it('accepts a purchase the owner re-kinded, because the bank kind decides, and both figures move together', async () => {
+  // CHANGED in the §43 ruling (Plan 4, task 9). This test used to be "accepts a purchase the owner re-kinded, because
+  // the bank kind decides, and both figures move together" and asserted a link that moved 2500 out of each figure.
+  // The purchase is not spending any more, so the link would subtract from nothing: it is refused, by the same
+  // treatmentOf the readers use, and a restored one moves neither figure.
+  it('refuses a purchase the owner re-kinded out of spending, and a restored link to one moves neither figure', async () => {
     await tx('pay', '2026-11-01', 200000)
     await tx('buy', '2026-11-05', -10000)
     await tx('ref', '2026-11-20', 2500)
     await annotateOverride('buy', { typeOverride: 'internal' })
-    expect(await linkedDeltas('ref', 'buy')).toEqual({ fromIncome: 2500, fromSpending: 2500 })
+    await expect(linkRefund('ref', 'buy')).rejects.toThrow(/purchase the budget counts as spending/)
+    expect((await refundCandidates('ref')).map((t) => t.id)).toEqual([]) // and it is never offered
+    expect(await transferRows()).toEqual([])
+    await handMade('buy', 'ref')
+    expect((await netIncome(NOV)).cents).toBe(202500) // the 2.500 stays income: it left no category
+    expect(await groceries()).toBeUndefined() // no line at all, certainly no negative one
+  })
+
+  it('refuses a positive the owner re-kinded out of income, and a restored link to one moves neither figure', async () => {
+    await tx('pay', '2026-11-01', 200000)
+    await tx('buy', '2026-11-05', -10000)
+    await tx('ref', '2026-11-20', 2500)
+    await annotateOverride('ref', { typeOverride: 'internal' })
+    await expect(linkRefund('ref', 'buy')).rejects.toThrow(/between your own accounts.*not counted as income/)
+    expect(await refundCandidates('ref')).toEqual([])
+    // The owner said the arrival is a movement, so income does not hold it; a link must not then take 2.500 off the
+    // purchase, which would be money leaving spending that was never income.
+    expect((await unconfirmedPositives(NOV)).map((t) => t.id)).toEqual(['pay'])
+    await handMade('buy', 'ref')
+    expect((await netIncome(NOV)).cents).toBe(200000)
+    expect(await groceries()).toBe(10000)
   })
 })
 
@@ -288,6 +319,36 @@ describe('unconfirmedPositives', () => {
     })
     expect((await unconfirmedPositives(NOV)).map((t) => t.id)).toEqual(['moved'])
     expect(await unconfirmedPositives('2026-12')).toEqual([])
+  })
+
+  it('drops a positive the owner re-kinded out of income, because income no longer holds it (§43)', async () => {
+    await tx('pay', '2026-11-01', 200000)
+    await tx('maybe', '2026-11-09', 4200)
+    expect((await unconfirmedPositives(NOV)).map((t) => t.id)).toEqual(['maybe', 'pay'])
+    await db.annotations.add({
+      transactionId: 'maybe', categoryId: null, subcategoryId: null, merchantId: null, typeOverride: 'internal',
+      paymentMethod: null, note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false,
+      dateOverride: null, amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
+    })
+    expect((await netIncome(NOV)).cents).toBe(200000) // the figure dropped it...
+    expect((await unconfirmedPositives(NOV)).map((t) => t.id)).toEqual(['pay']) // ...so this list drops it too
+  })
+
+  // The stated cost of the bounded read (spec 39.4), not a defect to fix here: the candidate read is an index read on
+  // the BANK's kind, and `annotations.typeOverride` has no index to intersect with while §29 is shut. The figure
+  // honours the correction; this queue cannot see it. The editor still can, which is what the last line pins.
+  it('does not list a positive the owner re-kinded TO income, though income counts it (a stated gap, §43)', async () => {
+    await tx('pay', '2026-11-01', 200000)
+    await tx('odd', '2026-11-09', 4200, { kind: 'internal' })
+    await tx('buy', '2026-11-05', -10000)
+    await db.annotations.add({
+      transactionId: 'odd', categoryId: null, subcategoryId: null, merchantId: null, typeOverride: 'income',
+      paymentMethod: null, note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false,
+      dateOverride: null, amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
+    })
+    expect((await netIncome(NOV)).cents).toBe(204200)
+    expect((await unconfirmedPositives(NOV)).map((t) => t.id)).toEqual(['pay'])
+    expect((await refundCandidates('odd')).map((t) => t.id)).toEqual(['buy'])
   })
 
   it('rejects a malformed month', async () => {

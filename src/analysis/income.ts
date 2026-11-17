@@ -1,5 +1,5 @@
 import { db } from '../db/db'
-import { buildCategoryIndex, resolve } from '../db/annotations'
+import { buildCategoryIndex, resolve, resolveMany, type ResolvedTransaction } from '../db/annotations'
 import type { TransactionRow, TransferRow } from '../db/schema'
 import { addDays, monthKeyOf } from '../lib/dates'
 import { sumCents } from '../lib/money'
@@ -51,15 +51,24 @@ export function isEffectiveRefundLink(out: TransactionRow | undefined, inn: Tran
 }
 
 /**
- * How a transaction is treated by the budget, from the BANK's kind (§41: kinds and signs are the bank's, never an
- * annotation's) and the kind of the category the owner (or ING) filed it under. The one place this is decided, so the
- * spending loop and the refund rule below cannot disagree about what "counted as spending" means.
+ * How a transaction is treated by the budget, from its RESOLVED kind and the kind of the category the owner (or ING)
+ * filed it under. The one place this is decided, so the spending loop, the income sum and the refund rule below cannot
+ * disagree about what "counted as spending" means.
+ *
+ * §43, as this plan ruled it: `kind` is a CLASSIFICATION, the same species as `categoryId`, so a `typeOverride` is
+ * honoured here and therefore by every figure. §41 is untouched: it exists to stop a correction moving money between
+ * MONTHS, and a kind correction moves no row between months — it moves a row between figures, which is what the owner
+ * means. The amount, the sign and the date stay the BANK's everywhere, absolutely. The safety condition is that this
+ * function is the ONLY place the question is answered and that every reader passes the resolved kind: if one reader
+ * honoured the override and another did not, a euro would be counted twice or counted nowhere.
+ *
+ * A null kind means "no such row" (a leg that has gone missing) and is treated as nothing, never as spending.
  */
 export function treatmentOf(
-  bankKind: TransactionRow['kind'], categoryKind: string | null,
+  kind: TransactionRow['kind'] | null, categoryKind: string | null,
 ): 'savings' | 'spending' | 'none' {
-  if (bankKind === 'roundup' || categoryKind === 'savings') return 'savings'
-  if (bankKind !== 'spend' || categoryKind === 'internal' || categoryKind === 'income') return 'none'
+  if (kind === 'roundup' || categoryKind === 'savings') return 'savings'
+  if (kind !== 'spend' || categoryKind === 'internal' || categoryKind === 'income') return 'none'
   return 'spending'
 }
 
@@ -80,21 +89,27 @@ export interface RefundSubtraction {
  * every one of these holds, and income and the budget both act on exactly this answer, so the euros leaving income are
  * always the euros leaving a category:
  *  - both legs are live (see isEffectiveRefundLink);
- *  - the bank recorded the positive leg as income (otherwise it was never in income to remove);
- *  - the purchase is one the budget counts as spending (bank kind `spend`, category not internal / income / savings).
+ *  - the positive leg counts as income, by the RESOLVED kind the income sum itself uses (§43): a positive income.ts
+ *    does not count was never in income to remove, and subtracting for it would take money off a category that no
+ *    money ever left;
+ *  - the purchase is one the budget counts as spending, by treatmentOf on the RESOLVED kind and the resolved category.
  * When it holds, the positive leaves income and `cents` leaves the purchase's category. When it does not, the link is
  * inert: the positive stays income and no category changes, so no money is ever counted nowhere.
+ *
+ * `out`/`inn` are the BANK's rows: which leg is the refund, how much it is and which month it lands in are read from
+ * them and never from an override (§41). `kindOf` supplies the resolved kind of a leg by id, null when it is missing.
  */
 export function refundSubtraction(
   out: TransactionRow | undefined, inn: TransactionRow | undefined,
+  kindOf: (id: string) => TransactionRow['kind'] | null,
   categoryOf: (originalId: string) => string | null, categoryKindOf: (categoryId: string | null) => string | null,
 ): RefundSubtraction | null {
   if (!isEffectiveRefundLink(out, inn)) return null
   const refund = [out, inn].find((l) => l !== undefined && l.amountCents > 0)
   const original = [out, inn].find((l) => l !== undefined && l.amountCents < 0)
-  if (!refund || !original || refund.kind !== 'income') return null
+  if (!refund || !original || kindOf(refund.id) !== 'income') return null
   const categoryId = categoryOf(original.id)
-  if (treatmentOf(original.kind, categoryKindOf(categoryId)) !== 'spending') return null
+  if (treatmentOf(kindOf(original.id), categoryKindOf(categoryId)) !== 'spending') return null
   return { refundId: refund.id, originalId: original.id, categoryId, cents: refund.amountCents, refundValueDate: refund.valueDate }
 }
 
@@ -106,19 +121,24 @@ export async function refundSubtractions(
   if (links.length === 0) return []
   const [categories, index] = await Promise.all([db.categories.toArray(), buildCategoryIndex()])
   const kindById = new Map(categories.map((c) => [c.id, c.kind]))
-  const originalIds = links.flatMap((l) => [legs.get(l.outTransactionId), legs.get(l.inTransactionId)])
-    .filter((l): l is TransactionRow => l !== undefined && l.amountCents < 0).map((l) => l.id)
+  // BOTH legs are resolved, not just the purchase: §43 makes the kind of each leg the owner's, and the rule above asks
+  // for the kind of the positive as well as of the purchase. Only `categoryId` and `kind` are ever read off these
+  // resolved rows; the amount, the sign and the date come from the bank rows in `legs`.
+  const legIds = [...new Set(links.flatMap((l) => [l.outTransactionId, l.inTransactionId]))]
   const annotations = new Map(
-    (await db.annotations.bulkGet([...new Set(originalIds)])).flatMap((a) => (a ? [[a.transactionId, a] as const] : [])),
+    (await db.annotations.bulkGet(legIds)).flatMap((a) => (a ? [[a.transactionId, a] as const] : [])),
   )
-  const categoryOf = (id: string): string | null => {
+  const resolved = new Map<string, ResolvedTransaction>()
+  for (const id of legIds) {
     const row = legs.get(id)
-    return row ? resolve(row, annotations.get(id), index).categoryId : null
+    if (row) resolved.set(id, resolve(row, annotations.get(id), index))
   }
+  const kindOf = (id: string): TransactionRow['kind'] | null => resolved.get(id)?.kind ?? null
+  const categoryOf = (id: string): string | null => resolved.get(id)?.categoryId ?? null
   const categoryKindOf = (id: string | null): string | null => (id === null ? null : kindById.get(id) ?? null)
   const found: RefundSubtraction[] = []
   for (const l of links) {
-    const s = refundSubtraction(legs.get(l.outTransactionId), legs.get(l.inTransactionId), categoryOf, categoryKindOf)
+    const s = refundSubtraction(legs.get(l.outTransactionId), legs.get(l.inTransactionId), kindOf, categoryOf, categoryKindOf)
     if (s) found.push(s)
   }
   return found
@@ -175,11 +195,19 @@ async function incomeByMonth(firstMonth: string, lastMonth: string): Promise<Map
     liveTransactionsBetween(firstMonth, lastMonth),
     exclusions((d) => d >= `${firstMonth}-01` && d < nextMonthStart(lastMonth)),
   ])
+  // §43: whether a row is income is its RESOLVED kind, the owner's classification to correct, and treatmentOf (the
+  // budget's side of the same question) reads the same value, so a re-kinded row leaves one figure exactly as it
+  // enters the other. §41 is untouched and the trap here is precise: the month below is the BANK's valueDate and the
+  // cents are the BANK's amountCents, both read off `t`; only the kind is read off the resolved row.
+  const resolvedKind = new Map((await resolveMany(txs)).map((r) => [r.id, r.kind]))
   const amounts = new Map<string, number[]>()
   for (const t of txs) {
     const key = t.valueDate.slice(0, 7)
     const slot = amounts.get(key) ?? []
-    if (t.kind === 'income' && !excluded.has(t.id)) slot.push(t.amountCents)
+    // Money IN, by the bank's sign: income is what arrived. A correction can say a row is not income, and it can say an
+    // arrival is; it can never put money that left the account into the income sum, which would subtract from income a
+    // sum the budget is counting as spending at the same time.
+    if (resolvedKind.get(t.id) === 'income' && t.amountCents > 0 && !excluded.has(t.id)) slot.push(t.amountCents)
     amounts.set(key, slot)
   }
   const out = new Map<string, MonthIncome>()

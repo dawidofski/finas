@@ -85,9 +85,15 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
   // any of it, so both its legs vanish from income, spending and savings alike.
   const roundupOutIds = new Set(transfers.filter((t) => t.linkKind === 'roundup').map((t) => t.outTransactionId))
 
-  // §41, whole module: the month, the amount, its sign and the kind are the BANK's, so a correction made later cannot
-  // move a closed month or lose money (a sign-flipping override would otherwise drop a spend from every figure).
-  // The ONLY owner-corrected value used below is the category, which is the owner's to say. resolveMany supplies it.
+  // §41, whole module: the month, the amount and its sign are the BANK's, so a correction made later cannot move a
+  // closed month or lose money (a sign-flipping override would otherwise drop a spend from every figure).
+  // The owner-corrected values used below are exactly two, and both are classifications: the CATEGORY and the KIND
+  // (§43, ruled in Plan 4 — a kind correction moves a row between figures, never between months). Both are read off
+  // the resolved row `r`; everything that is money or time is read off the bank row `t`.
+  //
+  // THE TRAP, because both rows carry both: `r.amountCents` and `r.valueDate` exist and are the OWNER's. Writing one
+  // of them into a figure would silently put an amount override into the budget, which §41 forbids and which almost
+  // every test still passes. In the loop below, `r` is read for `kind` and `categoryId` and for nothing else.
   const bank = new Map(candidates.map((t) => [t.id, t]))
   const rows = await resolveMany(candidates)
 
@@ -108,7 +114,12 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
   for (const r of rows) {
     const t = bank.get(r.id)
     if (!t) continue
-    const treatment = treatmentOf(t.kind, kindOf(r.categoryId))
+    // The resolved kind and the resolved category, the owner's two classifications (§43); income.ts asks the same
+    // question of the same function with the same resolved kind, so the two readers cannot drift apart.
+    const treatment = treatmentOf(r.kind, kindOf(r.categoryId))
+    // The bank's sign decides which side of the ledger a row can be on, whatever kind the owner gave it: a positive
+    // re-kinded to `spend` is money that arrived, so it can never be spending. It leaves income (income.ts asks the
+    // resolved kind) and enters nothing — the owner said it is not income, and no figure can hold an inflow as spending.
     if (t.amountCents >= 0) {
       // A round-up arriving in savings whose spending-account leg was never imported is the only record of the saving.
       // The outflow carries the saving when it is present, because it is the movement that actually left the spending
@@ -116,6 +127,11 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
       if (t.kind === 'roundup' && t.amountCents > 0 && !transferLegIds.has(t.id)) pendingInflows.push(t)
       continue
     }
+    // Deliberately the BANK's kind, not the resolved one: this is not a figure but the round-up PAIRING, a statement
+    // about two bank events (the importer's `transfers` row, or the date/amount/account match below). Both sides of
+    // that match read the bank kind, so they stay symmetric, and the carve-out on the next line keeps a paired
+    // round-up outflow in the figures instead of dropping it as an excluded transfer leg. Were this the resolved kind,
+    // re-kinding a round-up to `spend` would make the outflow neither savings nor spending: counted nowhere.
     const isRoundup = t.kind === 'roundup'
     if (excluded.has(t.id) && !(isRoundup && roundupOutIds.has(t.id))) continue
     if (treatment === 'savings') {
