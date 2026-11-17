@@ -7,7 +7,7 @@ import { writeAnnotation } from '../../db/annotations'
 import { inputsHash, ENGINE_VERSION } from '../../analytics/cache'
 import type { MonthPoint } from '../../analytics/series'
 import type { AnnotatedRow } from '../../analytics/annotated'
-import { formatEur } from '../../lib/money'
+import { formatBp, formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
@@ -43,6 +43,24 @@ const mount = async (today = TODAY, month?: string) => {
   return view
 }
 const text = () => document.body.textContent ?? ''
+
+const link = async (id: string, out: string, inn: string, amountCents: number): Promise<void> => {
+  await db.transfers.add({
+    id, outTransactionId: out, inTransactionId: inn, amountCents, matchScore: 100, confirmedByUser: true, matchedAt: 1, linkKind: 'refund',
+  })
+}
+/** A purchase from October returned in November, with November's own spending: the refund lands in the purchase's category in November. */
+async function returnedInNovember(purchase: { ing: [string, string] | null; cents: number }, november: Array<[string, number, [string, string]]>) {
+  await tx('oct-pay', '2026-10-01', 100000)
+  await tx('buy', '2026-10-10', -purchase.cents, purchase.ing)
+  await tx('pay', '2026-11-01', 200000)
+  for (const [id, cents, ing] of november) await tx(id, '2026-11-02', -cents, ing)
+  await tx('ref', '2026-11-05', purchase.cents, null)
+  await link('r1', 'buy', 'ref', purchase.cents)
+}
+const SHOPPING: [string, string] = ['Compras', 'Compras (otros)']
+const causalWords = /\b(because|cause[sd]?|causing|due to|owing to|leads? to|led to|results? in|resulted|as a result|therefore|thus|so that|drives?|driven|explains?|explained|why|makes you|made you|since you|which is why)\b/i
+const jargonWords = /\b(cache|cached|basis|engine|z-score|median|deviation|outlier|percentile|standard|component|net)\b/i
 const panel = (name: string) => screen.getByRole('region', { name })
 const dots = (el: HTMLElement) => [...el.querySelectorAll('circle[data-label]')].map((c) => c.getAttribute('data-label'))
 const bars = (el: HTMLElement) => [...el.querySelectorAll('g[data-label]')].map((g) => g.getAttribute('data-label'))
@@ -241,9 +259,50 @@ describe('Reports screen', () => {
     })
     await mount()
     const p = panel('Essential and discretionary')
-    expect(within(p).getByText(`${formatEur(2000)} of money returned to you is not filed under a spending category, so it is not counted as spending.`)).toBeInTheDocument()
+    expect(within(p).getByText(`${formatEur(2000)} of money returned to you is not filed under a spending category. It has been taken off the amount spent, and is shown as its own bar below zero; the bars add up to ${formatEur(8000)}.`)).toBeInTheDocument()
+    expect(bars(p)).toEqual(['Essentials', 'Discretionary', 'Money returned'])
+    expect(p.querySelector('g[data-label="Money returned"]')?.getAttribute('data-cents')).toBe('-2000')
+  })
+
+  it('draws money returned from a real refund as its own negative bar, and the bars add up to the amount spent', async () => {
+    await returnedInNovember({ ing: null, cents: 25000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+    await mount()
+    const p = panel('Essential and discretionary')
+    const rows = [...p.querySelectorAll('g[data-label]')].map((g) => [g.getAttribute('data-label'), Number(g.getAttribute('data-cents'))])
+    expect(rows).toEqual([['Essentials', 80000], ['Discretionary', 5000], ['Money returned', -25000]])
+    expect(rows.reduce((sum, r) => sum + (r[1] as number), 0)).toBe(60000)
+    expect(p.textContent).toContain(`${formatEur(25000)} of money returned to you is not filed under a spending category. It has been taken off the amount spent`)
+    expect(p.textContent).not.toContain('is not counted as spending')
+  })
+
+  it('gives no percentage when money returned has made discretionary spending negative', async () => {
+    // A 300 EUR jacket bought in October and returned in November, with 50 EUR of other discretionary spending: -250 and 800 essential.
+    await returnedInNovember({ ing: SHOPPING, cents: 30000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+    await mount()
+    const p = panel('Essential and discretionary')
     expect(bars(p)).toEqual(['Essentials', 'Discretionary'])
-    expect(p.querySelector('g[data-cents^="-"]')).toBeNull()
+    expect(p.querySelector('g[data-label="Discretionary"]')?.getAttribute('data-cents')).toBe('-25000')
+    expect(p.textContent).not.toMatch(/\d %|is essential/)
+    expect(p.textContent).not.toContain('filed as essential or discretionary')
+    expect(within(p).getByText(`Money returned to you in November 2026 came to more than was spent on discretionary spending, so the split cannot be given as a percentage. Essentials come to ${formatEur(80000)} and discretionary spending to ${formatEur(-25000)}.`)).toBeInTheDocument()
+  })
+
+  it('gives no percentage when money returned has made essentials negative, and names the right group', async () => {
+    await returnedInNovember({ ing: GROCERIES, cents: 30000 }, [['r', 50000, RESTAURANTS]])
+    await mount()
+    const p = panel('Essential and discretionary')
+    expect(p.querySelector('g[data-label="Essentials"]')?.getAttribute('data-cents')).toBe('-30000')
+    expect(p.textContent).not.toMatch(/ is essential/)
+    expect(within(p).getByText(/came to more than was spent on essentials, so the split cannot be given as a percentage/)).toBeInTheDocument()
+  })
+
+  it('still gives the percentage when both parts are spending', async () => {
+    await tx('pay', '2026-11-01', 200000)
+    await tx('g', '2026-11-02', -30000, GROCERIES)
+    await tx('r', '2026-11-03', -10000, RESTAURANTS)
+    await mount()
+    const p = panel('Essential and discretionary')
+    expect(within(p).getByText(`Of the ${formatEur(40000)} filed as essential or discretionary, ${formatBp(7500)} is essential.`)).toBeInTheDocument()
   })
 
   it('shortens a long category name on its bar and keeps the whole name in the list beside it', async () => {
@@ -339,6 +398,17 @@ describe('Reports screen', () => {
     expect(text()).not.toMatch(causal)
     expect(text()).not.toMatch(jargon)
     expect(text().length).toBeGreaterThan(500) // a scan of nothing proves nothing
+    // The returned-money branches: an uncategorised return, and a return that makes a group negative.
+    for (const purchase of [{ ing: null, cents: 25000 }, { ing: SHOPPING, cents: 30000 }]) {
+      cleanup()
+      await db.delete(); await db.open(); await seedDatabase()
+      uid = 0
+      await returnedInNovember(purchase, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+      await mount()
+      expect(text()).toMatch(/money returned to you/i)
+      expect(text()).not.toMatch(causal)
+      expect(text()).not.toMatch(jargon)
+    }
   })
 
   it('reads the cache rather than the transactions table', async () => {

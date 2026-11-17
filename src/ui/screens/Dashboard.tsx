@@ -139,7 +139,7 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
   const split = [
     { label: 'Essentials', cents: current.essentialCents },
     { label: 'Discretionary', cents: current.discretionaryCents },
-    ...(current.uncategorisedCents > 0 ? [{ label: 'Not categorised', cents: current.uncategorisedCents }] : []),
+    ...(current.uncategorisedCents === 0 ? [] : [{ label: current.uncategorisedCents > 0 ? 'Not categorised' : 'Money returned', cents: current.uncategorisedCents }]),
   ]
 
   return (
@@ -154,7 +154,10 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
         <li>{netLine}</li>
       </ul>
       {current.uncategorisedCents < 0 && (
-        <p>{formatEur(-current.uncategorisedCents)} of money returned to you is not filed under a spending category, so it is not counted as spending.</p>
+        <p>
+          {formatEur(-current.uncategorisedCents)} of money returned to you is not filed under a spending category. It has been taken off the amount spent
+          {current.spentCents > 0 ? `, and is shown as its own bar below zero; the bars add up to ${formatEur(current.spentCents)}.` : '.'}
+        </p>
       )}
 
       {previous && previous.hasData

@@ -204,20 +204,36 @@ function CategoryPanel({ rows, title }: { rows: CategorySpend[]; title: string }
   )
 }
 
+/** The bars for the uncategorised remainder: a positive one is spending not filed anywhere; a negative one is money returned, drawn below zero so the bars add up to the amount spent. */
+function returnedOrUncategorised(cents: number): Array<{ label: string; cents: number }> {
+  if (cents === 0) return []
+  return [{ label: cents > 0 ? 'Not categorised' : 'Money returned', cents }]
+}
+
+/** Says what happened to returned money that is filed under no spending category: it is already off the amount spent. */
+function returnedNotice(uncategorisedCents: number, spentCents: number): string {
+  const head = `${formatEur(-uncategorisedCents)} of money returned to you is not filed under a spending category. It has been taken off the amount spent`
+  return spentCents > 0 ? `${head}, and is shown as its own bar below zero; the bars add up to ${formatEur(spentCents)}.` : `${head}.`
+}
+
 function SplitPanel({ current, title }: { current: MonthPoint; title: string }): ReactNode {
   const classified = current.essentialCents + current.discretionaryCents
   const split = [
     { label: 'Essentials', cents: current.essentialCents },
     { label: 'Discretionary', cents: current.discretionaryCents },
-    ...(current.uncategorisedCents > 0 ? [{ label: 'Not categorised', cents: current.uncategorisedCents }] : []),
+    ...returnedOrUncategorised(current.uncategorisedCents),
   ]
+  // A share of a total means something only when both parts are spending. Money returned in the month can make either one negative.
+  const returnedFrom = [current.essentialCents < 0 ? 'essentials' : null, current.discretionaryCents < 0 ? 'discretionary spending' : null]
+    .filter((x): x is string => x !== null).join(' and ')
   return (
     <Panel id="reports-split" title="Essential and discretionary">
       {current.spentCents > 0 && <Bars points={split} title={`Essential and discretionary spending in ${title}`} />}
       {current.spentCents <= 0 && <p>No spending is recorded in {title}, so there is nothing to split.</p>}
-      {classified > 0 && <p>Of the {formatEur(classified)} filed as essential or discretionary, {formatBp(percentBpOf(current.essentialCents, classified))} is essential.</p>}
+      {returnedFrom !== '' && <p>Money returned to you in {title} came to more than was spent on {returnedFrom}, so the split cannot be given as a percentage. Essentials come to {formatEur(current.essentialCents)} and discretionary spending to {formatEur(current.discretionaryCents)}.</p>}
+      {returnedFrom === '' && classified > 0 && <p>Of the {formatEur(classified)} filed as essential or discretionary, {formatBp(percentBpOf(current.essentialCents, classified))} is essential.</p>}
       {current.uncategorisedCents > 0 && <p>{formatEur(current.uncategorisedCents)} is not filed as either, so it is shown on its own.</p>}
-      {current.uncategorisedCents < 0 && <p>{formatEur(-current.uncategorisedCents)} of money returned to you is not filed under a spending category, so it is not counted as spending.</p>}
+      {current.uncategorisedCents < 0 && <p>{returnedNotice(current.uncategorisedCents, current.spentCents)}</p>}
     </Panel>
   )
 }

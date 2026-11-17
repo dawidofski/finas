@@ -41,6 +41,24 @@ const mount = async (today = TODAY, month?: string) => {
 }
 const text = () => document.body.textContent ?? ''
 
+const link = async (id: string, out: string, inn: string, amountCents: number): Promise<void> => {
+  await db.transfers.add({
+    id, outTransactionId: out, inTransactionId: inn, amountCents, matchScore: 100, confirmedByUser: true, matchedAt: 1, linkKind: 'refund',
+  })
+}
+/** A purchase from October returned in November, with November's own spending: the refund lands in the purchase's category in November. */
+async function returnedInNovember(purchase: { ing: [string, string] | null; cents: number }, november: Array<[string, number, [string, string]]>) {
+  await tx('oct-pay', '2026-10-01', 100000)
+  await tx('buy', '2026-10-10', -purchase.cents, purchase.ing)
+  await tx('pay', '2026-11-01', 200000)
+  for (const [id, cents, ing] of november) await tx(id, '2026-11-02', -cents, ing)
+  await tx('ref', '2026-11-05', purchase.cents, null)
+  await link('r1', 'buy', 'ref', purchase.cents)
+}
+const SHOPPING: [string, string] = ['Compras', 'Compras (otros)']
+const causalWords = /\b(because|cause[sd]?|causing|due to|owing to|leads? to|led to|results? in|resulted|as a result|therefore|thus|so that|drives?|driven|explains?|explained|why|makes you|made you|since you|which is why)\b/i
+const jargonWords = /\b(cache|cached|basis|engine|z-score|median|deviation|outlier|percentile|standard|component|net)\b/i
+
 /** A November with income, groceries and a restaurant, and an October with income and groceries. */
 async function twoMonths() {
   await tx('oct-pay', '2026-10-01', 100000)
@@ -177,11 +195,40 @@ describe('Dashboard screen', () => {
       payload: { shape: 1, value: points },
     })
     await mount()
-    expect(screen.getByText(/of money returned to you is not filed under a spending category/)).toBeInTheDocument()
-    expect(screen.getByText(new RegExp(`^${formatEur(2000).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} of money returned`))).toBeInTheDocument()
+    expect(screen.getByText(`${formatEur(2000)} of money returned to you is not filed under a spending category. It has been taken off the amount spent, and is shown as its own bar below zero; the bars add up to ${formatEur(8000)}.`)).toBeInTheDocument()
     const labels = [...document.querySelectorAll('g[data-label]')].map((g) => g.getAttribute('data-label'))
-    expect(labels).toEqual(['Essentials', 'Discretionary'])
-    expect(document.querySelector('g[data-cents^="-"]')).toBeNull()
+    expect(labels).toEqual(['Essentials', 'Discretionary', 'Money returned'])
+    expect(document.querySelector('g[data-label="Money returned"]')?.getAttribute('data-cents')).toBe('-2000')
+  })
+
+  it('draws money returned from a real refund as its own negative bar, and the bars add up to the amount spent', async () => {
+    // 250 EUR bought in October with no category, returned in November: November's uncategorised remainder is genuinely -250.
+    await returnedInNovember({ ing: null, cents: 25000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+    await mount()
+    expect(screen.getByText(`Spent: ${formatEur(60000)}`)).toBeInTheDocument()
+    const rows = [...document.querySelectorAll('g[data-label]')].map((g) => [g.getAttribute('data-label'), Number(g.getAttribute('data-cents'))])
+    expect(rows).toEqual([['Essentials', 80000], ['Discretionary', 5000], ['Money returned', -25000]])
+    expect(rows.reduce((sum, r) => sum + (r[1] as number), 0)).toBe(60000)
+    expect(text()).toContain(`${formatEur(25000)} of money returned to you is not filed under a spending category. It has been taken off the amount spent`)
+    expect(text()).not.toContain('is not counted as spending')
+  })
+
+  it('uses no causal wording and no technical terms, including when money has been returned', async () => {
+    await twoMonths()
+    const first = await mount()
+    const plain = text()
+    first.unmount()
+    await db.delete(); await db.open(); await seedDatabase()
+    uid = 0
+    await returnedInNovember({ ing: null, cents: 25000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
+    await mount()
+    const returned = text()
+    expect(returned).toContain('money returned to you') // the branch under scan is on screen
+    for (const t of [plain, returned]) {
+      expect(t).not.toMatch(causalWords)
+      expect(t).not.toMatch(jargonWords)
+      expect(t.length).toBeGreaterThan(200) // a scan of nothing proves nothing
+    }
   })
 
   it('says what is missing when this month has no records, and never joins a line across a gap', async () => {
