@@ -3,7 +3,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { TransactionRow } from '../db/schema'
 import type { MonthSummary } from './monthly'
-import { changeFrom, monthSeries } from './series'
+import { changeFrom, monthSeries, oldestFirst } from './series'
 
 let uid = 0
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
@@ -69,6 +69,14 @@ describe('monthSeries', () => {
     expect(s.map((p) => p.month)).toEqual([...s.map((p) => p.month)].sort())
   })
 
+  it('oldestFirst orders by month whatever order the points arrive in', () => {
+    const arrived = [{ month: '2027-01' }, { month: '2026-11' }, { month: '2027-02' }, { month: '2026-12' }]
+    const ordered = oldestFirst(arrived).map((p) => p.month)
+    expect(ordered).toEqual(['2026-11', '2026-12', '2027-01', '2027-02'])
+    expect(oldestFirst([...arrived].reverse()).map((p) => p.month)).toEqual(ordered)
+    expect(arrived[0]?.month).toBe('2027-01') // the input is not reordered in place
+  })
+
   it('is a single point when from equals to, and empty when the range is inverted', async () => {
     await tx('a', '2026-10-03', -1000, GROCERIES)
     expect((await series('2026-10', '2026-10')).map((p) => p.month)).toEqual(['2026-10'])
@@ -105,8 +113,9 @@ describe('changeFrom', () => {
     const first = changeFrom(null, summaryOf({ spentCents: 25000 }), 'spentCents')
     expect(first.basis).toBe('none')
     expect(first.bp).toBeNull()
+    expect(first.cents).toBeNull() // no change to report, not "the whole figure"
     // Nor does a previous month that is a gap count as a month of zero to compare against.
     const afterGap = changeFrom(summaryOf({ transactions: 0, spentCents: 0 }), summaryOf({ spentCents: 25000 }), 'spentCents')
-    expect(afterGap).toMatchObject({ basis: 'none', bp: null })
+    expect(afterGap).toEqual({ basis: 'none', bp: null, cents: null })
   })
 })

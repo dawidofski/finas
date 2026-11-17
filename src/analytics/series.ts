@@ -24,6 +24,11 @@ function gapOf(s: MonthSummary): MonthPoint {
   return { ...s, incomeCents: 0, netCents: 0, provisional: true, incomeBasis: 'none', hasData: false }
 }
 
+/** Oldest first, by the months' own keys: a total order that never depends on the order the points were read or built in. */
+export function oldestFirst<T extends { month: string }>(points: readonly T[]): T[] {
+  return [...points].sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0))
+}
+
 /**
  * Every month from `from` to `to` inclusive, oldest first, one point each. A month with no data is present and marked
  * hasData false: it is never dropped (the axis would silently skip it) and never filled in from its neighbours.
@@ -36,16 +41,13 @@ export async function monthSeries(from: string, to: string, today: string, compu
     const months: string[] = []
     for (let m = from; m <= to; m = nextMonth(m)) months.push(m)
     const summaries = await Promise.all(months.map((m) => monthSummary(m, today, computedAt)))
-    // Sorted explicitly: the order is the months' own, never the order the reads happened to finish in.
-    return summaries
-      .map((s): MonthPoint => (s.transactions > 0 ? { ...s, hasData: true } : gapOf(s)))
-      .sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0))
+    return oldestFirst(summaries.map((s): MonthPoint => (s.transactions > 0 ? { ...s, hasData: true } : gapOf(s))))
   }, computedAt)
 }
 
 export interface Change {
-  /** current − previous. With basis 'none' there is nothing to compare against and this is the current figure itself, not a change. */
-  cents: number
+  /** current − previous; null exactly when basis is 'none'. `basis` is the discriminator for both this and bp. */
+  cents: number | null
   /** Basis points of the previous figure's magnitude; null when there is no basis (never 0 for "no answer"). */
   bp: number | null
   basis: 'month' | 'none'
@@ -69,7 +71,7 @@ function roundedDiv(n: number, d: number): number {
  */
 export function changeFrom(previous: MonthSummary | null, current: MonthSummary, field: NumericField): Change {
   if (previous === null || previous.transactions === 0) {
-    return { cents: current[field], bp: null, basis: 'none' }
+    return { cents: null, bp: null, basis: 'none' }
   }
   const cents = current[field] - previous[field]
   const bp = previous[field] === 0 ? null : roundedDiv(cents * 10000, Math.abs(previous[field]))
