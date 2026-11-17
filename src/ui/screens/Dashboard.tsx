@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { changeFrom, monthSeries, type Change, type MonthPoint, type NumericField } from '../../analytics/series'
 import { addDays, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
-import { formatEur } from '../../lib/money'
+import { formatBp, formatEur } from '../../lib/money'
 import { Bars } from '../charts/Bars'
 import { Line } from '../charts/Line'
-import { formatBp } from './Budget'
 
 /** How many months back the screen looks. Six is what the trend line shows; it is also the window the empty state speaks about. */
 const WINDOW = 6

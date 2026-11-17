@@ -11,10 +11,9 @@ import { excludedTransactionIds, treatmentOf } from '../../analysis/income'
 import { loadCategoryKinds } from '../../analysis/queues'
 import { liveTransactionsBetween, nextMonthStart } from '../../analysis/transactionsInRange'
 import { addDays, daysBetween, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
-import { formatEur, percentBpOf } from '../../lib/money'
+import { formatBp, formatEur, percentBpOf } from '../../lib/money'
 import { Bars } from '../charts/Bars'
 import { Line } from '../charts/Line'
-import { formatBp } from './Budget'
 
 /*
  * The one screen that reads every figure the analytics produce. It reads them through the cache (§39.4); the two figures that

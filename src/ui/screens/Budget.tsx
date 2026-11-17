@@ -4,20 +4,11 @@ import type { BudgetAllocationRow, CategoryRow, SavingsGoalRow } from '../../db/
 import { AllocationError, allocationsFor, deleteAllocation, saveAllocation } from '../../budget/allocations'
 import { monthlyBudget, type BudgetLine, type MonthlyBudget } from '../../budget/month'
 import { addDays, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
-import { centsToTypedString, formatEur, parseTypedAmount, percentBpOf } from '../../lib/money'
+import { centsToTypedString, formatBp, formatEur, parseTypedAmount, percentBpOf } from '../../lib/money'
 
 const monthTitle = formatMonthTitle
 const previousMonth = (m: string) => monthKeyOf(addDays(`${m}-01`, -1))
 const nextMonth = (m: string) => monthKeyOf(addDays(`${m}-28`, 4))
-
-/** Basis points as the owner reads them, integer arithmetic only: 1250 -> "12,5 %", -4000 -> "-40 %". */
-export function formatBp(bp: number): string {
-  const abs = Math.abs(bp)
-  const whole = Math.floor(abs / 100)
-  const hundredths = abs % 100
-  const frac = hundredths === 0 ? '' : `,${String(hundredths).padStart(2, '0').replace(/0$/, '')}`
-  return `${bp < 0 ? '-' : ''}${whole}${frac} %`
-}
 
 const keyOf = (kind: 'category' | 'goal', id: string) => `${kind}:${id}`
 const allocationKey = (a: BudgetAllocationRow) =>

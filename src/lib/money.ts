@@ -117,6 +117,21 @@ export function applyPercentBp(cents: number, bp: number): number {
   return divRound(product, 10000)
 }
 
+/**
+ * Basis points as the owner reads them, integer arithmetic only: 1250 -> "12,5 %", -4000 -> "-40 %".
+ *
+ * It lived in the Budget screen until three screens needed it and two were importing it from the third, which pulled a
+ * whole screen's module into their bundles to borrow one formatter. Percentages are read in the same breath as money, so
+ * this is where it belongs — beside formatEur and percentBpOf, whose output it renders.
+ */
+export function formatBp(bp: number): string {
+  const abs = Math.abs(bp)
+  const whole = Math.floor(abs / 100)
+  const hundredths = abs % 100
+  const frac = hundredths === 0 ? '' : `,${String(hundredths).padStart(2, '0').replace(/0$/, '')}`
+  return `${bp < 0 ? '-' : ''}${whole}${frac} %`
+}
+
 /** part / whole as basis points, rounded half away from zero; 0 when whole is 0. */
 export function percentBpOf(part: number, whole: number): number {
   assertCents(part, 'part')

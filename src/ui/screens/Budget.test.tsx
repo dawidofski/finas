@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import Budget, { formatBp } from './Budget'
+import Budget from './Budget'
 import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { saveAllocation } from '../../budget/allocations'
-import { formatEur } from '../../lib/money'
+import { formatBp, formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
