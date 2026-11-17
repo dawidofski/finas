@@ -16,7 +16,7 @@ export type CategoryMemory = ReadonlyMap<string, { categoryId: string; correctio
 /** §11: "corrected twice the same way becomes the default". */
 const CORRECTIONS_NEEDED = 2
 
-interface Latest { at: number; categoryId: string | null; isCorrection: boolean }
+interface Latest { at: number; id: string; categoryId: string | null; isCorrection: boolean }
 
 /** Narrows an untyped payload; a malformed or legacy one yields null and is skipped, never thrown on. */
 function readCategoryPayload(payload: unknown): { transactionId: string; categoryId: string | null; isCorrection: boolean } | null {
@@ -25,6 +25,9 @@ function readCategoryPayload(payload: unknown): { transactionId: string; categor
   if (typeof p.transactionId !== 'string') return null
   if (p.new !== null && typeof p.new !== 'string') return null
   // An absent intent means correction (see LearningEventRow); only an explicit 'confirmation' is not one.
+  // Excluding confirmations loses no signal: writeAnnotation marks 'confirmation' only when the old and new
+  // EFFECTIVE category are equal (stored or ING-derived). A classifier suggestion is neither stored nor derived,
+  // so confirming one is already a 'correction' and does graduate into memory.
   return { transactionId: p.transactionId, categoryId: p.new, isCorrection: p.intent !== 'confirmation' }
 }
 
@@ -40,8 +43,9 @@ export async function categoryMemory(): Promise<CategoryMemory> {
     const p = readCategoryPayload(row.payload)
     if (p === null) continue
     const seen = latest.get(p.transactionId)
-    if (seen === undefined || row.at >= seen.at) {
-      latest.set(p.transactionId, { at: row.at, categoryId: p.categoryId, isCorrection: p.isCorrection })
+    // Total order: later `at` wins; equal `at` falls back to the event id, so the result never depends on read order.
+    if (seen === undefined || row.at > seen.at || (row.at === seen.at && row.id > seen.id)) {
+      latest.set(p.transactionId, { at: row.at, id: row.id, categoryId: p.categoryId, isCorrection: p.isCorrection })
     }
   }
 

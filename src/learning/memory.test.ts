@@ -29,6 +29,22 @@ beforeEach(async () => {
   await db.transactions.bulkAdd([tx('t1'), tx('t2'), tx('t3'), tx('t4')])
 })
 
+/** Reads of the event log: a method call on the table, or the dynamic accessor `db.table('learningEvents')` in any form. */
+const readsLearningEvents = (text: string): boolean =>
+  /table\(\s*['"`]learningEvents['"`]/.test(text) ||
+  /learningEvents\s*\.\s*(toArray|where|orderBy|filter|each|get|bulkGet|count|toCollection|reverse|limit|offset|first|last|keys|primaryKeys)\b/.test(text)
+
+describe('the learningEvents read detector', () => {
+  it('flags reads, including the dynamic accessor, and ignores writes', () => {
+    expect(readsLearningEvents('db.learningEvents.toArray()')).toBe(true)
+    expect(readsLearningEvents("db.learningEvents\n  .where('type')")).toBe(true)
+    expect(readsLearningEvents("db.table('learningEvents').toArray()")).toBe(true)
+    expect(readsLearningEvents('db.table( "learningEvents" )')).toBe(true)
+    expect(readsLearningEvents('db.learningEvents.bulkAdd(events)')).toBe(false)
+    expect(readsLearningEvents("db.transaction('rw', db.learningEvents, async () => {})")).toBe(false)
+  })
+})
+
 describe('categoryMemory', () => {
   it('returns nothing for an empty log (the normal first experience)', async () => {
     const m = await categoryMemory()
@@ -68,6 +84,23 @@ describe('categoryMemory', () => {
     await correct('t2', 'groceries')
     await correct('t3', 'transport')
     expect((await categoryMemory()).get('m1')).toMatchObject({ categoryId: 'groceries', corrections: 2 })
+  })
+
+  it('resolves two same-time events for one transaction identically whatever order they are read in', async () => {
+    await writeAnnotation('t1', { merchantId: 'm1' }, 'engine')
+    const ev = (id: string, categoryId: string): LearningEventRow => ({
+      id, at: 5000, type: 'category', outcome: null,
+      payload: { transactionId: 't1', field: 'categoryId', old: null, new: categoryId, intent: 'correction' },
+    })
+    await db.learningEvents.bulkAdd([ev('a', 'groceries'), ev('b', 'transport')])
+    const stored = await db.learningEvents.toArray()
+    const spy = vi.spyOn(db.learningEvents, 'toArray')
+    spy.mockResolvedValue(stored)
+    const forward = (await categoryMemory()).get('m1')
+    spy.mockResolvedValue([...stored].reverse())
+    const backward = (await categoryMemory()).get('m1')
+    expect(forward).toMatchObject({ categoryId: 'transport' })
+    expect(backward).toEqual(forward)
   })
 
   it('ignores events for a transaction that has since been soft-deleted', async () => {
@@ -115,9 +148,9 @@ describe('categoryMemory', () => {
     const src = resolve(import.meta.dirname, '..')
     const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap(e =>
       e.isDirectory() ? walk(join(d, e.name)) : /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [join(d, e.name)] : [])
-    const readers = walk(src).filter(f =>
-      !f.endsWith(join('learning', 'memory.ts')) &&
-      /learningEvents\s*\.\s*(toArray|where|orderBy|filter|each|get|bulkGet|count|toCollection|reverse|limit|offset)\b/.test(readFileSync(f, 'utf8')))
+    const files = walk(src)
+    expect(files.length).toBeGreaterThan(40)
+    const readers = files.filter(f => !f.endsWith(join('learning', 'memory.ts')) && readsLearningEvents(readFileSync(f, 'utf8')))
     expect(readers).toEqual([])
   })
 })
