@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { epochMsToIso } from '../lib/dates'
 import Budget from './screens/Budget'
 import Dashboard from './screens/Dashboard'
+import Reports from './screens/Reports'
 import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
@@ -38,6 +39,12 @@ function DashboardRoute() {
   return <Dashboard today={epochMsToIso(now)} computedAt={now} />
 }
 
+/** Same reading of the clock as the dashboard: the day and the instant together, handed down so no screen reads it. */
+function ReportsRoute() {
+  const now = Date.now()
+  return <Reports today={epochMsToIso(now)} computedAt={now} />
+}
+
 function IntelligenceRoute() {
   return <Intelligence today={epochMsToIso(Date.now())} />
 }
@@ -62,7 +69,7 @@ export const ROUTES: ReadonlyArray<RouteDef> = [
   screen('/coach', 'AI coach'),
   screen('/goals', 'Goals'),
   screen('/recurring', 'Recurring'),
-  screen('/reports', 'Reports'),
+  { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false },
   screen('/score', 'Money Score'),
   { path: '/settings', title: 'Settings', element: <Settings />, primary: false },
 ]

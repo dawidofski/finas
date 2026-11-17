@@ -4,7 +4,7 @@ A personal finance app that runs entirely in your browser. It is installable on 
 
 ## Where this stands today
 
-Eight of the fourteen screens are real: **Dashboard**, **Import**, **Transactions**, **Budget**, **Intelligence**, **Mood**, **Worth it?** and **Settings**. The other six (Learning, AI coach, Goals, Recurring, Reports and Money Score) are still placeholders that say "Not built yet". What exists:
+Nine of the fourteen screens are real: **Dashboard**, **Import**, **Transactions**, **Budget**, **Intelligence**, **Mood**, **Worth it?**, **Reports** and **Settings**. The other five (Learning, AI coach, Goals, Recurring and Money Score) are still placeholders that say "Not built yet". What exists:
 
 - **Import an ING Spain Excel export (`.xlsx`).** Choosing a file shows a preview first, and nothing is written until you press the one import button. The preview lists the new rows, the rows already imported, rows left out and why, and any gap in the dates the account covers. A file is checked for a continuous running balance, the account number and your name are never stored (only a one-way fingerprint and the last four digits of the account number), and the same file or the same movements are never imported twice. PDF and CSV statements are refused with an explanation.
 - **Dashboard.** The first screen: this month's income, spending, savings and what is left over, how that compares with last month, where the spending went, and a line of spending month by month. An income figure that is an estimate is marked as one, and the screen says plainly when there is nothing to show yet and how to begin.
