@@ -68,7 +68,11 @@ export async function rememberMerchantName(transactionId: string, canonicalName:
     const tx = await db.transactions.get(transactionId)
     if (!tx) throw new Error('That transaction could not be found. Nothing was saved.')
     // When the bank text has no merchant left, the whole description is the pattern: still specific, never empty.
-    const pattern = canonicaliseMerchant(tx.description) || tx.description.trim().replace(/\s+/g, ' ')
+    // The owner's own words are the right breadth when they occur in the bank text: "Tienda Uno" then also covers the next
+    // branch, where the whole canonical ("Tienda Uno Madrid") would need one rename per town. A name the bank text does not
+    // contain cannot describe it, so only then do we derive the pattern from the description.
+    const typedFits = ` ${normalise(tx.description)} `.includes(` ${normalise(name)} `)
+    const pattern = typedFits ? name : canonicaliseMerchant(tx.description) || tx.description.trim().replace(/\s+/g, ' ')
     const key = normalise(pattern)
     if (key === '') throw new Error('That transaction has no description to remember. Nothing was saved.')
 

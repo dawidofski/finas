@@ -69,7 +69,7 @@ describe('matchMerchant', () => {
     // A blank pattern already on a reused merchant is dropped, not carried forward.
     await db.merchants.add(merchant('legacy', 'Legacy', ['', '  ']))
     await tx('t3', 'Compra en LEGACY SHOP')
-    expect((await rememberMerchantName('t3', 'Legacy', 13)).matchPatterns).toEqual(['Legacy Shop'])
+    expect((await rememberMerchantName('t3', 'Legacy', 13)).matchPatterns).toEqual(['Legacy'])
   })
 
   it('is case- and accent-insensitive when matching, and keeps the owner spelling when storing', async () => {
@@ -80,7 +80,7 @@ describe('matchMerchant', () => {
     await tx('t1', 'Compra en CAFE NANDU ES')
     const saved = await rememberMerchantName('t1', 'Café Ñandú', 10)
     expect(saved.canonicalName).toBe('Café Ñandú')
-    expect(saved.matchPatterns).toEqual(['Cafe Nandu'])
+    expect(saved.matchPatterns).toEqual(['Café Ñandú'])
   })
 })
 
@@ -115,10 +115,10 @@ describe('rememberMerchantName', () => {
     const b = await rememberMerchantName('t2', '  tienda   UNO ', 20)
     expect(b.id).toBe(a.id)
     expect(await db.merchants.count()).toBe(1)
-    expect((await db.merchants.get(a.id))?.matchPatterns).toEqual(['Tienda Uno Madrid', 'Tienda Uno Barcelona'])
+    expect((await db.merchants.get(a.id))?.matchPatterns).toEqual(['Tienda Uno'])
     // Repeating the same call adds nothing.
     await rememberMerchantName('t1', 'Tienda Uno', 30)
-    expect((await db.merchants.get(a.id))?.matchPatterns).toHaveLength(2)
+    expect((await db.merchants.get(a.id))?.matchPatterns).toHaveLength(1)
   })
 
   it('two quick taps create one merchant', async () => {
@@ -127,7 +127,44 @@ describe('rememberMerchantName', () => {
     const [a, b] = await Promise.all([rememberMerchantName('t1', 'Tienda Uno', 10), rememberMerchantName('t2', 'Tienda Uno', 11)])
     expect(a.id).toBe(b.id)
     expect(await db.merchants.count()).toBe(1)
-    expect((await db.merchants.toArray())[0]?.matchPatterns).toHaveLength(2)
+    expect((await db.merchants.toArray())[0]?.matchPatterns).toEqual(['Tienda Uno'])
+  })
+
+  it('a typed name found in the description covers the next branch', async () => {
+    await tx('t1', 'Pago en TIENDA UNO MADRID ES')
+    await tx('t2', 'Pago en TIENDA UNO BARCELONA ES')
+    const saved = await rememberMerchantName('t1', 'Tienda Uno', 10)
+    expect(saved.matchPatterns).toEqual(['Tienda Uno'])
+    expect(matchMerchant('Pago en TIENDA UNO BARCELONA ES', await db.merchants.toArray())?.id).toBe(saved.id)
+  })
+
+  // No country code follows, so canonicalisation keeps the locality (its documented limit): the description-derived pattern is 'Tienda Uno Madrid'.
+  it('a typed name also covers the next branch when canonicalisation kept the locality', async () => {
+    await tx('t1', 'Pago en TIENDA UNO MADRID')
+    const saved = await rememberMerchantName('t1', 'Tienda Uno', 10)
+    expect(saved.matchPatterns).toEqual(['Tienda Uno'])
+    expect(matchMerchant('Pago en TIENDA UNO BARCELONA', await db.merchants.toArray())?.id).toBe(saved.id)
+  })
+
+  it('a typed name absent from the description falls back to the description and matches only it', async () => {
+    await tx('t1', 'Pago en TIENDA UNO MADRID')
+    const saved = await rememberMerchantName('t1', 'Supermercado', 10)
+    expect(saved.matchPatterns).toEqual(['Tienda Uno Madrid'])
+    const all = await db.merchants.toArray()
+    expect(matchMerchant('Pago en TIENDA UNO MADRID', all)?.id).toBe(saved.id)
+    expect(matchMerchant('Pago en TIENDA UNO BARCELONA', all)).toBeNull()
+    expect(matchMerchant('Pago en OTRO SITIO ES', all)).toBeNull()
+  })
+
+  it('a broader pattern does not take a narrower one from another merchant', async () => {
+    await tx('t1', 'Pago en TIENDA UNO MADRID')
+    const narrow = await rememberMerchantName('t1', 'Wrong Name', 10)
+    const broad = await rememberMerchantName('t1', 'Tienda Uno', 20)
+    expect((await db.merchants.get(narrow.id))?.matchPatterns).toEqual(['Tienda Uno Madrid'])
+    // The longer, earlier correction still wins for its own description; the broad one covers the rest.
+    const all = await db.merchants.toArray()
+    expect(matchMerchant('Pago en TIENDA UNO MADRID', all)?.id).toBe(narrow.id)
+    expect(matchMerchant('Pago en TIENDA UNO BARCELONA', all)?.id).toBe(broad.id)
   })
 
   it('refuses a missing transaction and saves nothing', async () => {
