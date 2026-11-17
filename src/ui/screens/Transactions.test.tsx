@@ -7,6 +7,7 @@ import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { formatEur } from '../../lib/money'
 import { linkRefund } from '../../import/refunds'
+import { categoryMemory, rememberedCategoryFor } from '../../learning/memory'
 import { transactionRowReads } from '../../test/reads'
 import { FILTERS_OPEN_KEY } from '../viewPrefs'
 import type { AccountRow, TransactionRow } from '../../db/schema'
@@ -842,5 +843,129 @@ describe('Transactions: honest about the bank date and about an impossible range
     change('From', '2026-11-01')
     change('To', '2026-11-30')
     expect(await rowOf('Anything')).toBeTruthy()
+  })
+})
+
+describe('Transactions: naming the merchant behind a transaction (§11, §34.3)', () => {
+  const nameButton = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: 'Name this merchant' })
+
+  it('creates the merchant, stores the pattern and files the transaction under it', async () => {
+    await db.transactions.add(tx({ description: 'Compra en TIENDA EJEMPLO MADRID' }))
+    render(<Transactions />)
+    const dialog = await openEditor('TIENDA EJEMPLO MADRID')
+    // A fresh install has no merchants, so the list on its own offers the owner nothing: naming is the only way in.
+    expect(within(within(dialog).getByLabelText('Merchant')).getAllByRole('option').map((o) => o.textContent)).toEqual(['None'])
+
+    change('Merchant name', '  Tienda Ejemplo  ', dialog) // the spaces around a name are not part of it
+    fireEvent.click(nameButton(dialog))
+    // The period pins the trim: an untrimmed name would be announced as "now Tienda Ejemplo ." instead.
+    expect(await within(dialog).findByRole('status')).toHaveTextContent('This transaction is now Tienda Ejemplo.')
+
+    const merchants = await db.merchants.toArray()
+    expect(merchants).toHaveLength(1)
+    expect(merchants[0]).toMatchObject({ canonicalName: 'Tienda Ejemplo', matchPatterns: ['Tienda Ejemplo'], kind: 'merchant' })
+    expect(merchants[0]?.createdAt).toEqual(expect.any(Number))
+    // Written through writeAnnotation, so the learning event comes for free and the bank's row is untouched.
+    expect((await db.annotations.get('tx1'))?.merchantId).toBe(merchants[0]?.id)
+    expect((await db.learningEvents.toArray()).map((e) => e.type)).toEqual(['merchant'])
+    expect((await db.transactions.get('tx1'))?.description).toBe('Compra en TIENDA EJEMPLO MADRID')
+
+    // The editor stays open and its Merchant control now holds what was just named, so the next Save cannot send the
+    // stale "None" back and undo the naming.
+    await waitFor(() => expect(within(dialog).getByLabelText('Merchant')).toHaveValue(merchants[0]?.id))
+    expect(within(dialog).getByLabelText('Merchant name')).toHaveValue('')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect((await db.annotations.get('tx1'))?.merchantId).toBe(merchants[0]?.id)
+    expect(await rowOf('TIENDA EJEMPLO MADRID')).toHaveTextContent('Tienda Ejemplo')
+  })
+
+  it('does nothing for a name that is only whitespace, without taking focus off the button', async () => {
+    await db.transactions.add(tx({ description: 'Compra en TIENDA EJEMPLO MADRID' }))
+    render(<Transactions />)
+    const dialog = await openEditor('TIENDA EJEMPLO MADRID')
+    const button = nameButton(dialog)
+    expect(button).toHaveAttribute('aria-disabled', 'true') // nothing typed yet
+    change('Merchant name', '   ', dialog)
+    button.focus()
+    fireEvent.click(button)
+    expect(button).toHaveAttribute('aria-disabled', 'true')
+    // Never `disabled`: that would drop focus to the body, and the owner would be standing nowhere (P3-R32).
+    expect(button).not.toBeDisabled()
+    expect(document.activeElement).toBe(button)
+    expect(await db.merchants.count()).toBe(0)
+    expect(await db.annotations.count()).toBe(0)
+    expect(within(dialog).queryByRole('status')).toBeNull()
+    // Nothing was attempted either: an inert control does not go and ask the database to refuse.
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+  })
+
+  it('names the merchant from the keyboard: Enter in the field does it, instead of saving the editor', async () => {
+    await db.transactions.add(tx({ description: 'Pago en SUPERMERCADO EJEMPLO BARCELONA' }))
+    render(<Transactions />)
+    const dialog = await openEditor('SUPERMERCADO EJEMPLO')
+    change('Merchant name', 'Supermercado Ejemplo', dialog)
+    fireEvent.keyDown(within(dialog).getByLabelText('Merchant name'), { key: 'Enter' })
+    expect(await within(dialog).findByRole('status')).toHaveTextContent('Supermercado Ejemplo')
+    expect((await db.merchants.toArray())[0]?.canonicalName).toBe('Supermercado Ejemplo')
+    expect(screen.queryByRole('dialog')).not.toBeNull() // Enter named the merchant; it did not submit and close the editor
+  })
+
+  it("shows rememberMerchantName's own refusal, in its words, and writes nothing", async () => {
+    // A description with no letters or digits leaves no pattern to remember, which is the guard this exercises.
+    await db.transactions.add(tx({ description: '...' }))
+    render(<Transactions />)
+    const dialog = await openEditor('...')
+    change('Merchant name', 'Comercio Ejemplo SL', dialog)
+    fireEvent.click(nameButton(dialog))
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert).toHaveTextContent('That transaction has no description to remember. Nothing was saved.')
+    expect(alert).toHaveTextContent('Your records are as they were')
+    expect(await db.merchants.count()).toBe(0)
+    expect(await db.annotations.count()).toBe(0)
+    expect(within(dialog).queryByRole('status')).toBeNull()
+  })
+
+  it('offers no naming control on a deleted transaction, where it would do nothing (P3-R33)', async () => {
+    await db.transactions.add(tx({ description: 'Compra en TIENDA EJEMPLO MADRID', deletedAt: 5 }))
+    render(<Transactions />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Deleted (1)' }))
+    const dialog = await openEditor('TIENDA EJEMPLO MADRID')
+    expect(within(dialog).queryByLabelText('Merchant name')).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Name this merchant' })).toBeNull()
+  })
+})
+
+describe('The whole learning loop, from a fresh install (§11)', () => {
+  it('learns a merchant category from two corrections once the owner has named the merchant, naming it only once', async () => {
+    expect(await db.merchants.count()).toBe(0) // as a real install starts: the seed creates no merchants
+    await db.transactions.bulkAdd([
+      tx({ description: 'Compra en TIENDA EJEMPLO MADRID', valueDate: '2026-11-10' }),
+      tx({ description: 'Pago en TIENDA EJEMPLO BARCELONA', valueDate: '2026-11-12' }),
+    ])
+    render(<Transactions />)
+
+    // 1. The owner names the merchant on one purchase, through the control the screen gives them.
+    let dialog = await openEditor('TIENDA EJEMPLO MADRID')
+    change('Merchant name', 'Tienda Ejemplo', dialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Name this merchant' }))
+    await within(dialog).findByRole('status')
+    // 2. and corrects its category, in the same visit.
+    change(/^Category$/, 'cat.groceries', dialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // 3. The second purchase is never named: the pattern stored by the first has to carry it.
+    dialog = await openEditor('TIENDA EJEMPLO BARCELONA')
+    change(/^Category$/, 'cat.groceries', dialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect((await db.annotations.get('tx2'))?.merchantId).toBeNull()
+
+    // 4. What the Intelligence screen reads: that merchant, corrected twice, and the category to assume for it.
+    const merchantId = (await db.merchants.toArray())[0]?.id as string
+    const memory = await categoryMemory()
+    expect(memory.get(merchantId)).toMatchObject({ categoryId: 'cat.groceries', corrections: 2 })
+    expect(rememberedCategoryFor(merchantId, memory)).toBe('cat.groceries')
   })
 })

@@ -10,6 +10,7 @@ import { fold } from '../../lib/text'
 import { refundSubtractions } from '../../analysis/income'
 import { chooseRoundupParent, parseRoundupParent, roundupContext, unmatchedTransferCount, type RoundupContext } from '../../import/pairing'
 import { linkRefund, refundContext, unconfirmedPositives, unlinkRefund, type RefundContext } from '../../import/refunds'
+import { rememberMerchantName } from '../../learning/merchants'
 import TransactionEditor, { KIND_LABEL } from '../TransactionEditor'
 import { readFiltersOpen, writeFiltersOpen } from '../viewPrefs'
 
@@ -180,6 +181,8 @@ export default function Transactions(): ReactNode {
   const [extra, setExtra] = useState<{ bank: TransactionRow; shown: ResolvedTransaction; ownerCategory: boolean } | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(readFiltersOpen)
   const [status, setStatus] = useState<{ text: string; undoId: string | null } | null>(null)
+  // Said inside the editor, which stays open after a naming: the screen's own status notice is behind the dialog.
+  const [merchantNotice, setMerchantNotice] = useState<string | null>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const returnTo = useRef<string | null>(null)
@@ -265,10 +268,10 @@ export default function Transactions(): ReactNode {
 
   const change = (patch: Partial<Filters>) => { setFilters((f) => ({ ...f, ...patch })); setPage(0) }
 
-  const open = (id: string) => { returnTo.current = id; setSaveError(null); setOpenId(id) }
+  const open = (id: string) => { returnTo.current = id; setSaveError(null); setMerchantNotice(null); setOpenId(id) }
   const close = () => {
     const id = returnTo.current
-    setOpenId(null); setSaveError(null)
+    setOpenId(null); setSaveError(null); setMerchantNotice(null)
     // Hand focus back to the row that opened the editor, or to the heading if that row is no longer listed.
     queueMicrotask(() => {
       const trigger = id
@@ -304,6 +307,21 @@ export default function Transactions(): ReactNode {
 
   const refundAction = async (work: () => Promise<unknown>, text: string, failure: string) => {
     if (await run(async () => { await work() }, failure)) { setStatus({ text, undoId: null }); close() }
+  }
+
+  /**
+   * The owner names the merchant behind a transaction. rememberMerchantName does all of it — creating or reusing the
+   * merchant, storing the pattern that wins thereafter, and setting the annotation's merchantId through writeAnnotation,
+   * which emits the learning event. Its own refusal wording is what the owner is shown (`run` keeps the message).
+   * `createdAt` is passed in because the clock is read only where sourceRules.test.ts sanctions it; this screen is one of
+   * those places (it already stamps deletedAt). The editor stays open: naming the merchant and correcting its category
+   * are one errand, and the control the owner pressed keeps focus.
+   */
+  const nameMerchant = async (id: string, name: string) => {
+    setMerchantNotice(null)
+    if (await run(async () => { await rememberMerchantName(id, name, Date.now()) }, 'The merchant could not be saved')) {
+      setMerchantNotice(`Saved. This transaction is now ${name}. Transactions your bank describes the same way are recognised as ${name} too.`)
+    }
   }
 
   const here = extra && extra.shown.id === openId ? extra : undefined
@@ -518,6 +536,8 @@ export default function Transactions(): ReactNode {
           onDelete={() => { void setDeleted(openRow.id, Date.now()) }}
           onRestore={() => { void setDeleted(openRow.id, null) }}
           onClose={close}
+          onNameMerchant={(name) => { void nameMerchant(openRow.id, name) }}
+          merchantNotice={merchantNotice}
           refund={refund}
           roundup={roundup}
           onChooseRoundupParent={(parentId) => { void refundAction(() => chooseRoundupParent(openRow.id, parentId), 'Saved. That round-up now belongs to the purchase you chose.', 'The round-up could not be linked') }}

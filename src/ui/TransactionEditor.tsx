@@ -113,6 +113,14 @@ interface Props {
   /** Set for an outflow round-up: which purchase it belongs to and which could. Omitted (or null) means the section is not shown. */
   roundup?: RoundupContext | null
   onChooseRoundupParent?: (parentId: string) => void
+  /**
+   * The owner names the merchant behind this transaction (the only way a merchant is ever created: the select above
+   * offers the ones already named, so on a fresh install it offers nothing). Omitted means the control is not rendered
+   * at all, because a control that does nothing must not look pressable (P3-R33).
+   */
+  onNameMerchant?: (name: string) => void
+  /** What to say after a naming, said where the owner is standing: inside the dialog, which covers the screen. */
+  merchantNotice?: string | null
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
@@ -126,11 +134,20 @@ export default function TransactionEditor(props: Props): ReactNode {
   const [noteOpen, setNoteOpen] = useState(() => shown.note !== null)
   const [spendChoice, setSpendChoice] = useState('')
   const [parentChoice, setParentChoice] = useState('')
+  const [merchantName, setMerchantName] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
   const id = useId()
   const set = <K extends keyof EditorForm>(key: K, value: EditorForm[K]) => setForm((f) => ({ ...f, [key]: value }))
 
   useEffect(() => { panelRef.current?.querySelector<HTMLElement>('input, button')?.focus() }, [])
+
+  // A naming is written by the screen, which then reloads and hands this open editor a new `shown`. The merchant control
+  // has to follow that, or the form would still hold the merchant the editor opened with and the next Save would send it
+  // back, undoing the naming the owner just did. The typed name has done its work by then, so the field is cleared.
+  useEffect(() => {
+    setForm((f) => ({ ...f, merchantId: shown.merchantId ?? '' }))
+    setMerchantName('')
+  }, [shown.merchantId])
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); props.onClose(); return }
@@ -150,6 +167,14 @@ export default function TransactionEditor(props: Props): ReactNode {
     setProblem(null)
     if (Object.keys(result.patch).length === 0) { props.onClose(); return }
     props.onSave(result.patch)
+  }
+
+  // Whitespace is not a name, so with nothing typed (or a save in flight) this does nothing and says so with
+  // aria-disabled. The guard is what makes that true; `disabled` is deliberately not used, see the button below.
+  function nameMerchant() {
+    const name = merchantName.trim()
+    if (busy || name === '') return
+    props.onNameMerchant?.(name)
   }
 
   const parents = categories.filter((c) => c.parentId === null)
@@ -237,6 +262,29 @@ export default function TransactionEditor(props: Props): ReactNode {
               <button type="button" className="btn" disabled={busy} onClick={props.onDelete}>Delete</button>
             </div>
           </form>
+        )}
+
+        {!deleted && props.onNameMerchant && (
+          // Outside the <form> on purpose: in it, Enter on this field would submit the whole editor and the typed name
+          // would be dropped without a word. Here Enter names the merchant, which is what the owner meant by it.
+          <section aria-labelledby={field('naming')} className="tx-refund">
+            <h3 id={field('naming')}>Name this merchant</h3>
+            <p>
+              The Merchant list above holds the merchants you have already named. Name the shop behind this transaction and
+              the app remembers your bank&apos;s wording for it, so the same shop is recognised on later statements too.
+              Once you have corrected that merchant&apos;s category the same way twice, it becomes the category assumed for it.
+            </p>
+            <label htmlFor={field('merchant-name')}>Merchant name</label>
+            <input id={field('merchant-name')} type="text" value={merchantName}
+                   onChange={(e) => setMerchantName(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); nameMerchant() } }} />
+            {/* aria-disabled with the guard in `nameMerchant`, never `disabled`: this is the control the owner is standing
+                on, and `disabled` on a focused button drops focus to the body (P3-R32). */}
+            <button type="button" className="btn" aria-disabled={busy || merchantName.trim() === ''} onClick={nameMerchant}>
+              Name this merchant
+            </button>
+            {props.merchantNotice && <p role="status">{props.merchantNotice}</p>}
+          </section>
         )}
 
         {!deleted && props.refund && (

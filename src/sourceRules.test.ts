@@ -70,7 +70,7 @@ describe('source rules, over every file in src/', () => {
       'import/refunds.ts': 'stamps matchedAt on a refund link',
       'ui/routes.tsx': "the one place the app learns today's date, handed down to Budget and WorthIt as a prop",
       'ui/screens/Settings.tsx': 'names the backup file with the UTC day (a file name, not a date the owner reads)',
-      'ui/screens/Transactions.tsx': 'stamps deletedAt when the owner deletes a row',
+      'ui/screens/Transactions.tsx': 'stamps deletedAt when the owner deletes a row, and createdAt when the owner names a merchant',
     }
     const users = files.filter((f) => /\bDate\.now\b/.test(f.text)).map((f) => f.rel)
     expect(users.filter((rel) => !(rel in allowed))).toEqual([]) // a clock read nobody sanctioned
