@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { UNUSUAL_SCORE_BP, unusualIn } from './unusual'
+import { MIN_SCALE_CENTS, UNUSUAL_SCORE_BP, unusualIn } from './unusual'
 
 const row = (id: string, categoryId: string | null, cents: number, month = '2026-05') => ({ id, categoryId, cents, month })
 const rows = (category: string, prefix: string, ...cents: number[]) => cents.map((c, i) => row(`${prefix}${i}`, category, c))
@@ -38,15 +38,26 @@ describe('unusualIn', () => {
     expect(unusualIn([...blatant, row('t3', 'travel', 5000)], 5).map((u) => u.transactionId)).toEqual(['huge'])
   })
 
-  it('says nothing when the deviation is zero, instead of dividing by it', () => {
+  it('says nothing when nothing deviates, and never divides by a zero spread', () => {
     // Three identical subscription charges, and a longer run of them: nothing deviates, so nothing is unusual.
     expect(unusualIn(rows('subs', 's', 999, 999, 999), 3)).toEqual([])
     expect(unusualIn(rows('subs', 's', 999, 999, 999, 999, 999, 999), 3)).toEqual([])
-    // The case that really needs the guard: most amounts identical (MAD 0) and one different. Without the guard this
-    // is a divide by zero that reports an infinite score, so assert that nothing at all comes out, finite or not.
-    expect(unusualIn([...rows('subs', 's', 999, 999, 999, 999, 999), row('odd', 'subs', 5000)], 3)).toEqual([])
-    // The very same row IS reported once the category has any spread, so the silence above is the guard, not the row.
-    expect(unusualIn([...rows('subs', 's', 990, 995, 999, 999, 1005, 1010), row('odd', 'subs', 5000)], 3).map((u) => u.transactionId)).toEqual(['odd'])
+  })
+
+  it('finds a one-off among otherwise identical charges, which have a spread of zero', () => {
+    // MAD is 0 here. The floor (MIN_SCALE_CENTS) stands in for it: 6745 * (5000 - 999) / 100 = 269867 bp.
+    expect(MIN_SCALE_CENTS).toBe(100)
+    const found = unusualIn([...rows('subs', 's', 999, 999, 999, 999, 999), row('odd', 'subs', 5000)], 3)
+    expect(found).toEqual([{ transactionId: 'odd', categoryId: 'subs', cents: 5000, month: '2026-05', medianCents: 999, madCents: 0, scoreBp: 269867 }])
+    // Remove the floor and this is a division by zero: an infinite score, not this one.
+    expect(Number.isFinite(found[0]?.scoreBp)).toBe(true)
+  })
+
+  it('stays quiet about a near-identical one-off, so the floor does not turn the feature into noise', () => {
+    const regular = rows('subs', 's', 999, 999, 999, 999, 999)
+    expect(unusualIn([...regular, row('near', 'subs', 1150)], 3)).toEqual([]) // 151 away: about 10185 bp
+    expect(unusualIn([...regular, row('edge', 'subs', 999 + 518)], 3)).toEqual([]) // 34938 bp
+    expect(unusualIn([...regular, row('edge', 'subs', 999 + 519)], 3).map((u) => u.scoreBp)).toEqual([35007]) // the line
   })
 
   it('is unaffected by one extreme value, which a mean-based score would not be', () => {
@@ -67,7 +78,7 @@ describe('unusualIn', () => {
     expect(a.map((u) => u.transactionId)).toEqual(['huge', 'mod'])
     const modA = a.find((u) => u.transactionId === 'mod')
     const modB = b.find((u) => u.transactionId === 'mod')
-    expect(modA).toEqual({ transactionId: 'mod', categoryId: 'hobby', cents: 3000, month: '2026-05', medianCents: 1000, madCents: 10, scoreBp: 1349000 })
+    expect(modA).toEqual({ transactionId: 'mod', categoryId: 'hobby', cents: 3000, month: '2026-05', medianCents: 1000, madCents: 10, scoreBp: 134900 })
     // ...with the very same score however large the other one grows; only the huge row's own score moved.
     expect(modB).toEqual(modA)
     expect(b[0]?.scoreBp).toBeGreaterThan(a[0]?.scoreBp ?? Infinity)
@@ -91,7 +102,7 @@ describe('unusualIn', () => {
     const [u] = unusualIn(even, 5)
     expect(u?.medianCents).toBe(1001)
     expect(u?.madCents).toBe(1) // |x - 1001| sorted: 0 0 0 0 1 1 1 1 1 7999, middle two are 1 and 1
-    expect(u?.scoreBp).toBe(6745 * 7999) // 6745 * (9000 - 1001) / 1
+    expect(u?.scoreBp).toBe(539533) // 6745 * 7999 / 100, the spread of 1 being floored to 100
   })
 
   it('gives the same answer in the same order however the rows arrive', () => {

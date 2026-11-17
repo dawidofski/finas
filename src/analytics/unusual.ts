@@ -31,6 +31,9 @@ export interface Unusual {
 /** 0.6745 in ten-thousandths: makes the MAD comparable to a standard deviation for roughly normal data. */
 const MAD_SCALE_BP = 6745
 
+/** The smallest spread (in cents) a category is judged against: see the comment where it is applied. */
+export const MIN_SCALE_CENTS = 100
+
 /** A modified z-score of 3.5 or more is the conventional "outlier" line. Only the high side is reported. */
 export const UNUSUAL_SCORE_BP = 35000
 
@@ -81,11 +84,14 @@ export function unusualIn(rows: UnusualRow[], minSample: number): Unusual[] {
     const median = medianOf(group.map((r) => r.cents))
     if (median === null) continue
     const mad = medianOf(group.map((r) => Math.abs(r.cents - median)))
-    // A MAD of zero (most amounts identical, e.g. a fixed subscription) leaves nothing to measure against: dividing by
-    // it would give an infinite score. Say nothing rather than report "infinitely unusual".
-    if (mad === null || mad <= 0) continue
+    if (mad === null) continue
+    // Floor the scale. A regular charge (a subscription) has a MAD of 0, and dividing by it would score every one-off as
+    // infinitely unusual; a MAD of a cent or two is the same problem, since it turns a 50 cent wobble into an outlier.
+    // Flooring at 1.00 means a deviation must be about 5.19 (6745 * 519 / 100 = 35007 bp) to be reported against a
+    // perfectly regular category. It also makes a division by zero unreachable. madCents reports the true MAD.
+    const scale = Math.max(mad, MIN_SCALE_CENTS)
     for (const r of group) {
-      const scoreBp = divRound(MAD_SCALE_BP * (r.cents - median), mad)
+      const scoreBp = divRound(MAD_SCALE_BP * (r.cents - median), scale)
       if (scoreBp < UNUSUAL_SCORE_BP) continue
       found.push({ transactionId: r.id, categoryId, cents: r.cents, month: r.month, medianCents: median, madCents: mad, scoreBp })
     }
