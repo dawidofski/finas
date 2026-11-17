@@ -1,16 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { db } from '../../db/db'
-import { categoryMemory } from '../../learning/memory'
+import { CORRECTIONS_NEEDED, categoryMemory } from '../../learning/memory'
 import { regretClusters, type RegretCluster } from '../../learning/regret'
 import { epochMsToIso, formatMonthTitle, formatSpanishDate } from '../../lib/dates'
 import { formatEur } from '../../lib/money'
-
-/**
- * A merchant's category becomes the default once the owner has corrected it the same way this many times (spec section
- * 11). It mirrors CORRECTIONS_NEEDED in learning/memory.ts, which is not exported; the tests drive both through the
- * real write path, so the two cannot drift apart unnoticed.
- */
-const CORRECTIONS_NEEDED = 2
 
 /**
  * When a group of purchases is shown as a finding. regretClusters deliberately returns a group even when it is one

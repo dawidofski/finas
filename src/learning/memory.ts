@@ -15,8 +15,12 @@ import { matchMerchant } from './merchants'
 
 export type CategoryMemory = ReadonlyMap<string, { categoryId: string; corrections: number; lastAt: number }>
 
-/** §11: "corrected twice the same way becomes the default". */
-const CORRECTIONS_NEEDED = 2
+/**
+ * §11: "corrected twice the same way becomes the default". Exported because the Intelligence screen has to tell the
+ * owner how many more corrections a merchant needs, and a second copy of this number in the screen would be one more
+ * instance of the duplicated rule this project has had to remove five times.
+ */
+export const CORRECTIONS_NEEDED = 2
 
 interface Latest { at: number; id: string; categoryId: string | null; isCorrection: boolean }
 
