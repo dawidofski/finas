@@ -1,12 +1,13 @@
 import { db, ENGINE_VERSION } from '../db/db'
-import type { AnalyticsCacheRow } from '../db/schema'
+import type { AnalyticsCacheRow, BudgetAllocationRow } from '../db/schema'
 import { sha256Hex } from '../lib/hash'
 
 /**
  * A derived-figure cache that is either current or absent: a figure the owner reads is never one produced by an older formula
- * or from older data (design 7.1). Every cache row is disposable, so this module only ever reads transactions and annotations
- * and only ever writes analyticsCache. The durable truth (transactions, annotations, learningEvents) is never touched here.
- * Any restore of a backup already clears the table (design 31.3, src/db/backup.ts), so nothing here repeats that.
+ * or from older data (design 7.1). Every cache row is disposable, so this module only ever READS the tables a figure is
+ * computed from (transactions, annotations, transfers, budgetAllocations) and only ever writes analyticsCache. The durable
+ * truth (transactions, annotations, learningEvents) is never touched here.
+ * Any restore of a backup already clears the table (design 31.3, the backup module), so nothing here repeats that.
  */
 
 /**
@@ -33,24 +34,76 @@ const isEnvelope = (payload: unknown): payload is Envelope =>
   typeof payload === 'object' && payload !== null && (payload as Envelope).shape === PAYLOAD_SHAPE && 'value' in payload
 
 /**
- * A digest of what the figures are computed from: the live transaction count, the soft-deleted count, the newest deletedAt, the
- * annotation count and the newest annotations.updatedAt. Every add, soft delete, restore and annotation write moves at least one.
+ * One allocation row as text, for the content digest below. The fields are listed one by one, in a fixed order, so a restored
+ * backup's key order cannot change the digest, and JSON does the escaping: `note` is free text and may contain any separator
+ * this could otherwise have used. A field added to BudgetAllocationRow later must be added here too, or a change to it is
+ * invisible — which is the price of naming fields instead of digesting the object, and the reason it is said out loud.
+ */
+const allocationText = (a: BudgetAllocationRow): string =>
+  JSON.stringify([a.id, a.categoryId, a.savingsGoalId, a.percentBp, a.fixedCents, a.effectiveFrom, a.note])
+
+/**
+ * WHICH TABLES A CACHED FIGURE IS COMPUTED FROM, and what this digest therefore has to key on.
  *
- * Counts alone are not enough: soft-deleting one row and restoring another leaves both counts as they were. The newest deletedAt
- * closes that: the delete lands a newer timestamp than any before it, and the restore removes the old entry, so the pair moves it
- * either way, while deleting and restoring the same row returns it to its old value, as the state really is.
+ * That is the question this comment exists to answer, because the version before it did not ask it. It reasoned carefully
+ * about two tables, concluded "no realistic collision remains", and was wrong about something else entirely: a figure is
+ * not computed from two tables. monthlyBudget — under monthSummary, monthSeries, the habits figures and the Reports panels,
+ * i.e. under nearly everything cached here — reads SIX:
+ *   transactions, annotations  the bank rows and the owner's edits to them;
+ *   transfers                  internal and round-up pairs, and REFUND LINKS: a refund takes its positive out of income
+ *                              (income.ts `exclusions`) and subtracts it from its purchase's category (`refundSubtractions`);
+ *   budgetAllocations          what is budgeted, and therefore which line owns each euro (most-specific-wins);
+ *   categories, savingsGoals   the names and kinds those lines are built from.
+ * Four of the six are digested below. The two that are not are named at the end, with the reason and what would change it.
  *
- * What is left is a summary, not a content hash: two different annotation edits in the same millisecond that keep the annotation
- * count (updatedAt does not move) collide, as would a delete-and-restore pair stamped with the same millisecond as the old newest
- * deletedAt. A person acting through the interface cannot do either, so no realistic collision remains; rebuildAnalytics still
+ * Each table is keyed on the cheapest thing that cannot miss the changes that table can actually undergo — which is a
+ * DIFFERENT key per table, because the writers differ. A uniform "hash every row of every table" would be slower and no
+ * safer. inputsHash runs on every cached() call, so the cost of each read is stated:
+ *
+ * transactions — live count, soft-deleted count, newest deletedAt. Two counts (index-only) plus one row read for the newest
+ *   deletedAt. Counts alone are not enough: soft-deleting one row and restoring another leaves both counts as they were. The
+ *   newest deletedAt closes that: the delete lands a newer timestamp than any before it, and the restore removes the old
+ *   entry, so the pair moves it either way, while deleting and restoring the SAME row returns it to its old value, as the
+ *   state really is. Bank rows are immutable after import (§8.1) apart from deletedAt, so nothing else can move.
+ *
+ * annotations — count and newest updatedAt. One cursor over the table: one row per annotated transaction. Every annotation
+ *   write stamps updatedAt, so an edit moves the newest value and a new annotation moves the count.
+ *
+ * transfers — the SORTED SET OF PRIMARY KEYS. Rows here are only ever ADDED or DELETED: linkRefund adds one, unlinkRefund
+ *   deletes one, and the importer bulk-adds the pairs the pairing module matched (the only other writer, and an add). No
+ *   writer anywhere updates a row in place — checked writer by writer, because that is what this key rests on.
+ *   The key set therefore determines the table exactly, and it is an INDEX-ONLY read — the primary-key index is walked and no
+ *   row is fetched, so this is the cheapest of the four. `matchedAt` would be the obvious alternative and is NOT indexed, so
+ *   it can neither order nor bound a read; §29 forbids adding an index for it. A restore is the one path that bulk-PUTs these
+ *   rows, and a restore clears this whole table (31.3), so it needs nothing from the digest.
+ *
+ * budgetAllocations — the CONTENT of every row, serialised deterministically and sorted. This is the one table whose rows
+ *   change IN PLACE: saveAllocation writes with `put` and deliberately reuses the existing id when it replaces an allocation
+ *   for the same target and the same effectiveFrom, so "I now budget 300 instead of 200" is the same id with a new amount.
+ *   A count cannot see that, and neither can a key set — which is exactly why this table is not keyed like transfers. There
+ *   is no timestamp to key on instead: the row is { id, categoryId, savingsGoalId, percentBp, fixedCents, effectiveFrom,
+ *   note } and nothing more. The cost is one full read of a tiny table: one row per budgeted category or goal, which is a
+ *   handful, not a ledger.
+ *
+ * What is still NOT covered, stated rather than left to silence:
+ *
+ * categories and savingsGoals are read by monthlyBudget and are not digested, because today they cannot change under a
+ *   cached figure. Nothing outside seeding and import writes categories, and an import creates a category only alongside at
+ *   least one new transaction (commitPreview refuses an import with nothing new), which moves the digest anyway. Nothing in
+ *   the app creates or edits a savings goal at all — the Goals screen is a stub. The same holds for the two label tables
+ *   `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else does.
+ *   SO: THE FIRST SCREEN THAT RENAMES A CATEGORY, A MOOD OR A REASON, OR THAT CREATES OR EDITS A SAVINGS GOAL, MUST ADD ITS
+ *   TABLE TO THIS DIGEST — a rename leaves a cached figure carrying the old label, and an edited goal makes a budget line
+ *   wrong, not merely mislabelled. A goal screen should digest savingsGoals by content, for the same reason allocations are:
+ *   editing a goal's target is an in-place put. A rename screen for a label table could get away with a count plus a hash of
+ *   the names.
+ * Merchant naming is not in that list: it goes through rememberMerchantName, which writes an annotation as part of the same
+ *   transaction, so it already moves the digest — and no cached figure carries a merchant name in any case.
+ *
+ * And the digest remains a summary, not a content hash, for transactions and annotations: two annotation edits in the same
+ * millisecond that keep the count (updatedAt does not move) collide, as would a delete-and-restore pair stamped with the same
+ * millisecond as the old newest deletedAt. A person acting through the interface cannot do either. rebuildAnalytics still
  * exists to force a recompute.
- *
- * It also covers the transactions and annotations ONLY — not the reference tables. Renaming a mood, a purchase reason, a category
- * or a merchant therefore leaves a cached figure carrying the old LABEL, because nothing it digests has moved. The numbers stay
- * right; the word beside them goes stale. Accepted rather than fixed, for three reasons: renaming is rare, any later annotation
- * or import write invalidates the entry anyway, and rebuildAnalytics is offered in Settings for exactly this. The alternative
- * worth considering if it ever bites is to stop caching labels at all — hold keys and numbers here and look the names up at read
- * time — which removes the whole class rather than adding more tables to this digest.
  */
 export async function inputsHash(): Promise<string> {
   const total = await db.transactions.count()
@@ -63,7 +116,15 @@ export async function inputsHash(): Promise<string> {
     annotations++
     if (a.updatedAt > newest) newest = a.updatedAt
   })
-  const joined = [`live=${total - deleted}`, `deleted=${deleted}`, `newestDeleted=${newestDeleted}`, `annotations=${annotations}`, `newest=${newest}`].join('|')
+  // Index-only: the primary-key index is walked, no row is read. primaryKeys() hands back a fresh array, so sorting it in
+  // place is safe, and sorting is what makes the digest independent of the order the keys happen to come back in.
+  const transfers = (await db.transfers.toCollection().primaryKeys()).map(String).sort()
+  const allocations = (await db.budgetAllocations.toArray()).map(allocationText).sort()
+  const joined = [
+    `live=${total - deleted}`, `deleted=${deleted}`, `newestDeleted=${newestDeleted}`,
+    `annotations=${annotations}`, `newest=${newest}`,
+    `transfers=${JSON.stringify(transfers)}`, `allocations=${JSON.stringify(allocations)}`,
+  ].join('|')
   return sha256Hex(new TextEncoder().encode(joined))
 }
 

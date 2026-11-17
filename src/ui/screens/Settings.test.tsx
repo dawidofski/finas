@@ -382,8 +382,11 @@ describe('Settings recalculate figures (spec 7.1)', () => {
     render(<Settings />)
     const heading = screen.getByRole('heading', { name: /recalculate figures/i })
     const text = [heading.nextElementSibling, heading.nextElementSibling?.nextElementSibling].map(e => e?.textContent ?? '').join(' ')
-    expect(text).toMatch(/renamed a mood, a reason, a category or a merchant/)
+    expect(text).toMatch(/in case a figure ever looks wrong or out of date/)
     expect(text).toMatch(/Nothing you entered is touched/)
+    // It used to offer "a figure still shows an old name after you renamed a mood, a reason, a category or a merchant".
+    // There is no screen that renames any of those, so the copy must not send the owner looking for one.
+    expect(text).not.toMatch(/renam/i)
     expect(text).not.toMatch(/cache|digest|engine|version|invalidat|hash/i)
     fireEvent.click(button())
     const status = await screen.findByRole('status')

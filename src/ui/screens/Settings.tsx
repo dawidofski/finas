@@ -129,7 +129,10 @@ function Accounts() {
 
 /**
  * Recomputes every remembered figure. It writes nothing the owner entered: rebuildAnalytics only clears the analytics store
- * (design 7.1). It is also the stated remedy for a stale label after a rename, which the stored figures cannot detect themselves.
+ * (design 7.1). The copy deliberately promises no particular scenario. It used to name a stale label "after you renamed a mood,
+ * a reason, a category or a merchant", and there is no screen that renames any of those; the two gaps that were real (a refund
+ * link and a budget change) are now noticed by the figures themselves. So this is the last resort it says it is, and the comment
+ * on inputsHash names the tables a future rename or goal screen would have to add before this copy could go stale again.
  * `aria-disabled` plus a guard rather than `disabled`: a disabled button that has focus drops it to the page, which strands a
  * keyboard user mid-action. The busy state is always left in `finally`, so a failure cannot leave the control stuck.
  */
@@ -146,8 +149,10 @@ function RebuildFigures() {
     <>
       <h2>Recalculate figures</h2>
       <p>
-        So that screens open quickly, the app remembers the totals and averages it works out. This recalculates all of them from
-        scratch. Use it if a figure still shows an old name after you renamed a mood, a reason, a category or a merchant.
+        So that screens open quickly, the app remembers the totals and averages it works out, and works them out again by itself
+        whenever anything they are based on changes. This throws away everything it remembers, so every figure is worked out
+        again from scratch. You should not need it: it is here in case a figure ever looks wrong or out of date, and trying it
+        costs you nothing but a moment.
       </p>
       <p><strong>Nothing you entered is touched.</strong> Your transactions, notes, tags and everything the app has learned from you stay exactly as they are.</p>
       <button type="button" className="btn" aria-disabled={busy} onClick={() => { void rebuild() }}>
