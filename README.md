@@ -17,7 +17,9 @@ Nine of the fourteen screens are real: **Dashboard**, **Import**, **Transactions
 
 What you **cannot** do yet: see charts, balances or insights, set savings goals or track recurring payments, get recommendations or a Money Score, or use the optional AI coach. Later plans replace the remaining placeholders one screen at a time; those plans are not built.
 
-**Verified on the live site:** it loads, the service worker installs and activates, and — as of the second deploy carrying changed code — an already-registered copy **does pick up a new version**: a tab holding the previous build was serving the new one after an update check, with the old asset gone from the offline cache and no stale worker left waiting.
+**Verified on the live site:** it loads, the service worker installs and activates, and a new version does reach an already-installed copy — with one caveat worth knowing, because it was observed rather than assumed.
+
+After a deploy, the service worker fetches the new build and replaces the old files in its offline cache. **A tab that is already open keeps running the version it loaded**, so it goes on showing the old screens until it is loaded afresh. Immediately after one deploy, two screens that had just been built still read "Not built yet" in an open tab; the deployed files were correct and a fresh load showed them correctly. Nothing is broken by this — it is how a service worker is meant to behave — but "the update is live" and "the tab in front of you is showing it" are two different statements, and the second needs a reload.
 
 **Not yet verified:** testing on a real phone (yours). Everything else has been exercised either in the test suite or on the live site, but no part of this app has been used on a phone, which is the device it is designed for.
 
