@@ -16,7 +16,9 @@ Seven of the fourteen screens are real: **Import**, **Transactions**, **Budget**
 
 What you **cannot** do yet: see charts, balances or insights, set savings goals or track recurring payments, get recommendations or a Money Score, or use the optional AI coach. Later plans replace the remaining placeholders one screen at a time; those plans are not built.
 
-**Not yet verified:** the live site has been opened and checked, but two things have not been: how an installed copy picks up a **new version** through the service worker, and testing on a real phone (yours).
+**Verified on the live site:** it loads, the service worker installs and activates, and — as of the second deploy carrying changed code — an already-registered copy **does pick up a new version**: a tab holding the previous build was serving the new one after an update check, with the old asset gone from the offline cache and no stale worker left waiting.
+
+**Not yet verified:** testing on a real phone (yours). Everything else has been exercised either in the test suite or on the live site, but no part of this app has been used on a phone, which is the device it is designed for.
 
 ## 1. Put it on GitHub
 
