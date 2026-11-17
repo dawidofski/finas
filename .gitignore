@@ -1,0 +1,34 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# NEVER commit financial records (spec C4)
+*.xlsx
+*.xls
+*.xlsm
+*.pdf
+*.csv
+*.tsv
+*.finbak
+/movements-*
+/finance-export-*.json
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# SDD scratch workspace
+.superpowers/
+
+# Local editor/agent config
+.claude/

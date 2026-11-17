@@ -1,0 +1,180 @@
+/* Palettes. Every text/background pair is checked against WCAG AA by src/ui/contrast.test.ts. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f3f5f8;
+  --text: #1a1d21;
+  --muted: #4b5563;
+  --border: #6b7280;
+  --accent: #0a4d68;
+  --on-accent: #ffffff;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1216;
+  --surface: #1a1f26;
+  --text: #e8eaed;
+  --muted: #aab2bd;
+  --border: #8a94a0;
+  --accent: #4fc3e8;
+  --on-accent: #0f1216;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+}
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.shell { min-height: 100dvh; display: flex; flex-direction: column; }
+.screen { flex: 1; padding: 1rem 1rem 6rem; max-width: 60rem; width: 100%; }
+.screen:focus { outline: none; } /* focused programmatically after navigation, not a tab stop */
+.screen h1 { margin-top: 0; }
+.screen p { color: var(--muted); }
+
+.nav-link, .nav-more-toggle, .theme-picker {
+  min-height: 48px; /* touch target */
+  display: flex; align-items: center; gap: 0.5rem;
+  color: var(--text); text-decoration: none; font: inherit;
+}
+.nav-glyph { font-size: 1.25rem; }
+/* The current page is marked by weight and an accent bar as well as colour. */
+.nav-link[aria-current='page'] { font-weight: 700; color: var(--accent); }
+.theme-picker select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; min-height: 44px; padding: 0 0.5rem; }
+.nav-more-toggle { background: transparent; border: 0; cursor: pointer; justify-content: center; }
+
+/* Mobile first: bottom tab bar, secondary screens in a sheet above it. */
+.nav { position: fixed; inset: auto 0 0 0; background: var(--surface); border-top: 1px solid var(--border); z-index: 10; padding-bottom: env(safe-area-inset-bottom); }
+/* Five links, five tracks. The More toggle is absolutely positioned and not a child of this grid. */
+.nav-primary { display: grid; grid-template-columns: repeat(5, 1fr); }
+.nav-primary .nav-link { flex-direction: column; justify-content: center; gap: 0; font-size: 0.6875rem; padding: 0.25rem 0; text-align: center; }
+.nav-primary .nav-link[aria-current='page'] { box-shadow: inset 0 3px 0 var(--accent); }
+.nav-more-toggle { position: absolute; right: 0.75rem; top: -52px; min-width: 64px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0 1rem; }
+.nav-more { display: none; padding: 0.5rem 1rem; max-height: 60dvh; overflow: auto; border-bottom: 1px solid var(--border); }
+.nav-list { list-style: none; margin: 0; padding: 0; }
+.nav-list .nav-link, .nav-more .theme-picker { width: 100%; min-height: 48px; padding: 0 0.5rem; justify-content: space-between; }
+.nav-list .nav-link { justify-content: flex-start; }
+.nav-list li + li { border-top: 1px solid var(--border); }
+.nav-more[data-open='true'] { display: block; order: -1; }
+.nav { display: flex; flex-direction: column; }
+.nav-primary { order: 1; }
+
+@media (min-width: 768px) {
+  .shell { flex-direction: row; }
+  .screen { padding: 2rem 2rem 2rem; }
+  .nav { position: sticky; top: 0; inset: auto; width: 14rem; height: 100dvh; border-top: 0; border-right: 1px solid var(--border); padding: 1rem; overflow: auto; }
+  .nav-primary { display: flex; flex-direction: column; order: 0; }
+  .nav-primary .nav-link { flex-direction: row; font-size: 1rem; text-align: left; justify-content: flex-start; gap: 0.5rem; }
+  .nav-primary .nav-link[aria-current='page'] { box-shadow: inset 3px 0 0 var(--accent); padding-left: 0.5rem; }
+  .nav-more-toggle { display: none; }
+  .nav-more, .nav-more[data-open='false'] { display: block; padding: 0; border: 0; max-height: none; overflow: visible; }
+  .nav-more .nav-link[aria-current='page'] { box-shadow: inset 3px 0 0 var(--accent); padding-left: 0.5rem; }
+}
+
+/* Skip link (WCAG 2.4.1): off-screen until it receives keyboard focus. */
+.skip-link { position: absolute; left: 0.5rem; top: -4rem; z-index: 20; background: var(--surface); color: var(--text); padding: 0.75rem 1rem; border: 2px solid var(--accent); border-radius: 4px; }
+.skip-link:focus { top: 0.5rem; }
+
+/* Settings: backup and restore. Colours come from the theme tokens only, so both themes keep their checked contrast. */
+.settings h2, .import h2 { margin: 2rem 0 0.5rem; font-size: 1.25rem; }
+.settings h3, .import h3 { margin: 1.5rem 0 0.5rem; }
+.settings h4 { margin: 1rem 0 0.25rem; }
+.notice { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.25rem 1rem; margin: 1rem 0; }
+.notice p, .settings .notice p, .import .notice p { color: var(--text); }
+.notice-refusal, .notice-warn { border-width: 2px; border-left-width: 8px; }
+.btn { min-height: 48px; min-width: 48px; padding: 0 1.25rem; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 700; }
+.btn:disabled, .btn[aria-disabled='true'] { opacity: 0.6; cursor: not-allowed; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; }
+.modes { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 1rem; margin: 0 0 1rem; }
+.modes legend { padding: 0 0.5rem; font-weight: 700; }
+.mode { display: flex; align-items: flex-start; gap: 0.75rem; min-height: 48px; padding: 0.5rem 0; }
+.mode input { width: 1.5rem; height: 1.5rem; margin: 0.15rem 0 0; flex: none; }
+.settings input[type='file'] { max-width: 100%; min-height: 48px; font: inherit; color: var(--text); }
+.table-wrap { overflow-x: auto; }
+.settings table, .import table, .transactions table { border-collapse: collapse; width: 100%; min-width: 20rem; }
+.settings th, .settings td, .import th, .import td, .transactions th, .transactions td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+.settings .num, .import .num, .transactions .num { text-align: right; font-variant-numeric: tabular-nums; }
+.nowrap { white-space: nowrap; }
+.id-list { max-height: 12rem; overflow: auto; padding-left: 1.25rem; overflow-wrap: anywhere; }
+.settings summary, .import summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+
+/* Import: drop zone, preview facts and per-row corrections. Theme tokens only, so both themes keep their checked contrast. */
+.dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 0.5rem 1rem; margin: 1rem 0; }
+.dropzone-active { border-color: var(--accent); background: var(--surface); }
+.import input[type='file'] { max-width: 100%; min-height: 48px; font: inherit; color: var(--text); }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0; }
+.facts dt { font-weight: 700; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.import table { min-width: 34rem; }
+.import td select, .import td input[type='text'] { display: block; width: 100%; min-width: 10rem; min-height: 44px; margin: 0.25rem 0; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.review-list { padding-left: 1.25rem; overflow-wrap: anywhere; }
+.import .mode input { width: 1.5rem; height: 1.5rem; }
+
+/* Transactions: filters, paged list, and the editor sheet. Theme tokens only. */
+.transactions table { min-width: 22rem; }
+.tx-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+.tx-filters label, .tx-editor label { display: block; font-weight: 700; }
+.tx-filters input, .tx-filters select, .tx-editor input, .tx-editor select { display: block; width: 100%; min-height: 48px; margin: 0.25rem 0 0.75rem; padding: 0 0.5rem; font: inherit; font-weight: 400; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+/* The filters sit behind a disclosure, shut by default (spec 39.3). The summary is a 48px target and takes the global focus ring. */
+.tx-filter-panel { margin: 0.5rem 0; }
+.tx-filter-panel > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 700; }
+.transactions button[aria-pressed='true'] { border-width: 2px; font-weight: 700; }
+.settings-account { display: grid; gap: 0.25rem; margin: 0 0 1rem; }
+.settings-account input[type='text'] { min-height: 48px; width: 100%; max-width: 24rem; padding: 0 0.5rem; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.settings .switch { display: flex; gap: 0.75rem; align-items: center; min-height: 48px; }
+.settings .switch input { width: 1.5rem; height: 1.5rem; }
+.tx-row { cursor: pointer; }
+.tx-row[data-deleted='true'] { opacity: 0.75; }
+.tx-open { display: block; min-height: 48px; width: 100%; padding: 0; text-align: left; font: inherit; color: var(--text); background: none; border: 0; cursor: pointer; }
+.tx-meta { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.tx-badge { font-weight: 700; color: var(--text); }
+.tx-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--bg); overflow-y: auto; }
+.tx-editor { max-width: 36rem; margin: 0 auto; padding: 1rem 1rem 6rem; }
+.tx-editor small { display: block; color: var(--muted); margin: -0.5rem 0 0.75rem; }
+
+/* Budget: month navigation and one card per line. Theme tokens only. */
+.budget-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+.budget-nav h2 { margin: 0; font-size: 1.25rem; flex: 1 1 8rem; text-align: center; }
+.budget h2 { font-size: 1.25rem; }
+.budget-lines, .budget-totals { list-style: none; margin: 0.5rem 0 1rem; padding: 0; }
+.budget-line { padding: 0.5rem 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.budget-line .tx-open { font-weight: 700; }
+.budget-label { display: block; font-weight: 700; }
+.budget-fig { margin: 0.125rem 0; font-variant-numeric: tabular-nums; }
+.budget-totals li { padding: 0.375rem 0; overflow-wrap: anywhere; }
+
+/* Annotation controls (mood, reason, worthwhile). Selected = heavier border + tick, never colour alone. Theme tokens only. */
+.annot-group { border: 0; margin: 0 0 1rem; padding: 0; min-width: 0; }
+.annot-group legend { font-weight: 700; padding: 0; margin-bottom: 0.5rem; }
+.annot-optional { font-weight: 400; color: var(--muted); font-size: 0.875rem; margin-left: 0.5rem; }
+.mood-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); gap: 0.5rem; }
+.chip-row, .worth-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.choice { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 0.25rem; min-height: 48px; min-width: 48px; padding: 0.25rem 0.75rem; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; overflow-wrap: anywhere; }
+.choice[aria-pressed='true'], .choice-recorded { border: 3px solid var(--accent); font-weight: 700; padding: calc(0.25rem - 2px) calc(0.75rem - 2px); }
+.choice:disabled { opacity: 0.6; cursor: not-allowed; }
+.choice-recorded { cursor: default; }
+.choice-tick { font-weight: 700; }
+.mood-btn { flex-direction: column; min-height: 64px; padding-inline: 0.25rem; }
+.mood-emoji { font-size: 1.5rem; line-height: 1.2; }
+.mood-label { font-size: 0.8125rem; text-align: center; }
+.chip { border-radius: 999px; }
+.worth-btn { flex: 1 1 6rem; }
+.annot-clear { margin-top: 0.5rem; }
+.tx-editor details summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 700; }
+
+.mood-card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; max-width: 36rem; }
+.mood-count, .mood-meta { margin: 0 0 0.5rem; }
+.mood-desc { font-size: 1.125rem; font-weight: 700; margin: 0 0 0.25rem; overflow-wrap: anywhere; }
+.mood-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.mood-day { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+
+.worth-delay { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.worth-delay input { min-height: 48px; width: 5rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.queue-empty:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
