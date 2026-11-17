@@ -28,18 +28,21 @@ function unbrokenRun(points: MonthPoint[]): MonthPoint[] {
   return run
 }
 
-/** "up 12,00 EUR (5 %)", "down ...", or "the same". A null percentage (nothing to measure against) is simply not printed. */
-function movement(c: Change): string | null {
+/**
+ * "up 12,00 EUR (5 %)", "down ...", or "the same". A null percentage (nothing to measure against) is simply not printed, and
+ * neither is any percentage while the month is still running: part of a month has no valid basis against a whole one.
+ */
+function movement(c: Change, partial: boolean): string | null {
   if (c.basis === 'none' || c.cents === null) return null
   if (c.cents === 0) return 'the same'
-  const pct = c.bp === null ? '' : ` (${formatBp(Math.abs(c.bp))})`
+  const pct = c.bp === null || partial ? '' : ` (${formatBp(Math.abs(c.bp))})`
   return `${c.cents > 0 ? 'up' : 'down'} ${formatEur(Math.abs(c.cents))}${pct}`
 }
 
-function Comparison({ previous, current }: { previous: MonthPoint; current: MonthPoint }): ReactNode {
+function Comparison({ previous, current, partial }: { previous: MonthPoint; current: MonthPoint; partial: boolean }): ReactNode {
   const last = formatMonthTitle(previous.month)
   const line = (label: string, field: NumericField, estimate: boolean): ReactNode => {
-    const text = movement(changeFrom(previous, current, field))
+    const text = movement(changeFrom(previous, current, field), partial)
     return text === null ? null : <li key={field}>{label}: {text}{estimate ? ' (estimated income)' : ''}</li>
   }
   const incomeKnown = current.incomeBasis !== 'none' && previous.incomeBasis !== 'none'
@@ -54,17 +57,23 @@ function Comparison({ previous, current }: { previous: MonthPoint; current: Mont
         {incomeKnown && line('Left over', 'netCents', estimate)}
       </ul>
       {!incomeKnown && <p>Income and what is left over are not compared, because income is not recorded for both months.</p>}
-      <p>{last} is the whole month. {formatMonthTitle(current.month)} is only up to the day shown above.</p>
+      {partial
+        ? <p>{last} is the whole month, but {formatMonthTitle(current.month)} is still running and only counts up to the day shown above. That is why the changes are in euros only, with no percentage.</p>
+        : <p>Both months are complete.</p>}
     </>
   )
 }
 
-/** `today` (an ISO day) and `computedAt` (epoch ms) are supplied by the route, the one place the clock is read. */
-export default function Dashboard({ today, computedAt }: { today: string; computedAt: number }): ReactNode {
+/**
+ * `today` (an ISO day) and `computedAt` (epoch ms) are supplied by the route, the one place the clock is read. `month` defaults to
+ * the month `today` falls in; the running app never passes it. A month is still running exactly when it is today's, as in budget/month.ts.
+ */
+export default function Dashboard({ today, computedAt, month: shown }: { today: string; computedAt: number; month?: string }): ReactNode {
   const [points, setPoints] = useState<MonthPoint[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const latest = useRef(0)
-  const month = today.slice(0, 7)
+  const month = shown ?? today.slice(0, 7)
+  const partial = month === today.slice(0, 7)
 
   useEffect(() => {
     const mine = ++latest.current
@@ -132,7 +141,7 @@ export default function Dashboard({ today, computedAt }: { today: string; comput
     <section className="dashboard">
       {heading}
       <h2>{title}</h2>
-      <p>Figures up to {formatSpanishDate(today)}.</p>
+      <p>{partial ? `Figures up to ${formatSpanishDate(today)}.` : 'Figures for the whole month.'}</p>
       <ul className="dashboard-figures">
         <li>{incomeLine}</li>
         <li>Spent: {formatEur(current.spentCents)}</li>
@@ -144,13 +153,13 @@ export default function Dashboard({ today, computedAt }: { today: string; comput
       )}
 
       {previous && previous.hasData
-        ? <Comparison previous={previous} current={current} />
+        ? <Comparison previous={previous} current={current} partial={partial} />
         : <p>There is no earlier month with records to compare {title} with.</p>}
 
       {current.spentCents > 0 && <Bars points={split} title={`Where ${title} spending went`} />}
 
       {run.length >= 2
-        ? <Line points={run.map((p) => ({ label: formatMonthTitle(p.month), cents: p.spentCents }))} title="Spending by month (the latest month is still running)" />
+        ? <Line points={run.map((p) => ({ label: formatMonthTitle(p.month), cents: p.spentCents }))} title={partial ? 'Spending by month (the latest month is still running)' : 'Spending by month'} />
         : <p>A line of your spending month by month appears once two months in a row have records. You have {run.length} so far.</p>}
 
       <p><a href="#/budget">Open the budget</a> · <a href="#/transactions">See your transactions</a></p>

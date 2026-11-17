@@ -34,8 +34,8 @@ const settled = async () => {
   await screen.findByRole('heading', { level: 1, name: 'Dashboard' })
   await waitFor(() => expect(screen.queryByText(/Loading your dashboard/)).toBeNull())
 }
-const mount = async (today = TODAY) => {
-  const view = render(<Dashboard today={today} computedAt={AT} />)
+const mount = async (today = TODAY, month?: string) => {
+  const view = render(<Dashboard today={today} computedAt={AT} month={month} />)
   await settled()
   return view
 }
@@ -79,8 +79,8 @@ describe('Dashboard screen', () => {
     await twoMonths()
     const first = await mount()
     expect(screen.getByRole('heading', { level: 2, name: 'Compared with October 2026' })).toBeInTheDocument()
-    expect(screen.getByText(`Spending: down ${formatEur(5000)} (25 %)`)).toBeInTheDocument()
-    expect(screen.getByText(`Income: up ${formatEur(100000)} (100 %)`)).toBeInTheDocument()
+    expect(screen.getByText(`Spending: down ${formatEur(5000)}`)).toBeInTheDocument()
+    expect(screen.getByText(`Income: up ${formatEur(100000)}`)).toBeInTheDocument()
     first.unmount()
 
     // October is empty and September is not: the month before this one has no records, and nothing may be compared across the gap.
@@ -92,6 +92,32 @@ describe('Dashboard screen', () => {
     expect(screen.queryByText(/Compared with/)).toBeNull()
     expect(text()).not.toMatch(/up .*\(\d+ %\)/)
     expect(text()).not.toMatch(/100 %/)
+  })
+
+  it('shows no percentage while this month is still running, and both once it is complete', async () => {
+    await twoMonths()
+    const running = await mount()
+    expect(screen.getByText(`Spending: down ${formatEur(5000)}`)).toBeInTheDocument()
+    expect(document.querySelector('.dashboard-changes')?.textContent).not.toMatch(/%/)
+    expect(screen.getByText(/still running and only counts up to the day shown above/)).toBeInTheDocument()
+    running.unmount()
+
+    // The same data a month later: November is over, so it is compared with October as a whole month against a whole month.
+    await mount('2026-12-05', '2026-11')
+    expect(screen.getByText(`Spending: down ${formatEur(5000)} (25 %)`)).toBeInTheDocument()
+    expect(screen.getByText(`Income: up ${formatEur(100000)} (100 %)`)).toBeInTheDocument()
+    expect(screen.getByText('Figures for the whole month.')).toBeInTheDocument()
+    expect(screen.queryByText(/still running/)).toBeNull()
+  })
+
+  it('reads a month that spent exactly what the last one did as unchanged', async () => {
+    await tx('oct-pay', '2026-10-01', 100000)
+    await tx('oct-a', '2026-10-05', -15000, GROCERIES)
+    await tx('pay', '2026-11-01', 200000)
+    await tx('a', '2026-11-03', -15000, GROCERIES)
+    await mount()
+    expect(screen.getByText('Spending: the same')).toBeInTheDocument()
+    expect(text()).not.toMatch(/Spending: (up|down)/)
   })
 
   it('marks a provisional income figure as an estimate wherever it appears', async () => {
@@ -119,7 +145,7 @@ describe('Dashboard screen', () => {
     expect(screen.getByText(/Left over: cannot be worked out/)).toBeInTheDocument()
     expect(text()).not.toContain(`Income: ${formatEur(0)}`)
     expect(screen.getByText(/Income and what is left over are not compared/)).toBeInTheDocument()
-    expect(screen.getByText(`Spending: down ${formatEur(10000)} (50 %)`)).toBeInTheDocument()
+    expect(screen.getByText(`Spending: down ${formatEur(10000)}`)).toBeInTheDocument()
   })
 
   it('does not draw a negative uncategorised figure as spending', async () => {
