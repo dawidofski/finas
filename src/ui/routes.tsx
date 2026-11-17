@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { epochMsToIso } from '../lib/dates'
 import Budget from './screens/Budget'
 import Import from './screens/Import'
+import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
 import WorthIt from './screens/WorthIt'
 import Settings from './screens/Settings'
@@ -30,6 +31,10 @@ function BudgetRoute() {
   return <Budget today={epochMsToIso(Date.now())} />
 }
 
+function IntelligenceRoute() {
+  return <Intelligence today={epochMsToIso(Date.now())} />
+}
+
 function WorthItRoute() {
   return <WorthIt today={epochMsToIso(Date.now())} />
 }
@@ -43,7 +48,7 @@ export const ROUTES: ReadonlyArray<RouteDef> = [
   { path: '/import', title: 'Import', element: <Import />, primary: true },
   { path: '/transactions', title: 'Transactions', element: <Transactions />, primary: true },
   { path: '/budget', title: 'Budget', element: <BudgetRoute />, primary: true },
-  screen('/intelligence', 'Intelligence', true),
+  { path: '/intelligence', title: 'Intelligence', element: <IntelligenceRoute />, primary: true },
   { path: '/mood', title: 'Mood', element: <Mood />, primary: false },
   { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false },
   screen('/learning', 'Learning'),
