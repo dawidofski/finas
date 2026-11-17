@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { epochMsToIso } from '../lib/dates'
 import Budget from './screens/Budget'
+import Dashboard from './screens/Dashboard'
 import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
@@ -31,6 +32,12 @@ function BudgetRoute() {
   return <Budget today={epochMsToIso(Date.now())} />
 }
 
+/** The analytics cache stamps its rows with `computedAt`, so the instant is read here beside the day and both are handed down. */
+function DashboardRoute() {
+  const now = Date.now()
+  return <Dashboard today={epochMsToIso(now)} computedAt={now} />
+}
+
 function IntelligenceRoute() {
   return <Intelligence today={epochMsToIso(Date.now())} />
 }
@@ -44,7 +51,7 @@ const screen = (path: string, title: string, primary = false): RouteDef =>
 
 /** Order is the navigation order. The five `primary` entries make up the mobile tab bar. */
 export const ROUTES: ReadonlyArray<RouteDef> = [
-  screen('/', 'Dashboard', true),
+  { path: '/', title: 'Dashboard', element: <DashboardRoute />, primary: true },
   { path: '/import', title: 'Import', element: <Import />, primary: true },
   { path: '/transactions', title: 'Transactions', element: <Transactions />, primary: true },
   { path: '/budget', title: 'Budget', element: <BudgetRoute />, primary: true },
