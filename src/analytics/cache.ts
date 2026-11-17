@@ -1,4 +1,4 @@
-import { db } from '../db/db'
+import { db, ENGINE_VERSION } from '../db/db'
 import type { AnalyticsCacheRow } from '../db/schema'
 import { sha256Hex } from '../lib/hash'
 
@@ -13,7 +13,17 @@ import { sha256Hex } from '../lib/hash'
  * Bump this whenever any cached figure's formula changes. A row stamped with a different version is a miss, however fresh its
  * inputs. This is the only guard against serving a number produced by an older formula.
  */
-export const ENGINE_VERSION = 1
+/**
+ * Re-exported, not redeclared. The database module has owned this number since Plan 1 — "invalidates cached analytics
+ * when a formula changes, independent of the schema version" — and this module briefly declared a second constant of the
+ * same name and meaning. Two of them is the worst shape for this particular value: bumping one leaves the cache happily
+ * serving figures the other says are stale, and nothing fails.
+ *
+ * (The path to that module is deliberately not written out here: the guard below scans this file's text for writes to
+ * tables, and a path in a comment reads to it as a table access. Same prose-versus-code confusion the whole-tree guards
+ * in sourceRules.test.ts were fixed for.)
+ */
+export { ENGINE_VERSION }
 
 /** Stored payloads are wrapped, so a row written in some other shape can be told apart from a real value and treated as a miss. */
 const PAYLOAD_SHAPE = 1
