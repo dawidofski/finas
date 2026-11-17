@@ -16,9 +16,15 @@ export interface RegretCluster {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 
 /**
- * §41, whole module: which month a spend belongs to, its weekday, its amount and its kind are the BANK's. A
- * `dateOverride` or `amountCentsOverride` never moves or resizes a cluster. The ONLY owner-corrected values used are
- * the classifications (category, merchant, mood, reason, worthwhile), which resolveMany supplies.
+ * §41, whole module: which month a spend belongs to, its weekday and its amount are the BANK's. A `dateOverride` or
+ * `amountCentsOverride` never moves or resizes a cluster. The owner-corrected values used are the classifications
+ * (kind, category, merchant, mood, reason, worthwhile), which resolveMany supplies.
+ *
+ * §43: whether a row is a spend at all is the RESOLVED kind, which is the same question `worthAnnotating` asks of the
+ * queue that offered the row. A bank `internal` the owner re-kinded to `spend` IS offered in the worth-it queue, so
+ * its answer has to land here too: the app must not ask a question, get an answer and count it nowhere. The bank's
+ * SIGN still decides which side of the ledger a row can be on (§43.1): `cents` below is money OUT, so a bank arrival
+ * is never a regret however it is re-kinded.
  *
  * The denominator counts spends the owner answered either way; `worthwhile === null` (not answered) is neither regret
  * nor part of the total. `cents` is money out: the negated bank amount, so a spend of -12.50 EUR counts 1250.
@@ -57,7 +63,8 @@ export async function regretClusters(month: string | null): Promise<RegretCluste
 
   for (const r of rows) {
     const t = bank.get(r.id)
-    if (!t || t.kind !== 'spend' || r.worthwhile === null) continue
+    // The kind is the owner's (§43), so this agrees with the queue that asked; the sign and the amount are the bank's.
+    if (!t || r.kind !== 'spend' || t.amountCents > 0 || r.worthwhile === null) continue
     const regret = r.worthwhile === false
     const cents = -t.amountCents
     const weekday = isoWeekday(t.valueDate)

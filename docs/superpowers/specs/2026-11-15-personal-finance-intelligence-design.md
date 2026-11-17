@@ -1843,6 +1843,40 @@ and the owner re-kinded **to** income, even though the income figure counts it. 
 from its own editor still works, because that path asks the resolved kind. Closing the gap
 needs an index on `annotations.typeOverride`, and §29 is shut.
 
+**43.3 Two readers outside `treatmentOf` had to follow, and both were in the defect classes
+this project treats as worst.** The ruling above was implemented in the three readers that
+ask `treatmentOf`. Two places decide the same question without going through it, and
+honouring the override in the figures left each of them disagreeing with it:
+
+- **Money counted nowhere: `regretClusters` (`src/learning/regret.ts`).** It gated on the
+  **bank's** kind while `worthAnnotating` — the predicate behind the worth-it queue — gates
+  on the resolved one. A bank `internal` the owner re-kinded to `spend` was therefore
+  offered in the queue, answered by the owner, and dropped from every cluster: the app asked
+  a question, got an answer and counted it nowhere. The gate is now the resolved kind, so
+  the figure agrees with the queue that asked. Everything else in that module stays the
+  bank's, as §41 requires: the amount, the sign and the `valueDate` that gives the weekday
+  and the month. The sign is load-bearing, not decoration — `cents` is money OUT, so a bank
+  arrival re-kinded to `spend` is excluded by §43.1 rather than entering a cluster as a
+  negative. The old test named "uses the bank kind" was a statement of the superseded
+  ruling, and was rewritten in place as §45 describes; the reverse case (a bank `spend`
+  re-kinded out of spending leaves both the numerator and the denominator) was pinned by
+  nothing and now is.
+- **Money counted twice: `creditedOutflows` (`src/budget/month.ts`).** A credited round-up
+  outflow is registered as counted so that an unpaired bank round-up inflow of the same date
+  and amount is not credited for the same movement. The registration asked the **bank's**
+  kind, so a spend the owner re-kinded to `roundup` was credited to savings and never
+  registered, and the inflow was credited as well: 70 reported for 35 of movement — finding
+  B1 of the previous plan arriving through the new path. Registration now asks the same
+  classification the crediting decision used, the resolved kind, and keeps the bank kind in
+  the test as well: an outflow the bank filed as a round-up can reach the savings branch for
+  the other reason (a savings category), and it accounted for its inflow before this fix.
+  Which rows are credited is unchanged; only which are registered as already counted. The
+  carve-out for a **paired** outflow stays: its counterpart in-leg is already out of the
+  pending set, and dropping the carve-out reintroduces an under-credit that cost a round.
+
+Neither fix moved a figure anywhere else, and the round-up pairing itself still reads the
+bank kind: it is a statement about two bank events, not a figure.
+
 ---
 
 ## 44. Real figures reached a public repository, and why the guard that was in place missed them

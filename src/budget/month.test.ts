@@ -283,6 +283,19 @@ describe('monthlyBudget spending', () => {
     expect((await monthlyBudget(NOV, TODAY)).totals.savingsCents).toBe(70)
   })
 
+  it('credits a spend re-kinded to a round-up once, inflow and all (§43)', async () => {
+    // The owner says this purchase was really a round-up, so it is credited to savings (§43) — and therefore it is an
+    // outflow that HAS been counted. An unpaired bank round-up inflow of the same date and amount on another account
+    // is the same 35 of movement seen from the savings side; crediting it too would report 70.
+    await tx('ru-out', '2026-11-05', -35, GROCERIES, 'spend')
+    await annotate('ru-out', { typeOverride: 'roundup' })
+    await tx('ru-in', '2026-11-05', 35, ROUNDUP, 'roundup', 'acc.2') // no transfers row: unpaired
+    const b = await monthlyBudget(NOV, TODAY)
+    expect(b.totals).toMatchObject({ savingsCents: 35, spentCents: 0 }) // 35, not 70
+    expect((await line('cat.groceries')).spentCents).toBe(0) // it left spending, as §43 says
+    expect(b.income.cents).toBe(200000) // and no leg of it reached income
+  })
+
   it('credits an outflow whose inflow was never imported', async () => {
     await tx('ru-out', '2026-11-05', -35, ROUNDUP, 'roundup')
     expect((await monthlyBudget(NOV, TODAY)).totals.savingsCents).toBe(35)
