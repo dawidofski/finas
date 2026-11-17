@@ -140,4 +140,29 @@ describe('Import screen', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /import it anyway/i }))
     expect(button).toBeEnabled()
   })
+
+  it('shows the suggested category with the sentence that explains it, and writes it only when the owner accepts', async () => {
+    const ING_ROW = { date: '2026-11-12', cents: -4000, desc: 'Compra EN OTRA COSA', cat: 'Alimentación', sub: 'Supermercados y alimentación' }
+    const OTHER = { date: '2026-11-11', cents: -320, desc: 'Compra EN CAFETERIA EJEMPLO', cat: 'Ocio y viajes', sub: 'Cafeterías y restaurantes' }
+    render(<Import />)
+    pick(fileOf(statement({ moves: [OTHER, ING_ROW], opening: 100000 })))
+    await screen.findByRole('heading', { name: /check before importing/i })
+    // The suggestion names the category and says what it rests on, in the engine's own words.
+    const useGroceries = await screen.findByRole('button', { name: /use supermercados y alimentación for/i })
+    expect(screen.getAllByText('ING files this under Alimentación, Supermercados y alimentación.')).toHaveLength(1)
+    expect(screen.getAllByText('ING files this under Ocio y viajes, Cafeterías y restaurantes.')).toHaveLength(1)
+    // Showing it wrote nothing.
+    expect(await db.annotations.count()).toBe(0)
+    expect(await db.learningEvents.count()).toBe(0)
+
+    fireEvent.click(useGroceries)
+    expect(screen.getByText(/1 correction will be saved/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /import 2 new transactions/i }))
+    await screen.findByRole('heading', { name: /import finished/i })
+    // Only the accepted row has an annotation.
+    const annotations = await db.annotations.toArray()
+    expect(annotations).toHaveLength(1)
+    expect(annotations[0]).toMatchObject({ categoryId: 'cat.groceries' })
+    expect(await db.learningEvents.count()).toBe(1)
+  })
 })

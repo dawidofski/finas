@@ -1,5 +1,9 @@
 import { db, digitCount, IBAN_LIKE, LONG_DIGITS } from '../db/db'
-import { buildCategoryIndex } from '../db/annotations'
+import { buildCategoryIndex, type CategoryIndex } from '../db/annotations'
+import { suggestCategory, type CategoriserContext, type Suggestion } from '../learning/categorise'
+import { categoryMemory } from '../learning/memory'
+import { classify, train } from '../learning/bayes'
+import { merchantTokens } from '../learning/canonicalise'
 import { epochMsToIso, formatSpanishDate } from '../lib/dates'
 import { sha256Hex } from '../lib/hash'
 import { MAX_FILE_BYTES, readXlsxGrid } from './xlsx'
@@ -27,7 +31,11 @@ export interface ImportPreview {
   isNewAccount: boolean
   coverageStart: string
   coverageEnd: string
-  rows: Array<{ row: CandidateRow; verdict: DedupVerdict }>
+  /**
+   * `suggestion` is the categoriser's answer for a row that would be imported, null for any other row and when nothing
+   * has anything to say. It is only ever shown: nothing is written until the owner accepts it and confirms the import.
+   */
+  rows: Array<{ row: CandidateRow; verdict: DedupVerdict; suggestion: Suggestion | null }>
   roundupLinks: RoundupLink[]
   balance: ReturnType<typeof verifyBalanceChain>
   gap: GapReport
@@ -49,6 +57,46 @@ export interface ImportPreview {
 export function redactAccountNumbers(text: string): string {
   const ibans = text.replace(IBAN_LIKE, (m) => (digitCount(m) >= 10 ? '[redacted]' : m))
   return ibans.replace(new RegExp(LONG_DIGITS.source, 'g'), '[redacted]')
+}
+
+/**
+ * The categoriser's inputs, read ONCE for a whole import file (never per row): merchants, the memory folded from the
+ * learning log, the ING mapping, the leaf categories a suggestion may name, and a classifier trained on the owner's own
+ * categorised history.
+ *
+ * Training reads every annotation the owner gave a category (an index range scan on `categoryId`, so rows without one are
+ * never touched) and the bank rows they belong to. That single unbounded pass is sanctioned HERE, at import time, the way
+ * `categoryMemory` is sanctioned for its scan of the log. Do not copy it into a screen: §39.4 forbids unbounded reads
+ * there. Examples are tokenised from the BANK description, the text that recurs across imports, never from an override.
+ *
+ * There is no owner tier for a row that is not stored yet, so `ownerCategoryFor` is always silent. Below `MIN_EXAMPLES`
+ * the classifier stays silent by itself.
+ */
+async function buildCategoriserContext(index: CategoryIndex): Promise<CategoriserContext> {
+  const [merchants, memory, categories, categorised] = await Promise.all([
+    db.merchants.toArray(),
+    categoryMemory(),
+    db.categories.toArray(),
+    db.annotations.where('categoryId').aboveOrEqual('').toArray(),
+  ])
+  // Only a leaf can be chosen in the preview's picker, so only a leaf may be suggested.
+  const assignable = new Set(categories.filter((c) => c.parentId !== null).map((c) => c.id))
+  const history = await db.transactions.bulkGet(categorised.map((a) => a.transactionId))
+  const examples = categorised.flatMap((a, i) => {
+    const tx = history[i]
+    return tx === undefined || tx.deletedAt !== null || a.categoryId === null
+      ? []
+      : [{ tokens: merchantTokens(tx.description), categoryId: a.categoryId }]
+  })
+  const model = train(examples)
+  return {
+    merchants,
+    memory,
+    ingCategoryFor: (ing, ingSub) => index.get(`${ing} / ${ingSub}`) ?? null,
+    classify: (tokens) => classify(tokens, model),
+    categoryExists: (id) => assignable.has(id),
+    ownerCategoryFor: () => null,
+  }
 }
 
 /** Says which case it is, so "nothing to import" never reads as a bug. */
@@ -145,6 +193,9 @@ export async function buildPreview(bytes: Uint8Array, filename: string): Promise
   const divergent = overlapsStored && !verdicts.some((v) => v.kind === 'duplicate')
 
   const index = await buildCategoryIndex()
+  // Built once, before the row loop. Matching runs on the bank description (`row.description` is the bank's text; an
+  // owner's descriptionOverride does not exist yet for a row that is not stored).
+  const context = await buildCategoriserContext(index)
   const seen = new Set<string>()
   const unknownPairs: ImportPreview['unknownPairs'] = []
   for (const { row, verdict } of withVerdicts) {
@@ -166,7 +217,13 @@ export async function buildPreview(bytes: Uint8Array, filename: string): Promise
     isNewAccount,
     coverageStart,
     coverageEnd,
-    rows: withVerdicts,
+    rows: withVerdicts.map(({ row, verdict }) => ({
+      row,
+      verdict,
+      suggestion: verdict.kind === 'new'
+        ? suggestCategory({ ...row, id: '', importId: '', createdAt: 0, deletedAt: null }, context)
+        : null,
+    })),
     roundupLinks: linkRoundups(rows),
     balance: verifyBalanceChain(rows),
     gap,

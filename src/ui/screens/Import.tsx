@@ -288,17 +288,36 @@ function PreviewView(props: PreviewViewProps): ReactNode {
                 <th scope="col">Date</th>
                 <th scope="col">Description</th>
                 <th scope="col" className="num">Amount</th>
+                <th scope="col">Suggestion</th>
                 <th scope="col">Your correction</th>
               </tr>
             </thead>
             <tbody>
-              {fresh.slice(0, shown).map(({ row, index }) => {
+              {fresh.slice(0, shown).map(({ row, index, suggestion }) => {
                 const current = edits.get(index)
+                const suggested = suggestion === null ? undefined : categories.find((c) => c.id === suggestion.categoryId)
+                const accepted = suggestion !== null && current?.categoryId === suggestion.categoryId
                 return (
                   <tr key={index}>
                     <td className="nowrap">{formatSpanishDate(row.valueDate)}</td>
                     <td>{row.description}{row.comment ? <><br /><small>{row.comment}</small></> : null}</td>
                     <td className="num nowrap">{formatEur(row.amountCents)}</td>
+                    <td>
+                      {suggestion !== null && suggested !== undefined && (
+                        <>
+                          <strong>{suggested.name}</strong>{' '}
+                          {suggestion.tier === 'classifier' && <small>(a guess, {suggestion.confidence}% sure)</small>}
+                          <br /><small>{suggestion.because}</small>
+                          <br />
+                          {/* Nothing is written by showing this. Accepting only fills the row's correction; the import writes it. */}
+                          <button type="button" className="btn" disabled={saving || accepted}
+                                  aria-label={`Use ${suggested.name} for ${formatSpanishDate(row.valueDate)} ${row.description}`}
+                                  onClick={() => props.onEdit(index, { categoryId: suggestion.categoryId })}>
+                            {accepted ? 'Chosen' : 'Use this'}
+                          </button>
+                        </>
+                      )}
+                    </td>
                     <td>
                       <select aria-label={`Category for ${formatSpanishDate(row.valueDate)} ${row.description}`} disabled={saving}
                               value={current?.categoryId ?? ''}

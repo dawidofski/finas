@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AccountRow, TransactionRow } from '../db/schema'
@@ -9,6 +9,8 @@ import { commitPreview } from './commit'
 import { ImportError } from './detect'
 import { buildPreview, type ImportPreview } from './pipeline'
 import { fingerprintAccount } from './scrub'
+import type { AnnotationRow } from '../db/schema'
+import { addDays } from '../lib/dates'
 
 const counts = async (): Promise<Record<string, number>> =>
   Object.fromEntries(await Promise.all(db.tables.map(async (t) => [t.name, await t.count()] as const)))
@@ -128,7 +130,7 @@ describe('buildPreview', () => {
     const forged: ImportPreview = {
       ...(await preview(statement({ moves: [{ date: '2026-11-20', cents: -100 }], opening: 5000 }))),
     }
-    forged.rows = forged.rows.map(({ row }) => ({ row, verdict: { kind: 'duplicate' as const, existingId: stored[0]!.id } }))
+    forged.rows = forged.rows.map(({ row }) => ({ row, verdict: { kind: 'duplicate' as const, existingId: stored[0]!.id }, suggestion: null }))
     const before = await counts()
     await expect(commitPreview(forged, new Map())).rejects.toMatchObject({ code: 'nothing-new' })
     expect(await counts()).toEqual(before)
@@ -386,5 +388,113 @@ describe('commitPreview', () => {
     expect((await db.imports.toArray())[0]!.filename).toBe('Movimientos [redacted] 2026.xlsx')
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
+  })
+})
+
+describe('category suggestions in the preview', () => {
+  const BAKERY = 'Compra EN PANADERIA ALFA'
+  const CAFE = 'Compra EN CAFETERIA BETA'
+  /** Rows with no ING category, so only the owner's history can say anything about them. */
+  const plain = (desc: string, day: number, cents: number): Move => ({ date: addDays('2026-01-01', day), cents, desc, cat: '', sub: '' })
+
+  /** Imports twelve categorised rows (six per category), the owner's history for the classifier. */
+  async function teach(extra: Partial<AnnotationRow> = {}): Promise<Move[]> {
+    const moves = Array.from({ length: 12 }, (_, i) => plain(i % 2 === 0 ? BAKERY : CAFE, i, -(100 + i)))
+    const imported = await buildPreview(statement({ moves, opening: 1000000 }), 'history.xlsx')
+    // Preview rows are newest first, so the category follows each row's own text, not its position.
+    const edits = new Map(imported.rows.map(({ row }, i) => [i, { categoryId: row.description === BAKERY ? 'cat.groceries' : 'cat.restaurants', ...extra }] as const))
+    await commitPreview(imported, edits)
+    return moves
+  }
+  /** Rows come back newest first; tests name a row by its amount. */
+  const suggestionFor = (p: ImportPreview, cents: number) => p.rows.find((r) => r.row.amountCents === cents)?.suggestion
+  const second = (moves: Move[]) => statement({ moves, opening: 500000, exported: '16/11/2026 08:00:00' })
+  const NEW_DAY = 60
+
+  it('suggests a category from the owner history and names the tier that did', async () => {
+    await teach()
+    const p = await preview(second([
+      plain(BAKERY, NEW_DAY, -777),
+      { date: addDays('2026-01-01', NEW_DAY + 1), cents: -555, desc: 'Compra EN OTRA COSA', cat: 'Alimentación', sub: 'Supermercados y alimentación' },
+    ]))
+    const guess = { suggestion: suggestionFor(p, -777) }
+    const ing = { suggestion: suggestionFor(p, -555) }
+    expect(guess?.suggestion).toMatchObject({ categoryId: 'cat.groceries', tier: 'classifier', because: 'It looks like other transactions you have put in this category.' })
+    expect(guess?.suggestion?.confidence).toBeLessThanOrEqual(70)
+    expect(ing?.suggestion).toMatchObject({ categoryId: 'cat.groceries', tier: 'ing', because: 'ING files this under Alimentación, Supermercados y alimentación.' })
+  })
+
+  it('suggests from memory once the owner has corrected a merchant twice, ahead of ING', async () => {
+    await db.merchants.add({ id: 'm.memoria', canonicalName: 'Tienda Memoria', kind: 'merchant', matchPatterns: ['tienda memoria'], defaultCategoryId: null, isSubscription: false, createdAt: 1 })
+    const desc = 'Compra EN TIENDA MEMORIA'
+    const edits = new Map<number, Partial<AnnotationRow>>([0, 1].map((i) => [i, { categoryId: 'cat.restaurants', merchantId: 'm.memoria' }]))
+    await commitPreview(await buildPreview(statement({ moves: [plain(desc, 0, -100), plain(desc, 1, -101)], opening: 1000000 }), 'h.xlsx'), edits)
+    const p = await preview(second([{ date: '2026-03-01', cents: -300, desc, cat: 'Alimentación', sub: 'Supermercados y alimentación' }]))
+    expect(p.rows[0]?.suggestion).toMatchObject({ categoryId: 'cat.restaurants', tier: 'memory' })
+    expect(p.rows[0]?.suggestion?.because).toContain('Tienda Memoria')
+  })
+
+  it('learns from the bank description, never from a description the owner rewrote', async () => {
+    await teach({ descriptionOverride: 'Something the owner typed' })
+    const p = await preview(second([plain(BAKERY, NEW_DAY, -777)]))
+    expect(suggestionFor(p, -777)).toMatchObject({ categoryId: 'cat.groceries', tier: 'classifier' })
+  })
+
+  it('stays silent with no history and for rows that would not be imported', async () => {
+    const p = await preview(statement({ moves: [plain(BAKERY, 0, -100)], opening: 100000 }))
+    expect(p.rows[0]?.suggestion).toBeNull()
+    const moves = await teach()
+    // The same twelve rows again plus one new: the twelve are already in the history, so nothing is suggested for them.
+    const again = await preview(statement({ moves: [...moves, plain(BAKERY, NEW_DAY, -777)], opening: 1000000, exported: '16/11/2026 08:00:00' }))
+    const known = again.rows.filter((r) => r.verdict.kind === 'duplicate')
+    expect(known).toHaveLength(12)
+    expect(known.every((r) => r.suggestion === null)).toBe(true)
+    expect(suggestionFor(again, -777)).not.toBeNull()
+  })
+
+  it('writes nothing when it suggests, on any tier', async () => {
+    await db.merchants.add({ id: 'm.memoria', canonicalName: 'Tienda Memoria', kind: 'merchant', matchPatterns: ['tienda memoria'], defaultCategoryId: null, isSubscription: false, createdAt: 1 })
+    await teach()
+    const before = await contents()
+    const p = await preview(second([
+      plain(BAKERY, NEW_DAY, -777),
+      { date: addDays('2026-01-01', NEW_DAY + 1), cents: -555, desc: 'Compra EN OTRA COSA', cat: 'Alimentación', sub: 'Supermercados y alimentación' },
+    ]))
+    expect([suggestionFor(p, -777)?.tier, suggestionFor(p, -555)?.tier]).toEqual(['classifier', 'ing'])
+    expect(await contents()).toEqual(before)
+  })
+
+  it('writes a suggestion only for the rows the owner accepts', async () => {
+    await teach()
+    const p = await preview(second([
+      plain(BAKERY, NEW_DAY, -777),
+      plain(BAKERY, NEW_DAY + 1, -778),
+    ]))
+    const accepted = suggestionFor(p, -777)
+    expect(accepted).not.toBeNull()
+    expect(suggestionFor(p, -778)).not.toBeNull()
+    const acceptedIndex = p.rows.findIndex((r) => r.row.amountCents === -777)
+    const annotationsBefore = await db.annotations.count()
+    const eventsBefore = await db.learningEvents.count()
+    await commitPreview(p, new Map([[acceptedIndex, { categoryId: accepted!.categoryId }]]))
+    // One accepted row, one annotation, and the learning event the owner path emits for it; the other row has neither.
+    expect(await db.annotations.count()).toBe(annotationsBefore + 1)
+    expect(await db.learningEvents.count()).toBe(eventsBefore + 1)
+    const stored = await db.transactions.filter((t) => t.amountCents === -778).toArray()
+    expect(await db.annotations.get(stored[0]!.id)).toBeUndefined()
+  })
+
+  it('reads the merchants, the memory and the history once for the whole file, not once per row', async () => {
+    await teach()
+    const merchants = vi.spyOn(db.merchants, 'toArray')
+    const events = vi.spyOn(db.learningEvents, 'toArray')
+    const history = vi.spyOn(db.annotations, 'where')
+    const rows = Array.from({ length: 5 }, (_, i) => plain(BAKERY, NEW_DAY + i, -(700 + i)))
+    const p = await preview(second(rows))
+    expect(p.rows).toHaveLength(5)
+    expect(merchants).toHaveBeenCalledTimes(1)
+    expect(events).toHaveBeenCalledTimes(1)
+    expect(history).toHaveBeenCalledTimes(1)
+    vi.restoreAllMocks()
   })
 })
