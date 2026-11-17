@@ -55,7 +55,7 @@ describe('smallPurchases', () => {
     expect(await smallPurchases('2026-11', 10000, 1)).toEqual({ count: 5, totalCents: 9400, medianCents: 100 })
   })
 
-  it('rounds a half cent away from zero, as unusual.ts does', async () => {
+  it('rounds a half cent away from zero (the shared rule in stats.ts)', async () => {
     await db.transactions.bulkAdd([tx('a', { amountCents: -300 }), tx('b', { amountCents: -501 })])
     expect((await smallPurchases('2026-11', 1000, 1)).medianCents).toBe(401) // 400.5
   })
@@ -66,8 +66,8 @@ describe('smallPurchases', () => {
     expect((await smallPurchases('2026-11', 1000, 2)).count).toBe(2)
   })
 
-  it('says count 0 for a month with nothing small, not a median of anything', async () => {
-    expect(await smallPurchases('2026-11', 1000, 1)).toEqual({ count: 0, totalCents: 0, medianCents: 0 })
+  it('has no median, rather than a zero, for a month with nothing small', async () => {
+    expect(await smallPurchases('2026-11', 1000, 1)).toEqual({ count: 0, totalCents: 0, medianCents: null })
   })
 })
 
@@ -85,7 +85,7 @@ describe('afterPayday', () => {
       ann('p', { dateOverride: '2026-11-20' }),    // must not move the payday
       ann('d2a', { dateOverride: '2026-11-25', amountCentsOverride: -1 }), // must not move or resize the purchase
     ])
-    const days = (await afterPayday('2026-11', 1))!
+    const { days } = (await afterPayday('2026-11', 1))!
     expect(days.filter((d) => d.transactions > 0)).toEqual([
       { dayOffset: 0, spentCents: 100, transactions: 1 },
       { dayOffset: 2, spentCents: 600, transactions: 2 },
@@ -109,7 +109,7 @@ describe('afterPayday', () => {
       tx('a', { valueDate: '2026-11-03', amountCents: -100 }),
       tx('b', { valueDate: '2026-11-06', amountCents: -200 }),
     ])
-    const days = (await afterPayday('2026-11', 1))!
+    const { days } = (await afterPayday('2026-11', 1))!
     expect(days.map((d) => d.dayOffset)).toEqual(Array.from({ length: 28 }, (_, i) => i))
     // Days 1 and 2 sit between two spending days: present, and zero.
     expect(days[1]).toEqual({ dayOffset: 1, spentCents: 0, transactions: 0 })
@@ -117,5 +117,29 @@ describe('afterPayday', () => {
     expect(days[3]).toEqual({ dayOffset: 3, spentCents: 200, transactions: 1 })
     // ...and the tail to the end of the month is zeros too.
     expect(days[27]).toEqual({ dayOffset: 27, spentCents: 0, transactions: 0 })
+  })
+  it('anchors on the largest income of the month, not the first', async () => {
+    await db.transactions.bulkAdd([
+      pay('small', '2026-11-03', { amountCents: 5000 }),
+      pay('salary', '2026-11-25'),
+      tx('a', { valueDate: '2026-11-04', amountCents: -111 }),  // after the deposit, before the salary
+      tx('b', { valueDate: '2026-11-26', amountCents: -222 }),
+    ])
+    const r = (await afterPayday('2026-11', 1))!
+    expect(r.daysObserved).toBe(6) // 25th to 30th
+    expect(r.days.filter((d) => d.transactions > 0)).toEqual([{ dayOffset: 1, spentCents: 222, transactions: 1 }])
+  })
+
+  it('says how many days it observed, so a late payday is not mistaken for a whole pattern', async () => {
+    await db.transactions.bulkAdd([pay('p', '2026-11-28'), tx('a', { valueDate: '2026-11-29', amountCents: -100 })])
+    const r = (await afterPayday('2026-11', 1))!
+    expect(r.daysObserved).toBe(3)
+    expect(r.days.map((d) => d.dayOffset)).toEqual([0, 1, 2])
+    expect(r.days.length).toBe(r.daysObserved)
+  })
+
+  it('reports a full month as observing every day from the payday', async () => {
+    await db.transactions.bulkAdd([pay('p', '2026-11-03')])
+    expect((await afterPayday('2026-11', 1))!.daysObserved).toBe(28)
   })
 })

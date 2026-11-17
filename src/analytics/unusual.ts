@@ -11,6 +11,8 @@
  * category are skipped: "uncategorised" is a heap of unrelated things, so there is no history of its own to compare to.
  */
 
+import { medianOf } from '../lib/stats'
+
 export interface UnusualRow {
   id: string
   categoryId: string | null
@@ -62,25 +64,6 @@ function divRound(n: number, d: number): number {
   const r = Math.abs(n) - q * d
   const rounded = r * 2 >= d ? q + 1 : q
   return n < 0 ? -rounded : rounded
-}
-
-/**
- * Median of an ascending-sorted integer sample, or null when it is empty. For an even count the two middle values are
- * averaged and, since there is no half-cent, a .5 rounds away from zero (up, for the non-negative amounts we hold):
- * the same rule as every other rounding in the app, and it keeps the median an integer without a float anywhere.
- */
-function medianOfSorted(sorted: number[]): number | null {
-  const n = sorted.length
-  const upper = sorted[divFloor(n, 2)]
-  if (upper === undefined) return null
-  if (n % 2 === 1) return upper
-  const lower = sorted[divFloor(n, 2) - 1]
-  if (lower === undefined) return null
-  return divRound(lower + upper, 2)
-}
-
-function medianOf(values: number[]): number | null {
-  return medianOfSorted([...values].sort((a, b) => a - b))
 }
 
 /** Every purchase in a category with at least `minSample` rows that is unusually high against that category's own history. */

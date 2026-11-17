@@ -2,6 +2,7 @@ import { resolveMany } from '../db/annotations'
 import type { TransactionRow } from '../db/schema'
 import { addDays, daysBetween } from '../lib/dates'
 import { sumCents } from '../lib/money'
+import { medianOf } from '../lib/stats'
 import { liveTransactionsBetween, nextMonthStart } from '../analysis/transactionsInRange'
 import { loadCategoryKinds } from '../analysis/queues'
 import { excludedTransactionIds, treatmentOf } from '../analysis/income'
@@ -22,8 +23,18 @@ import { cached } from './cache'
 export interface SmallPurchases {
   count: number
   totalCents: number
-  /** Integer cents. 0 when `count` is 0: read `count` first, a median of nothing is not a statement about the owner. */
-  medianCents: number
+  /** Integer cents, tie rule in `src/lib/stats.ts`. null exactly when `count` is 0: there is nothing to take a median of. */
+  medianCents: number | null
+}
+
+export interface AfterPayday {
+  /**
+   * How many days the series covers: from the payday to the end of that month, inclusive. A payday on the 28th observes 3.
+   * Every figure is bucketed by the bank's month (§41), so the series stops at month end and a late payday gives a SHORT
+   * series, not the shape of a whole one. A screen must say how much was observed, and this is the number it says it with.
+   */
+  daysObserved: number
+  days: PaydayDay[]
 }
 
 export interface PaydayDay {
@@ -36,30 +47,6 @@ export interface PaydayDay {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 function assertMonth(month: string): void {
   if (!MONTH_RE.test(month)) throw new Error(`Invalid month, expected YYYY-MM: ${month}`)
-}
-
-/** round(n / d), halves away from zero, integer-only. d > 0. The house rounding (money.ts, income.ts, unusual.ts). */
-function divRound(n: number, d: number): number {
-  const q = Math.floor(Math.abs(n) / d)
-  const r = Math.abs(n) - q * d
-  const rounded = r * 2 >= d ? q + 1 : q
-  return n < 0 ? -rounded : rounded
-}
-
-/**
- * Median of an integer sample, 0 when empty. Same rule as `src/analytics/unusual.ts` (whose helper is private, so this is a
- * copy of the rule, not an import of the code): for an even count the two middle values are averaged and a .5 rounds away
- * from zero, up for the non-negative amounts held here, so the median stays an integer.
- */
-function medianOf(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b)
-  const n = sorted.length
-  const upper = sorted[Math.floor(n / 2)]
-  if (upper === undefined) return 0
-  if (n % 2 === 1) return upper
-  const lower = sorted[Math.floor(n / 2) - 1]
-  if (lower === undefined) return 0
-  return divRound(lower + upper, 2)
 }
 
 /** The month's live bank rows paired with whether each is spending (owner's kind and category, bank's sign) or income. */
@@ -95,7 +82,7 @@ export async function smallPurchases(month: string, ceilingCents: number, comput
 }
 
 /**
- * Spending by days since the month's first income arrived, one entry per day from 0 to the end of the month, in order.
+ * Spending by days since the month's largest income arrived, one entry per day from 0 to the end of the month, in order.
  * A day with no spending is an entry of zeros, never a gap. Spending before the income landed is not "after payday" and is
  * not in the series.
  *
@@ -103,12 +90,16 @@ export async function smallPurchases(month: string, ceilingCents: number, comput
  * as a flat one. "Income event" is the rule `netIncome` uses: money in by the bank's sign, resolved kind income, and not a
  * netted transfer or refund.
  */
-export async function afterPayday(month: string, computedAt: number): Promise<PaydayDay[] | null> {
+export async function afterPayday(month: string, computedAt: number): Promise<AfterPayday | null> {
   assertMonth(month)
   return cached(`habits.afterPayday:${month}`, async () => {
     const { spends, incomes } = await classified(month)
-    const first = incomes.map((t) => t.valueDate).sort()[0]
-    if (first === undefined) return null
+    // The payday is the LARGEST income of the month, not the first: §13.1 asks about spending after the salary, and a small
+    // early deposit would otherwise start the clock before the money that drives the pattern arrived. Refunds and netted
+    // transfers are already out of `incomes`, so the largest remaining inflow is the salary. Ties go to the earlier date.
+    const payday = [...incomes].sort((x, y) => y.amountCents - x.amountCents || (x.valueDate < y.valueDate ? -1 : x.valueDate > y.valueDate ? 1 : 0))[0]
+    if (payday === undefined) return null
+    const first = payday.valueDate
     const lastDay = addDays(nextMonthStart(month), -1)
     const days: PaydayDay[] = []
     for (let offset = 0; offset <= daysBetween(first, lastDay); offset++) days.push({ dayOffset: offset, spentCents: 0, transactions: 0 })
@@ -118,6 +109,6 @@ export async function afterPayday(month: string, computedAt: number): Promise<Pa
       day.spentCents += -t.amountCents
       day.transactions += 1
     }
-    return days
+    return { daysObserved: days.length, days }
   }, computedAt)
 }

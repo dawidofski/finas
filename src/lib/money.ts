@@ -99,7 +99,7 @@ export function sumCents(values: number[]): number {
 }
 
 /** round(numerator / denominator), halves away from zero, integer-only. */
-function divRound(numerator: number, denominator: number): number {
+export function divRound(numerator: number, denominator: number): number {
   const sign = numerator < 0 === denominator < 0 ? 1 : -1
   const n = Math.abs(numerator)
   const d = Math.abs(denominator)
