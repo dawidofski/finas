@@ -6,6 +6,7 @@ import Settings from './Settings'
 import { db } from '../../db/db'
 import { seedDatabase, getSettings } from '../../db/seed'
 import * as backup from '../../db/backup'
+import { guardWording } from '../../test/wording'
 
 // Wrap the real engine in spies: the tests exercise real inspect/restore against the real (fake-indexeddb) database.
 vi.mock('../../db/backup', async importOriginal => {
@@ -39,6 +40,8 @@ const choose = (name: RegExp) => fireEvent.click(screen.getByRole('radio', { nam
 async function validBundleText() {
   return JSON.stringify(await backup.exportBundle())
 }
+
+guardWording(10)
 
 describe('Settings backup', () => {
   it('downloads a bundle whose filename carries the date, and revokes the object URL after the click', async () => {

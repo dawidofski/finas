@@ -342,7 +342,7 @@ function PreviewView(props: PreviewViewProps): ReactNode {
       {review.length > 0 && (
         <>
           <h3>Not imported ({review.length})</h3>
-          <p>These were left out of this import. Each line says why.</p>
+          <p>These were left out of this import. The reason is beside each line.</p>
           <ul className="review-list">
             {review.map(({ row, verdict, index }) => (
               <li key={index}>

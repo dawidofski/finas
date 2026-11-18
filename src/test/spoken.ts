@@ -15,9 +15,13 @@ export function spoken(root: Element = document.body): string {
   return clone.textContent ?? ''
 }
 
-/** The same, with the owner's own words (everything rendered in <q>) taken out: the app speaking, not the owner quoted. */
-export function appSpoken(root: Element = document.body): string {
+/**
+ * The same, with the owner's own words taken out: everything rendered in <q>, and anything matching `ownerText`, a CSS
+ * selector for text the owner (not the app) wrote on that screen, such as a transaction description, a merchant or
+ * category name they chose, or a note. This is the app speaking, not the owner quoted.
+ */
+export function appSpoken(root: Element = document.body, ownerText = ''): string {
   const clone = root.cloneNode(true) as Element
-  for (const q of clone.querySelectorAll('q')) q.remove()
+  for (const own of clone.querySelectorAll(ownerText === '' ? 'q' : `q, ${ownerText}`)) own.remove()
   return spoken(clone)
 }

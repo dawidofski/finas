@@ -11,6 +11,7 @@ import { categoryMemory, rememberedCategoryFor } from '../../learning/memory'
 import { transactionRowReads } from '../../test/reads'
 import { FILTERS_OPEN_KEY } from '../viewPrefs'
 import type { AccountRow, TransactionRow } from '../../db/schema'
+import { guardWording } from '../../test/wording'
 
 const account = (id: string, label: string): AccountRow =>
   ({ id, fingerprint: id.padEnd(64, '0'), label, last4: null, currency: 'EUR', createdAt: 1, archived: false })
@@ -50,6 +51,8 @@ const openEditor = async (text: string) => {
 }
 const change = (label: RegExp | string, value: string, root: HTMLElement | Document = document.body) =>
   fireEvent.change(within(root as HTMLElement).getByLabelText(label), { target: { value } })
+
+guardWording(20, '.mood-label, .chip, .mood-btn')
 
 describe('Transactions screen', () => {
   it('lists transactions newest first with resolved values', async () => {

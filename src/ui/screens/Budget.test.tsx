@@ -7,6 +7,7 @@ import { saveAllocation } from '../../budget/allocations'
 import { formatBp, formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
 import { spoken } from '../../test/spoken'
+import { guardWording } from '../../test/wording'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']
@@ -45,6 +46,8 @@ const outsideGroup = async (): Promise<HTMLElement> => {
 const ready = async () => { await screen.findByRole('heading', { name: 'November 2026' }); await waitFor(() => expect(screen.queryByText(/Loading your budget/)).toBeNull()) }
 
 const fill = (label: RegExp | string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } })
+
+guardWording(10)
 
 describe('Budget screen', () => {
   it('shows each allocation with its euros and its percentage', async () => {

@@ -18,7 +18,7 @@ export default function ReasonChips({ value, onChange, disabled }: Props): React
 
   return (
     <fieldset className="annot-group">
-      <legend>Why did you buy it? <span className="annot-optional">Optional</span></legend>
+      <legend>What was the reason for buying it? <span className="annot-optional">Optional</span></legend>
       {failed && <p role="note">The list of reasons could not be loaded, so any reason you set is left exactly as it is.</p>}
       {reasons === null && value !== null && <RecordedMarker>Reason recorded</RecordedMarker>}
       {!failed && <div className="chip-row">

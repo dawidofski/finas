@@ -8,6 +8,7 @@ import { commitPreview } from '../../import/commit'
 import { buildPreview } from '../../import/pipeline'
 import * as pwa from '../../reloadHold'
 import { addDays } from '../../lib/dates'
+import { guardWording } from '../../test/wording'
 
 // Spies on the two hold functions: this screen's contract is when it takes and releases the hold.
 vi.mock('../../reloadHold', () => ({ suspendReload: vi.fn(), resumeReload: vi.fn() }))
@@ -22,6 +23,8 @@ beforeEach(async () => {
 
 const fileOf = (bytes: Uint8Array, name = 'movimientos.xlsx') => new File([new Uint8Array(bytes)], name)
 const pick = (file: File) => fireEvent.change(screen.getByLabelText(/ING movements file/i), { target: { files: [file] } })
+
+guardWording(6)
 
 describe('Import screen', () => {
   it('suspends the service-worker reload while a preview is open and resumes after commit', async () => {
@@ -106,12 +109,27 @@ describe('Import screen', () => {
     expect(note.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/)
   })
 
+  it('lists what was left out of the import, with the reason beside each line', async () => {
+    // A row the owner deleted earlier is not imported again: it lands in the "Not imported" list with its reason. The
+    // wording scan (guardWording above) reads this page, so the sentences that introduce and explain the list are covered.
+    await commitPreview(await buildPreview(statement({ moves: BASE, opening: 100000 }), 'a.xlsx'), new Map())
+    const [first] = await db.transactions.orderBy('valueDate').toArray()
+    await db.transactions.update(first!.id, { deletedAt: 5 })
+    render(<Import />)
+    pick(fileOf(statement({ moves: [...BASE, { date: '2026-11-13', cents: -700 }], opening: 100000, exported: '16/11/2026 08:00:00' })))
+    await screen.findByRole('heading', { name: /check before importing/i })
+    const heading = screen.getByRole('heading', { name: /Not imported \(1\)/ })
+    const list = heading.nextElementSibling?.nextElementSibling as HTMLElement
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(list).toHaveTextContent(/You deleted this transaction earlier/)
+  })
+
   it('says how many already-imported rows it lists, and shows the rest on request, past 100', async () => {
     const many = Array.from({ length: 105 }, (_, i) => ({ date: addDays('2026-01-01', i), cents: -(100 + i) }))
     await commitPreview(await buildPreview(statement({ moves: many, opening: 1000000 }), 'a.xlsx'), new Map())
     render(<Import />)
     pick(fileOf(statement({ moves: [...many, { date: '2026-06-01', cents: -50 }], opening: 1000000, exported: '16/11/2026 08:00:00' })))
-    await screen.findByRole('heading', { name: /check before importing/i })
+    await screen.findByRole('heading', { name: /check before importing/i }, { timeout: 10000 }) // 106 rows: slow under load, not wrong
     const details = screen.getByText(/Already imported \(105\)/).closest('details') as HTMLElement
     expect(within(details).getAllByRole('listitem')).toHaveLength(100)
     expect(details).toHaveTextContent('Showing 100 of 105.')

@@ -6,6 +6,7 @@ import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { writeAnnotation } from '../../db/annotations'
 import type { TransactionRow } from '../../db/schema'
+import { guardWording } from '../../test/wording'
 
 let seq = 0
 const tx = async (id: string, valueDate: string, ing: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']) => {
@@ -26,6 +27,8 @@ beforeEach(async () => {
 })
 
 afterEach(() => { vi.restoreAllMocks() })
+
+guardWording(5, '.mood-label, .mood-desc, .chip, .mood-btn')
 
 describe('Mood screen', () => {
   it('says nothing was changed only when that is true: a failed whole-day write leaves every row alone', async () => {

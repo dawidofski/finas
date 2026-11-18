@@ -6,6 +6,7 @@ import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { writeAnnotation } from '../../db/annotations'
 import type { TransactionRow } from '../../db/schema'
+import { guardWording } from '../../test/wording'
 
 const TODAY = '2026-11-16'
 let seq = 0
@@ -27,6 +28,8 @@ beforeEach(async () => {
   await db.delete(); await db.open(); await seedDatabase()
 })
 afterEach(() => { vi.restoreAllMocks() })
+
+guardWording(5, '.mood-label, .mood-desc, .chip, .mood-btn')
 
 describe('WorthIt screen', () => {
   it('presents one eligible transaction at a time, oldest first, and writes the answer', async () => {

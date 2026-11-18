@@ -46,7 +46,7 @@ export type RestoreReport = {
 
 const UNCHECKED = [
   'Merge is additive: it adds rows this device does not have and never changes a row it already has. A row that exists here with different content is counted as a conflict and left as it is, in every table (including a soft-delete marker on a transaction).',
-  'Every restore empties the analytics cache, because cached results describe data that may no longer be there; it is rebuilt on demand.',
+  'Every restore clears the figures the app had worked out, as the restored records may differ, and they are worked out again when they are needed.',
   'Storage running out or the browser failing partway: the restore would then be refused whole and nothing changed.',
   'Per-field rules on accounts (fingerprint, label) are applied only when writing.',
 ]

@@ -149,10 +149,9 @@ function RebuildFigures() {
     <>
       <h2>Recalculate figures</h2>
       <p>
-        So that screens open quickly, the app remembers the totals and averages it works out, and works them out again by itself
+        The app remembers the totals and averages it works out, so screens open quickly, and works them out again by itself
         whenever anything they are based on changes. This throws away everything it remembers, so every figure is worked out
-        again from scratch. You should not need it: it is here in case a figure ever looks wrong or out of date, and trying it
-        costs you nothing but a moment.
+        again from scratch. It is here in case a figure ever looks wrong or out of date, and trying it costs nothing but a moment.
       </p>
       <p><strong>Nothing you entered is touched.</strong> Your transactions, notes, tags and everything the app has learned from you stay exactly as they are.</p>
       <button type="button" className="btn" aria-disabled={busy} onClick={() => { void rebuild() }}>

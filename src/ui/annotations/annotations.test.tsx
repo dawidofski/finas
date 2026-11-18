@@ -176,7 +176,7 @@ describe('a failed vocabulary read', () => {
 describe('ReasonChips', () => {
   it('renders purchase reasons as chips in seeded order', async () => {
     render(<ReasonChips value={null} onChange={() => {}} />)
-    const group = await screen.findByRole('group', { name: /Why did you buy it/ })
+    const group = await screen.findByRole('group', { name: /reason for buying it/ })
     const chips = await within(group).findAllByRole('button')
     const seeded = await db.purchaseReasons.orderBy('order').toArray()
     expect(chips.map((c) => c.textContent)).toEqual(seeded.map((r) => r.label))
