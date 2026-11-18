@@ -1,0 +1,212 @@
+import { describe, it, expect } from 'vitest'
+import { addDays } from '../lib/dates'
+import { detectRecurring, MIN_OCCURRENCES, type Detected, type Frequency } from './detect'
+
+// Bank amounts for a spend are negative; the detector reports magnitudes.
+const row = (merchantId: string, valueDate: string, amountCents: number) => ({ merchantId, valueDate, amountCents })
+
+/** `count` payments starting on `start`, `gap` days apart. */
+function series(merchantId: string, gap: number, count: number, amountCents = -1000, start = '2026-01-01') {
+  return Array.from({ length: count }, (_, i) => row(merchantId, addDays(start, i * gap), amountCents))
+}
+
+/** Payments whose consecutive gaps are exactly `gaps`, starting 2026-01-01. */
+function withGaps(merchantId: string, gaps: readonly number[], amountCents = -1000) {
+  let d = '2026-01-01'
+  const out = [row(merchantId, d, amountCents)]
+  for (const g of gaps) { d = addDays(d, g); out.push(row(merchantId, d, amountCents)) }
+  return out
+}
+
+const one = (rows: ReturnType<typeof series>): Detected => {
+  const r = detectRecurring(rows)
+  expect(r).toHaveLength(1)
+  return r[0] as Detected
+}
+
+describe('detectRecurring', () => {
+  it('finds a monthly payment from its gaps and says when the next is expected', () => {
+    // 15 Jan -> 14 Feb (30 d: 16 days left in Jan + 14) -> 16 Mar (30 d: Feb has 28) -> 15 Apr (30 d).
+    // Median gap 30, so next = 15 Apr + 30 = 15 May.
+    const d = one([
+      row('netflix', '2026-01-15', -1299), row('netflix', '2026-02-14', -1299),
+      row('netflix', '2026-03-16', -1299), row('netflix', '2026-04-15', -1299),
+    ])
+    expect(d).toMatchObject({
+      merchantId: 'netflix', amountCents: 1299, frequency: 'monthly', occurrences: 4,
+      lastSeenDate: '2026-04-15', expectedNextDate: '2026-05-15', amountChanged: null,
+    })
+  })
+
+  it('reports the amount as a positive magnitude whichever sign the bank used', () => {
+    expect(one(series('m', 30, 3, -1299)).amountCents).toBe(1299)
+    expect(one(series('m', 30, 3, 1299)).amountCents).toBe(1299)
+  })
+
+  it('does not report a merchant paid only twice', () => {
+    expect(MIN_OCCURRENCES).toBe(3)
+    expect(detectRecurring(series('m', 30, 2))).toEqual([])
+    expect(detectRecurring(series('m', 30, 0))).toEqual([])
+    expect(detectRecurring(series('m', 30, 3))).toHaveLength(1)
+  })
+
+  it('keeps two different amounts at one merchant as two payments', () => {
+    const rows = [...series('shop', 30, 3, -1000), ...series('shop', 30, 3, -5000)]
+    const r = detectRecurring(rows)
+    expect(r.map((d) => d.amountCents)).toEqual([1000, 5000])
+    expect(r.every((d) => d.occurrences === 3 && d.frequency === 'monthly')).toBe(true)
+  })
+
+  it('does not report two different amounts that are only two payments each', () => {
+    expect(detectRecurring([...series('shop', 30, 2, -1000), ...series('shop', 30, 2, -5000)])).toEqual([])
+  })
+
+  it('never mixes merchants', () => {
+    expect(detectRecurring([...series('a', 30, 2), ...series('b', 30, 2)])).toEqual([])
+  })
+
+  it('calls irregular gaps irregular and gives no expected date', () => {
+    // gaps 12, 50, 12: median 12, in no band.
+    const d = one(withGaps('m', [12, 50, 12]))
+    expect(d.frequency).toBe('irregular')
+    expect(d.expectedNextDate).toBeNull()
+    expect(d.occurrences).toBe(4)
+  })
+
+  it('treats a small price change as the same payment and reports the change', () => {
+    const d = one([...series('m', 30, 3, -1000), row('m', addDays('2026-01-01', 90), -1050)])
+    expect(d.occurrences).toBe(4)
+    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1050 })
+  })
+
+  it('reports no change when every payment is the same amount', () => {
+    expect(one(series('m', 30, 4, -1000)).amountChanged).toBeNull()
+  })
+
+  it('reports the earlier typical amount as the median of the payments before the latest', () => {
+    // earlier 1000, 1040, 1000 -> median 1000; latest 1060
+    const d = one([
+      row('m', '2026-01-01', -1000), row('m', '2026-01-31', -1040),
+      row('m', '2026-03-02', -1000), row('m', '2026-04-01', -1060),
+    ])
+    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1060 })
+  })
+
+  it('scores a steadier payment above an uneven one with the same count', () => {
+    const steady = one(withGaps('m', [30, 30, 30, 30]))
+    const uneven = one(withGaps('m', [28, 33, 30, 27]))
+    expect(steady.occurrences).toBe(uneven.occurrences)
+    expect(steady.matchScoreBp).toBeGreaterThan(uneven.matchScoreBp)
+  })
+
+  it('never lowers the score for more occurrences at the same spread', () => {
+    let prev = -1
+    for (let n = MIN_OCCURRENCES; n <= 24; n++) {
+      const s = one(series('m', 30, n)).matchScoreBp
+      expect(s).toBeGreaterThanOrEqual(prev)
+      prev = s
+    }
+    expect(one(series('m', 30, 12)).matchScoreBp).toBeGreaterThan(one(series('m', 30, 3)).matchScoreBp)
+  })
+
+  it('never raises the score for a wider spread of gaps', () => {
+    let prev = 10001
+    for (const dev of [0, 1, 2, 3, 5, 8]) {
+      const s = one(withGaps('m', [30 - dev, 30 + dev, 30, 30, 30])).matchScoreBp
+      expect(s).toBeLessThanOrEqual(prev)
+      prev = s
+    }
+    expect(one(withGaps('m', [30, 30, 30, 30, 30])).matchScoreBp)
+      .toBeGreaterThan(one(withGaps('m', [22, 38, 30, 30, 30])).matchScoreBp)
+  })
+
+  it('scores an integer from 0 to 10000 basis points', () => {
+    for (const rows of [series('m', 30, 3), series('m', 7, 40), withGaps('m', [5, 400, 1, 90])]) {
+      const s = one(rows).matchScoreBp
+      expect(Number.isInteger(s)).toBe(true)
+      expect(s).toBeGreaterThanOrEqual(0)
+      expect(s).toBeLessThanOrEqual(10000)
+    }
+  })
+
+  it('gives the same answer for the same rows in any order', () => {
+    const rows = [
+      ...series('a', 30, 4, -1000), ...series('a', 30, 3, -5000), ...series('b', 7, 5, -250),
+      row('a', '2026-05-01', -1040),
+    ]
+    const forward = detectRecurring(rows)
+    expect(forward.length).toBeGreaterThan(1)
+    expect(detectRecurring([...rows].reverse())).toEqual(forward)
+    const shuffled = rows.map((r, i) => ({ r, k: (i * 7) % rows.length })).sort((x, y) => x.k - y.k).map((x) => x.r)
+    expect(detectRecurring(shuffled)).toEqual(forward)
+  })
+
+  it('does not modify its input', () => {
+    const rows = series('m', 30, 4).reverse()
+    const copy = rows.map((r) => ({ ...r }))
+    detectRecurring(rows)
+    expect(rows).toEqual(copy)
+  })
+})
+
+describe('frequency band edges (median gap in days)', () => {
+  // 3 payments with both gaps = g have median gap g; expected next is last + g.
+  const cases: [number, Frequency][] = [
+    [4, 'irregular'], [5, 'weekly'], [9, 'weekly'], [10, 'irregular'],
+    [25, 'irregular'], [26, 'monthly'], [35, 'monthly'], [36, 'irregular'],
+    [79, 'irregular'], [80, 'quarterly'], [100, 'quarterly'], [101, 'irregular'],
+    [349, 'irregular'], [350, 'annual'], [380, 'annual'], [381, 'irregular'],
+  ]
+  for (const [gap, freq] of cases) {
+    it(`a ${gap}-day gap is ${freq}`, () => {
+      const d = one(series('m', gap, 3))
+      expect(d.frequency).toBe(freq)
+      const last = addDays('2026-01-01', gap * 2)
+      expect(d.lastSeenDate).toBe(last)
+      expect(d.expectedNextDate).toBe(freq === 'irregular' ? null : addDays(last, gap))
+    })
+  }
+
+  it('takes the median gap, not the mean: one long outlier does not make a monthly payment irregular', () => {
+    // gaps 30, 30, 30, 200: mean 72, median 30
+    expect(one(withGaps('m', [30, 30, 30, 200])).frequency).toBe('monthly')
+  })
+
+  it('expects the next payment at the last seen date plus the median gap', () => {
+    // 5 Jan + 3 weeks = 26 Jan; next = 26 Jan + 7 = 2 Feb
+    const d = one(series('m', 7, 4, -1000, '2026-01-05'))
+    expect(d.lastSeenDate).toBe('2026-01-26')
+    expect(d.expectedNextDate).toBe('2026-02-02')
+  })
+})
+
+describe('amount clustering edges', () => {
+  // an amount joins a cluster when within max(100 cents, 5% of the cluster median), integer arithmetic
+  const joined = (base: number, other: number) => {
+    const r = detectRecurring([...series('m', 30, 3, -base), row('m', addDays('2026-01-01', 90), -other)])
+    return r.length === 1 && r[0]?.occurrences === 4
+  }
+
+  it('joins an amount exactly 100 cents from a 10,00 payment, not 101', () => {
+    expect(joined(1000, 1100)).toBe(true)
+    expect(joined(1000, 1101)).toBe(false)
+    expect(joined(1000, 900)).toBe(true)
+    expect(joined(1000, 899)).toBe(false)
+  })
+
+  it('uses 5% of the median once that exceeds 100 cents: 40,00 allows 200', () => {
+    expect(joined(4000, 4200)).toBe(true)
+    expect(joined(4000, 4201)).toBe(false)
+  })
+
+  it('reports the tolerance used for the cluster', () => {
+    expect(one(series('m', 30, 3, -1000)).toleranceCents).toBe(100)
+    expect(one(series('m', 30, 3, -4000)).toleranceCents).toBe(200)
+  })
+
+  it('a clearly different amount is a separate payment, so a 3-series plus one odd payment stays 3', () => {
+    const r = detectRecurring([...series('m', 30, 3, -1000), row('m', '2026-04-10', -9000)])
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ occurrences: 3, amountCents: 1000 })
+  })
+})
