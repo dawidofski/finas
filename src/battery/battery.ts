@@ -41,7 +41,7 @@ export const isMet = (g: Gate): boolean => g.have >= g.need
 function gate(have: number, need: number, subject: string, unit: string, units: string): Gate {
   const missing = need - have
   const what = have >= need
-    ? `You have enough ${subject}: ${have} where ${need} are needed.`
+    ? `You have enough ${subject}: ${have} where ${need} ${need === 1 ? 'is' : 'are'} needed.`
     : `The app needs ${need} ${subject} before it can look at this. You have ${have}, so ${missing} more ${missing === 1 ? `${unit} is` : `${units} are`} needed.`
   return { have, need, what }
 }
@@ -101,7 +101,10 @@ export const BATTERY: readonly Relationship[] = [
     id: 'small-purchases',
     question: 'How much do your small purchases add up to over a month?',
     test: null, // §12: "Descriptive aggregation, no test". The figure is `smallPurchases` in src/analytics/habits.ts.
-    gates: d => [gate(d.fullMonths, 1, 'complete months of spending', 'month', 'months')],
+    // 'complete month' is singular because `need` here is literally 1: the subject phrase is written
+    // out, not pluralised by the helper, so the author has to match it to the number beside it. The
+    // agreement test below is what catches the next one of these.
+    gates: d => [gate(d.fullMonths, 1, 'complete month of spending', 'month', 'months')],
   },
   {
     id: 'salary-lifestyle',

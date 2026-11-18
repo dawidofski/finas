@@ -149,6 +149,36 @@ describe('the declared battery', () => {
     // why it needs the separate assertion below instead.
   })
 
+  it('never writes a plural noun against the number one, in any gate of any relationship', () => {
+    // Found by reading the deployed page, not by any test here: one gate read "The app needs 1 complete
+    // months of spending", and its met wording read "1 are needed". `gate()` pluralises the trailing
+    // unit from `missing`, but the SUBJECT is a written-out phrase the author supplies, so nothing made
+    // it agree with the `need` beside it. Only a gate whose need is 1 can show the fault, and exactly one
+    // gate has need 1 — which is why nine others reading correctly proved nothing about the tenth.
+    const strings: string[] = []
+    for (const r of BATTERY) {
+      for (const d of [ZERO, { ...ZERO, ...AT_MIN[r.id] }]) for (const g of r.gates(d)) strings.push(g.what)
+    }
+    expect(strings.length).toBeGreaterThanOrEqual(20) // a scan of nothing proves nothing
+    // Within one sentence of a bare "1", a plural noun or a plural verb. `[^.]*?` keeps the search inside
+    // the sentence the "1" belongs to, so "needs 1 complete month… so 1 more month is needed" does not
+    // match itself across the full stop. `\w[^aeiou]s` wants a consonant before the s, which is what lets
+    // "is" through while catching "months". My first attempt checked only the word straight after the
+    // number and missed the real fault, because the adjective sat between them.
+    // Known limitation, stated rather than discovered later: a future gate with need 1 whose subject
+    // legitimately contains a plural ("1 month with at least 5 purchases") would trip this. That is a
+    // false positive worth having — it makes the author look at the agreement instead of guessing.
+    const disagrees = (s: string): boolean => /\b1 [^.]*?\w[^aeiou]s\b/.test(s) || /\b1 (are|were)\b/.test(s)
+    // The detector must see both faults it exists to forbid, and leave correct wording alone.
+    expect(disagrees('The app needs 1 complete months of spending')).toBe(true)
+    expect(disagrees('1 where 1 are needed')).toBe(true)
+    expect(disagrees('The app needs 1 complete month of spending')).toBe(false)
+    expect(disagrees('You have 0, so 1 more month is needed')).toBe(false)
+    expect(disagrees('You have enough complete month of spending: 1 where 1 is needed.')).toBe(false)
+    expect(disagrees('The app needs 2 moods that each have at least 10 purchases')).toBe(false)
+    expect(strings.filter(disagrees)).toEqual([])
+  })
+
   it('declares for each relationship the statistic that actually runs, and no test where there is none', () => {
     const statsSource = readFileSync(resolve(SRC, 'battery/stats.ts'), 'utf8')
     expect(statsSource).toMatch(/export function spearmanRhoBp/) // the read is not vacuous
