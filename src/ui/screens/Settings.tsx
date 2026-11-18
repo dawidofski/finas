@@ -5,7 +5,9 @@ import { db } from '../../db/db'
 import { renameAccount, setStoreLast4 } from '../../db/privacy'
 import { getSettings } from '../../db/seed'
 import type { AccountRow } from '../../db/schema'
+import { encryptBundle } from '../../db/encryptedBackup'
 import { epochMsToIso } from '../../lib/dates'
+import { newPassphraseProblem, PASSPHRASE_MESSAGES, PASSPHRASE_MIN_CHARS } from '../../lib/passphrase'
 
 type Mode = 'merge' | 'replace'
 
@@ -204,6 +206,92 @@ function ReportTable({ report }: { report: RestoreReport }) {
 /** How long the backup's object URL stays valid after the click that starts the download. */
 const REVOKE_DELAY_MS = 5000
 
+/** Hands the owner a file through the browser's download, then lets the object URL go. */
+function offerFile(text: string, fileName: string) {
+  const blob = new Blob([text], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  // Not synchronously: some engines start the download after click() returns, and a revoked URL gives an empty file.
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
+}
+
+/**
+ * The encrypted download. The two passphrase fields are uncontrolled on purpose: the text is read once, at submit, from the
+ * field itself, and both fields are emptied in `finally`, so it is never in React state, never in the page's data and never in
+ * a preview. They carry no `name`, so a form submitted without script could not put them into the address. The warning above
+ * them is shown every time, which is why no "has seen it" flag is stored anywhere. `aria-disabled` plus a guard rather than
+ * `disabled`, like RebuildFigures: a disabled button that has focus drops it to the page.
+ */
+function EncryptedBackup() {
+  const firstRef = useRef<HTMLInputElement>(null)
+  const secondRef = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const firstId = useId()
+  const secondId = useId()
+  const hintId = useId()
+  const problemId = useId()
+
+  async function submit() {
+    if (busy) return
+    setProblem(null); setFailed(false); setSaved(false)
+    const first = firstRef.current?.value ?? ''
+    const second = secondRef.current?.value ?? ''
+    const found = newPassphraseProblem(first, second)
+    if (found !== null) {
+      setProblem(PASSPHRASE_MESSAGES[found])
+      ;(found === 'mismatch' ? secondRef : firstRef).current?.focus()
+      return
+    }
+    setBusy(true)
+    try {
+      offerFile(await encryptBundle(await exportBundle(), first), `finance-backup-${today()}-encrypted.json`)
+      setSaved(true)
+    } catch {
+      setFailed(true)
+    } finally {
+      if (firstRef.current) firstRef.current.value = ''
+      if (secondRef.current) secondRef.current.value = ''
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); void submit() }}>
+      <h3>Encrypted backup</h3>
+      <div className="notice notice-warn" role="note">
+        <p>
+          This backup opens only with the passphrase you choose now. The app does not keep your passphrase and cannot recover it.
+          If you forget it, nobody can open that backup, not you and not the app.
+        </p>
+      </div>
+      <p id={hintId}>Use at least {PASSPHRASE_MIN_CHARS} characters. Several unrelated words are easy to remember and hard to guess.</p>
+      <p><label htmlFor={firstId}>Passphrase</label></p>
+      <input id={firstId} ref={firstRef} type="password" autoComplete="new-password" aria-describedby={problem ? `${hintId} ${problemId}` : hintId}
+             aria-invalid={problem !== null} />
+      <p><label htmlFor={secondId}>Type the passphrase again</label></p>
+      <input id={secondId} ref={secondRef} type="password" autoComplete="new-password" aria-invalid={problem !== null} />
+      <div className="actions">
+        <button type="submit" className="btn btn-primary" aria-disabled={busy}>
+          {busy ? 'Making the backup…' : 'Download encrypted backup'}
+        </button>
+      </div>
+      {problem && <div id={problemId} role="alert" className="notice notice-refusal"><p>{problem}</p></div>}
+      {failed && (
+        <div role="alert" className="notice notice-refusal">
+          <p>The encrypted backup could not be created. Nothing on this device was changed. Try again, and if it keeps failing, reload the page first.</p>
+        </div>
+      )}
+      {saved && <p role="status">Your encrypted backup was downloaded. Keep the passphrase somewhere safe: without it the file cannot be opened.</p>}
+    </form>
+  )
+}
+
 export default function Settings(): ReactNode {
   const [mode, setMode] = useState<Mode>('merge')
   const [busy, setBusy] = useState(false)
@@ -225,14 +313,7 @@ export default function Settings(): ReactNode {
     setExportFailed(false)
     try {
       const bundle = await exportBundle()
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `finance-backup-${today()}.json`
-      a.click()
-      // Not synchronously: some engines start the download after click() returns, and a revoked URL gives an empty file.
-      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
+      offerFile(JSON.stringify(bundle, null, 2), `finance-backup-${today()}.json`)
     } catch {
       setExportFailed(true)
     }
@@ -287,15 +368,18 @@ export default function Settings(): ReactNode {
       <div className="notice" role="note">
         <p>
           Your data lives only in this browser, on this device, and browser storage is <strong>not encrypted</strong>.
-          Clearing site data or losing the device destroys it. A downloaded backup is a plain, readable file: keep it somewhere private.
+          Clearing site data or losing the device destroys it. A plain backup is a readable file, so keep it somewhere private, or download the encrypted backup instead.
         </p>
       </div>
 
       <Accounts />
 
       <h2>Back up</h2>
-      <p>Download everything as one JSON file.</p>
-      <button type="button" className="btn btn-primary" onClick={() => { void download() }}>Download backup</button>
+      <EncryptedBackup />
+
+      <h3>Plain backup</h3>
+      <p>Download everything as one JSON file. It is not encrypted: anyone who gets this file can read it, so keep it somewhere private.</p>
+      <button type="button" className="btn" onClick={() => { void download() }}>Download plain backup (not encrypted)</button>
       {exportFailed && (
         <div role="alert" className="notice notice-refusal">
           <p>The backup could not be created. Nothing on this device was changed. Try again, and if it keeps failing, reload the page first.</p>

@@ -7,6 +7,10 @@ import { db } from '../../db/db'
 import { seedDatabase, getSettings } from '../../db/seed'
 import * as backup from '../../db/backup'
 import { guardWording } from '../../test/wording'
+import { appSpoken } from '../../test/spoken'
+import { violations } from '../../test/bannedWords'
+import { readBackupFile, openEncryptedBackup } from '../../db/backupFile'
+import { PASSPHRASE_MESSAGES } from '../../lib/passphrase'
 
 // Wrap the real engine in spies: the tests exercise real inspect/restore against the real (fake-indexeddb) database.
 vi.mock('../../db/backup', async importOriginal => {
@@ -41,7 +45,7 @@ async function validBundleText() {
   return JSON.stringify(await backup.exportBundle())
 }
 
-guardWording(10)
+guardWording(30)
 
 describe('Settings backup', () => {
   it('downloads a bundle whose filename carries the date, and revokes the object URL after the click', async () => {
@@ -66,7 +70,7 @@ describe('Settings backup', () => {
       return realSetTimeout(fn, ms, ...rest)
     }) as unknown as typeof setTimeout)
     render(<Settings />)
-    click(/download backup/i)
+    click(/download plain backup/i)
     await waitFor(() => expect(deferred).toHaveLength(1))
     expect(revoke).not.toHaveBeenCalled()
     expect(events).toEqual(['create', 'click'])
@@ -83,7 +87,7 @@ describe('Settings backup', () => {
   it('tells the owner in a sentence when the backup cannot be created, without developer wording', async () => {
     vi.mocked(backup.exportBundle).mockRejectedValueOnce(new Error('IDBKeyRange: DataError at table transactions'))
     render(<Settings />)
-    click(/download backup/i)
+    click(/download plain backup/i)
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/backup could not be created/i)
     expect(alert).not.toHaveTextContent(/IDB|DataError|transactions/)
@@ -218,6 +222,183 @@ describe('Settings backup', () => {
     expect(cells[1]).toBe('0') // new rows
     expect(cells[2]).toBe('1') // conflicts, local row kept
   })
+})
+
+// A passphrase made of plain words, obviously not anyone's real one.
+const PASS = 'quokka lantern pebble tuesday'
+const field = (name: RegExp) => screen.getByLabelText(name) as HTMLInputElement
+const type = (name: RegExp, value: string) => fireEvent.change(field(name), { target: { value } })
+const PASS_LABEL = /^passphrase$/i
+const AGAIN_LABEL = /type the passphrase again/i
+const DOWNLOAD_ENCRYPTED = /download encrypted backup/i
+
+/** Stubs the download so nothing is written to disk, and records what was offered. */
+function captureDownload() {
+  const seen: { blob?: Blob; name?: string; created: number } = { created: 0 }
+  Object.defineProperty(URL, 'createObjectURL', { value: (b: Blob) => { seen.blob = b; seen.created++; return 'blob:fake-enc' }, configurable: true, writable: true })
+  Object.defineProperty(URL, 'revokeObjectURL', { value: () => {}, configurable: true, writable: true })
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { seen.name = this.download })
+  return seen
+}
+
+describe('Settings encrypted backup download', () => {
+  it('says before any download that a forgotten passphrase means nobody can open the backup', () => {
+    render(<Settings />)
+    const noteEl = screen.getAllByRole('note').find(n => /forget/i.test(n.textContent ?? ''))!
+    const warning = noteEl.textContent ?? ''
+    expect(warning).toMatch(/opens only with the passphrase you choose now/i)
+    expect(warning).toMatch(/does not keep your passphrase and cannot recover it/i)
+    expect(warning).toMatch(/nobody can open that backup/i)
+    // Above the fields, and shown with no download behind it: there is no stored "already seen it" flag to hide it.
+    expect(noteEl.compareDocumentPosition(field(PASS_LABEL)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(localStorage.length + sessionStorage.length).toBe(0)
+  })
+
+  it('asks for the passphrase twice and downloads nothing until both match and are long enough', async () => {
+    const seen = captureDownload()
+    render(<Settings />)
+    const attempts: Array<[string, string, 'too-short' | 'mismatch' | 'edge-space']> = [
+      ['short one', 'short one', 'too-short'],
+      [PASS, `${PASS} x`, 'mismatch'],
+      [` ${PASS}`, ` ${PASS}`, 'edge-space'],
+    ]
+    for (const [a, b, why] of attempts) {
+      type(PASS_LABEL, a); type(AGAIN_LABEL, b)
+      click(DOWNLOAD_ENCRYPTED)
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(PASSPHRASE_MESSAGES[why]))
+      expect(field(PASS_LABEL)).toHaveAttribute('aria-invalid', 'true')
+      expect(document.activeElement).toBe(why === 'mismatch' ? field(AGAIN_LABEL) : field(PASS_LABEL))
+      expect(backup.exportBundle).not.toHaveBeenCalled()
+      expect(seen.created).toBe(0)
+    }
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    expect(await screen.findByRole('status')).toHaveTextContent(/encrypted backup was downloaded/i)
+    expect(seen.created).toBe(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  }, 20000)
+
+  it('downloads an encrypted file that opens with the passphrase and restores to the same data', async () => {
+    const seen = captureDownload()
+    render(<Settings />)
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    await screen.findByRole('status')
+    expect(screen.getAllByRole('note').some(n => /nobody can open that backup/i.test(n.textContent ?? ''))).toBe(true) // still said after a download: every time, no flag
+    expect(seen.name).toMatch(/^finance-backup-\d{4}-\d{2}-\d{2}-encrypted\.json$/)
+    const text = await readBlob(seen.blob!)
+    expect(text).not.toContain(PASS)
+    expect(text).not.toContain('"schemaVersion"') // nothing but the envelope header is in clear
+    const file = readBackupFile(text)
+    expect(file.kind).toBe('encrypted')
+    if (file.kind !== 'encrypted') return
+    const opened = await openEncryptedBackup(file.envelope, PASS)
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const bundle = opened.bundle as { tables: Record<string, unknown[]> }
+    const now = await backup.exportBundle()
+    expect(bundle.tables).toEqual(now.tables)
+    // And it is a bundle the existing restore accepts: empty a table, replace from the opened file, the rows are back.
+    const before = await db.categories.count()
+    expect(before).toBeGreaterThan(0)
+    await db.categories.clear()
+    const report = await backup.restoreBundle(opened.bundle, 'replace')
+    expect(report.ok).toBe(true)
+    expect(await db.categories.count()).toBe(before)
+  }, 20000)
+
+  it('still offers the plain backup, labelled as not encrypted, with its warning', () => {
+    render(<Settings />)
+    const plain = screen.getByRole('button', { name: /download plain backup \(not encrypted\)/i })
+    expect((plain.previousElementSibling as HTMLElement).textContent).toMatch(/not encrypted: anyone who gets this file can read it/i)
+    // The encrypted one is the primary button; the storage note names it.
+    expect(screen.getByRole('button', { name: DOWNLOAD_ENCRYPTED })).toHaveClass('btn-primary')
+    expect(plain).not.toHaveClass('btn-primary')
+    expect(screen.getAllByRole('note')[0]).toHaveTextContent(/download the encrypted backup instead/i)
+  })
+
+  it('leaves no trace of the passphrase in storage, the URL, the console or the fields afterwards', async () => {
+    const seen = captureDownload()
+    const spies = (['log', 'info', 'warn', 'error'] as const).map(k => vi.spyOn(console, k).mockImplementation(() => {}))
+    render(<Settings />)
+    expect(field(PASS_LABEL)).not.toHaveAttribute('name')
+    expect(field(AGAIN_LABEL)).not.toHaveAttribute('name')
+    expect(field(PASS_LABEL)).toHaveAttribute('type', 'password')
+    expect(field(PASS_LABEL)).toHaveAttribute('autocomplete', 'new-password')
+    expect(field(AGAIN_LABEL)).toHaveAttribute('autocomplete', 'new-password')
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    await screen.findByRole('status')
+    expect(seen.created).toBe(1)
+    expect(field(PASS_LABEL).value).toBe('')
+    expect(field(AGAIN_LABEL).value).toBe('')
+    expect(field(PASS_LABEL)).not.toHaveAttribute('name')
+    expect(field(AGAIN_LABEL)).not.toHaveAttribute('name')
+    const stored = JSON.stringify([
+      await Promise.all(db.tables.map(async t => [t.name, await t.toArray()])),
+      { ...localStorage }, { ...sessionStorage },
+    ])
+    expect(stored.length).toBeGreaterThan(1000) // a search over an empty dump would pass on anything
+    expect(stored).not.toContain('quokka')
+    expect(location.href).not.toContain('quokka')
+    expect(document.body.innerHTML).not.toContain('quokka')
+    for (const spy of spies) expect(JSON.stringify(spy.mock.calls)).not.toContain('quokka')
+  }, 20000)
+
+  it('keeps focus and is not left busy when encryption fails', async () => {
+    const seen = captureDownload()
+    vi.mocked(backup.exportBundle).mockRejectedValueOnce(new Error('IDBKeyRange: DataError at table transactions'))
+    render(<Settings />)
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    const button = () => screen.getByRole('button', { name: /download encrypted backup|making the backup/i })
+    button().focus()
+    click(DOWNLOAD_ENCRYPTED)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/encrypted backup could not be created.*Nothing on this device was changed/)
+    expect(alert).not.toHaveTextContent(/IDB|DataError|transactions/)
+    await waitFor(() => expect(button()).toHaveAttribute('aria-disabled', 'false'))
+    expect(document.activeElement).toBe(button())
+    expect(field(PASS_LABEL).value).toBe('') // cleared even on failure
+    expect(seen.created).toBe(0)
+    // Usable again: the same controls work without reloading.
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    await screen.findByRole('status')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(seen.created).toBe(1)
+  }, 20000)
+
+  it('uses no causal, shaming or jargon wording in the new copy, and none of the engine terms', async () => {
+    captureDownload()
+    const states: Record<string, string> = {}
+    const say = () => appSpoken(document.body)
+    render(<Settings />)
+    states['form and warning'] = say()
+    type(PASS_LABEL, 'short'); type(AGAIN_LABEL, 'short')
+    click(DOWNLOAD_ENCRYPTED)
+    await screen.findByRole('alert')
+    states['too short'] = say()
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, `${PASS}!`)
+    click(DOWNLOAD_ENCRYPTED)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(PASSPHRASE_MESSAGES.mismatch))
+    states['mismatch'] = say()
+    vi.mocked(backup.exportBundle).mockRejectedValueOnce(new Error('boom'))
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not be created/))
+    await waitFor(() => expect(screen.getByRole('button', { name: DOWNLOAD_ENCRYPTED })).toHaveAttribute('aria-disabled', 'false'))
+    states['failed'] = say()
+    type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
+    click(DOWNLOAD_ENCRYPTED)
+    await screen.findByRole('status')
+    states['downloaded'] = say()
+    expect(Object.keys(states)).toHaveLength(5)
+    for (const [state, said] of Object.entries(states)) {
+      expect(said, state).toMatch(/passphrase/i) // a scan over a page without the new copy proves nothing
+      expect(violations(said), state).toEqual([])
+      expect(said, state).not.toMatch(/\b(AES|PBKDF2|salt|IV|decrypt\w*|authentication tag)\b/i)
+    }
+  }, 20000)
 })
 
 describe('Settings accounts and privacy (spec 39.1, 14.1)', () => {
