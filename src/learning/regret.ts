@@ -58,6 +58,24 @@ export async function regretClusters(month: string | null): Promise<RegretCluste
   const candidates: TransactionRow[] = month === null
     ? await annotatedTransactions((a) => a.worthwhile !== null)
     : await liveTransactionsBetween(month, month)
+  return (await clustersOf(candidates)).filter((c) => c.regretted > 0)
+}
+
+/**
+ * The same clusters over a whole window of months, `first` to `last` inclusive, counted ONCE over the window's spends, and
+ * with the clusters that have no regret KEPT. `regretClusters` drops a cluster with no regret, answered spends and all, so
+ * summing its monthly results undercounts: 5 answered and none regretted in one month, then 1 answered and 1 regretted in
+ * the next, sums to 1 of 1 where the truth is 1 of 6. A caller that compares rates over a window (the Money Score) needs
+ * the true denominator, and needs a pattern that fell to no regret to be present rather than absent. The Intelligence
+ * screen's own reading is `regretClusters`, unchanged. Bounded by the window's date range (§39.4).
+ */
+export async function regretClustersBetween(first: string, last: string): Promise<RegretCluster[]> {
+  if (!MONTH_RE.test(first)) throw new Error(`Invalid month, expected YYYY-MM: ${first}`)
+  if (!MONTH_RE.test(last)) throw new Error(`Invalid month, expected YYYY-MM: ${last}`)
+  return clustersOf(await liveTransactionsBetween(first, last))
+}
+
+async function clustersOf(candidates: TransactionRow[]): Promise<RegretCluster[]> {
   const bank = new Map(candidates.map((t) => [t.id, t]))
   const rows = await resolveMany(candidates)
 
@@ -100,6 +118,5 @@ export async function regretClusters(month: string | null): Promise<RegretCluste
 
   const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
   return [...clusters.values()]
-    .filter((c) => c.regretted > 0)
     .sort((a, b) => b.regretted - a.regretted || b.cents - a.cents || cmp(a.key, b.key) || cmp(a.by, b.by))
 }

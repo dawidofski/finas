@@ -5,7 +5,7 @@ import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { resolveMany, type ResolvedTransaction } from '../db/annotations'
 import { loadCategoryKinds, worthAnnotating } from '../analysis/queues'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
-import { regretClusters } from './regret'
+import { regretClusters, regretClustersBetween } from './regret'
 
 // 2026-11-16 is a Monday; 2026-11-17 a Tuesday; 2026-11-21 a Saturday; 2026-12-05 a Saturday.
 const tx = (id: string, over: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -211,5 +211,33 @@ describe('regretClusters', () => {
     await db.annotations.bulkAdd([ann('a', { worthwhile: true, moodId: 'mood.happy' }), ann('b', { worthwhile: null })])
     expect(await regretClusters('2026-11')).toEqual([])
     expect(await regretClusters(null)).toEqual([])
+  })
+})
+
+describe('regretClustersBetween', () => {
+  const sad = { moodId: 'mood.sad' }
+  it('counts answered spends once over the whole window, so a month with no regret still adds to the denominator', async () => {
+    // October: five answered, none regretted. November: one answered, regretted. Summing the monthly readings gives 1 of 1;
+    // the window's truth is 1 of 6.
+    const oct = ['a', 'b', 'c', 'd', 'e'].map((id) => tx(id, { valueDate: '2026-10-05' }))
+    await db.transactions.bulkAdd([...oct, tx('f', { valueDate: '2026-11-16' })])
+    await db.annotations.bulkAdd([...oct.map((t) => ann(t.id, { worthwhile: true, ...sad })), ann('f', { worthwhile: false, ...sad })])
+
+    expect(find(await regretClusters('2026-10'), 'mood', 'mood.sad')).toBeUndefined() // the monthly reading drops it, and its total
+    expect(find(await regretClusters('2026-11'), 'mood', 'mood.sad')).toMatchObject({ regretted: 1, total: 1 })
+    expect(find(await regretClustersBetween('2026-10', '2026-11'), 'mood', 'mood.sad')).toEqual(
+      { by: 'mood', key: 'mood.sad', label: 'Sad', regretted: 1, total: 6, cents: 1000 })
+  })
+
+  it('keeps a cluster with no regret, and leaves out months outside the window', async () => {
+    await db.transactions.bulkAdd([tx('a', { valueDate: '2026-10-05' }), tx('b', { valueDate: '2026-10-06' }), tx('z', { valueDate: '2026-09-30' })])
+    await db.annotations.bulkAdd([ann('a', { worthwhile: true, ...sad }), ann('b', { worthwhile: true, ...sad }), ann('z', { worthwhile: false, ...sad })])
+    expect(find(await regretClustersBetween('2026-10', '2026-10'), 'mood', 'mood.sad')).toMatchObject({ regretted: 0, total: 2 })
+    expect(await regretClusters('2026-10')).toEqual([])
+  })
+
+  it('refuses a month that is not one', async () => {
+    await expect(regretClustersBetween('2026-13', '2026-12')).rejects.toThrow(/Invalid month/)
+    await expect(regretClustersBetween('2026-01', 'latest')).rejects.toThrow(/Invalid month/)
   })
 })

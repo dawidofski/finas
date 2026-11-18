@@ -197,10 +197,9 @@ export function goalProgress(goals: readonly SavingsGoalRow[]): Component {
  * answered spends (a rate from 1 or 2 spends is not a pattern). The five dimensions overlap (one spend sits in up to five
  * clusters), so the clusters are not independent evidence; fewer than 2 is too few to call a pattern.
  *
- * Bias, stated because the data cannot remove it: `regretClusters` returns only clusters with at least one regret, so a
- * cluster can count as improved only while it still has some. One whose regret fell to none drops out of the later
- * period, and absence cannot be told from no purchases there, so it is not compared. The omission falls entirely on the
- * best outcomes.
+ * The caller supplies each window with its zero-regret clusters kept (`regretClustersBetween`), so a pattern whose regret
+ * fell to none is present in the later window with its answered spends and counts as a fall. A pattern with no answered
+ * spends in a period is absent from it and has nothing to compare, so it is left out.
  */
 export function learning(early: readonly RegretCluster[], late: readonly RegretCluster[]): Component {
   const lateByKey = new Map(late.map((c) => [JSON.stringify([c.by, c.key]), c]))
@@ -221,6 +220,6 @@ export function learning(early: readonly RegretCluster[], late: readonly RegretC
   return {
     kind: 'measured',
     score: wholePoints(fell, shared),
-    inputs: `In ${fell} of ${plural(shared, 'pattern')}, a smaller share of your spends was marked not worth it in the later period than in the earlier one. Only patterns with at least ${MIN_ANSWERED_SPENDS} answered spends in both periods are compared. Patterns overlap (one spend can belong to several), so they are not independent. A pattern whose regret fell to none no longer appears, so it is left out: this leaves out your best results.`,
+    inputs: `In ${fell} of ${plural(shared, 'pattern')}, a smaller share of your spends was marked not worth it in the later period than in the earlier one. Only patterns with at least ${MIN_ANSWERED_SPENDS} answered spends in both periods are compared. Patterns overlap (one spend can belong to several), so they are not independent. A pattern with no answered spends in one of the periods has nothing to compare, so it is left out.`,
   }
 }

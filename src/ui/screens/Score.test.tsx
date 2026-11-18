@@ -8,17 +8,20 @@ import { moneyScore, WEIGHTS, type ComponentId } from '../../score/score'
 import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../../test/bannedWords'
 import { transactionRowReads } from '../../test/reads'
 import type { TransactionRow } from '../../db/schema'
-import { learning, savingsConsistency, spendingAwareness } from '../../score/components'
-import { regretClusters } from '../../learning/regret'
+import type { MonthPoint } from '../../analytics/series'
+import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness } from '../../score/components'
+import { regretClustersBetween } from '../../learning/regret'
+import { ROUTES } from '../routes'
 
 // Pass-throughs that remember how they were called, so the windows the screen asks about can be read back.
 vi.mock('../../score/components', async (original) => {
   const real = await original<typeof import('../../score/components')>()
-  return { ...real, spendingAwareness: vi.fn(real.spendingAwareness), learning: vi.fn(real.learning), savingsConsistency: vi.fn(real.savingsConsistency) }
+  return { ...real, spendingAwareness: vi.fn(real.spendingAwareness), learning: vi.fn(real.learning), savingsConsistency: vi.fn(real.savingsConsistency),
+    budgetAwareness: vi.fn(real.budgetAwareness), goalProgress: vi.fn(real.goalProgress), improvement: vi.fn(real.improvement) }
 })
 vi.mock('../../learning/regret', async (original) => {
   const real = await original<typeof import('../../learning/regret')>()
-  return { ...real, regretClusters: vi.fn(real.regretClusters) }
+  return { ...real, regretClustersBetween: vi.fn(real.regretClustersBetween) }
 })
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
@@ -80,6 +83,25 @@ async function twoMeasured(): Promise<void> {
   await db.savingsGoals.add({ id: 'g2', name: 'Coche', targetCents: 300000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: null, archived: false })
 }
 
+/**
+ * All six measured, so every measure's own sentences reach the page. The three that need months of history are fed
+ * fabricated inputs through the real functions (their sentences are still the real ones); the other three come from rows.
+ */
+async function allSixMeasured(): Promise<void> {
+  await twoMeasured()
+  await db.annotations.add({
+    transactionId: 'r', categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null, note: null, moodId: null,
+    purchaseReasonId: null, worthwhile: null, reviewed: true, dateOverride: null, amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
+  })
+  const real = await vi.importActual<typeof import('../../score/components')>('../../score/components')
+  const month = (m: string, saved: number, spent: number, discretionary: number) => ({ month: m, hasData: true, savedCents: saved, spentCents: spent, discretionaryCents: discretionary })
+  const months = [month('2026-05', 100, 1000, 500), month('2026-06', 100, 1000, 500), month('2026-07', 100, 1000, 500), month('2026-08', 100, 1000, 400), month('2026-09', 100, 1000, 400), month('2026-10', 100, 1000, 400)] as unknown as MonthPoint[]
+  vi.mocked(savingsConsistency).mockImplementationOnce(() => real.savingsConsistency(months))
+  vi.mocked(improvement).mockImplementationOnce(() => real.improvement(months))
+  const cl = (key: string, regretted: number) => ({ by: 'mood' as const, key, label: key, regretted, total: 4, cents: 0 })
+  vi.mocked(regretClustersBetween).mockResolvedValueOnce([cl('a', 3), cl('b', 3)]).mockResolvedValueOnce([cl('a', 1), cl('b', 0)])
+}
+
 const IDS = Object.keys(WEIGHTS) as ComponentId[]
 /** The labels as score.ts owns them, read by handing it six unmeasured parts rather than typed here. */
 const LABEL: Record<ComponentId, string> = Object.fromEntries(
@@ -109,7 +131,7 @@ describe('Money Score screen', () => {
     expect(document.querySelector('svg, canvas, meter, progress')).toBeNull()
     // It also does not read as a verdict.
     expect(text()).not.toMatch(/Measured:/)
-    expect(screen.getByRole('link', { name: 'import your ING statements' })).toHaveAttribute('href', '#/import')
+    expect(screen.getByRole('link', { name: 'import your bank statements' })).toHaveAttribute('href', '#/import')
   })
 
   it('shows all six components, their weights, their inputs and the arithmetic', async () => {
@@ -153,6 +175,7 @@ describe('Money Score screen', () => {
       const item = itemOf(id)
       expect(field(item, 'Status'), id).toBe('Not yet measured')
       expect(field(item, 'Inputs'), id).toMatch(waiting[id])
+      expect(field(item, 'Inputs'), id).not.toMatch(/^Nothing to work from/) // the reason stands alone, with no lead-in that may not fit it
       expect(field(item, 'Arithmetic'), id).toMatch(/not counted as 0/)
       expect(field(item, 'Weight'), id).toBe(String(WEIGHTS[id]))
     }
@@ -197,26 +220,78 @@ describe('Money Score screen', () => {
     second?.unmount()
   })
 
-  it('looks at the windows it says: twelve completed months, six months to date, and two runs of three completed months', async () => {
-    vi.mocked(spendingAwareness).mockClear(); vi.mocked(savingsConsistency).mockClear(); vi.mocked(regretClusters).mockClear()
+  it('looks at the windows it says: twelve completed months, six months to the last day of this one, and two runs of three completed months', async () => {
+    vi.mocked(spendingAwareness).mockClear(); vi.mocked(savingsConsistency).mockClear(); vi.mocked(regretClustersBetween).mockClear()
     await mount() // today is 2026-11-10, so the latest completed month is October
-    expect(vi.mocked(spendingAwareness).mock.calls).toEqual([['2026-06-01', '2026-11-31']])
+    expect(vi.mocked(spendingAwareness).mock.calls).toEqual([['2026-06-01', '2026-11-30']]) // a real date: November has 30 days
     const months = vi.mocked(savingsConsistency).mock.calls[0]?.[0].map((p) => p.month)
     expect(months).toEqual(['2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
-    // Earlier run May to July, later run August to October: the month in progress is in neither, and nothing is read twice.
-    expect(vi.mocked(regretClusters).mock.calls.map((c) => c[0]).sort()).toEqual(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
+    // Earlier run May to July, later run August to October: the month in progress is in neither, and they do not overlap.
+    expect(vi.mocked(regretClustersBetween).mock.calls).toEqual([['2026-05', '2026-07'], ['2026-08', '2026-10']])
   })
 
-  it('hands the earlier months and the later months to the repeated-regrets measure in that order, each added up across its months', async () => {
+  it('ends the review window on the real last day of the month, leap February included', async () => {
+    vi.mocked(spendingAwareness).mockClear()
+    render(<Score today="2028-02-10" computedAt={AT} />)
+    await settled()
+    expect(vi.mocked(spendingAwareness).mock.calls).toEqual([['2027-09-01', '2028-02-29']])
+  })
+
+  it('hands the earlier window and the later window to the repeated-regrets measure in that order, as the window readers returned them', async () => {
     const real = await vi.importActual<typeof import('../../learning/regret')>('../../learning/regret')
     vi.mocked(learning).mockClear()
-    // One pattern in every month, with a regret count that is the month number, so each run's total says which months it holds.
-    vi.mocked(regretClusters).mockImplementation(async (m) =>
-      [{ by: 'category', key: 'k', label: 'k', regretted: Number((m ?? '').slice(5)), total: 10, cents: 0 }])
-    try { await mount() } finally { vi.mocked(regretClusters).mockImplementation(real.regretClusters) }
+    // Each reading names the window it was asked for, so the argument order says which window went where.
+    vi.mocked(regretClustersBetween).mockImplementation(async (first, last) =>
+      [{ by: 'category', key: first + '..' + last, label: 'k', regretted: 0, total: 3, cents: 0 }])
+    try { await mount() } finally { vi.mocked(regretClustersBetween).mockImplementation(real.regretClustersBetween) }
     const [early, late] = vi.mocked(learning).mock.calls[0] ?? []
-    expect(early).toEqual([{ by: 'category', key: 'k', label: 'k', regretted: 5 + 6 + 7, total: 30, cents: 0 }])
-    expect(late).toEqual([{ by: 'category', key: 'k', label: 'k', regretted: 8 + 9 + 10, total: 30, cents: 0 }])
+    expect(early?.map((c) => c.key)).toEqual(['2026-05..2026-07'])
+    expect(late?.map((c) => c.key)).toEqual(['2026-08..2026-10'])
+  })
+
+  it('names each cached figure by its window, so a new month is a new figure and the old month is not served', async () => {
+    await twoMeasured()
+    const keys = async () => (await db.analyticsCache.toArray()).map((r) => r.key).filter((k) => k.startsWith('score:')).sort()
+    const view = await mount()
+    const november = await keys()
+    expect(november.map((k) => k.split(':')[1])).toEqual(['budget-awareness', 'improvement', 'learning', 'savings-consistency', 'spending-awareness'])
+    view.unmount()
+    render(<Score today="2026-12-10" computedAt={AT} />)
+    await settled()
+    const both = await keys()
+    expect(both).toHaveLength(november.length * 2) // five new figures, none of them an old key reused
+    expect(new Set(both).size).toBe(both.length)
+  })
+
+  it('says so when rounding would reach 100 but the score is held at 99', async () => {
+    // Weights 3 and 2, scores 100 and 99: 498 / 5 = 99,6, which rounds to 100, but 100 needs every measured part at 100.
+    vi.mocked(budgetAwareness).mockReturnValueOnce({ kind: 'measured', score: 100, inputs: 'Invented inputs.' })
+    vi.mocked(goalProgress).mockReturnValueOnce({ kind: 'measured', score: 99, inputs: 'Invented inputs.' })
+    await mount()
+    expect(screen.getByText('Your Money Score: 99 out of 100')).toBeInTheDocument()
+    expect(text()).toContain('498 ÷ 5, rounded to a whole number, would be 100. It is shown as 99 because 100 appears only when every measured part scored 100.')
+    expect(text()).not.toContain('gives 99')
+  })
+
+  it('tells someone with records but too few months something other than to import', async () => {
+    await mount()
+    expect(screen.getByRole('link', { name: 'import your bank statements' })).toBeInTheDocument()
+    expect(text()).not.toMatch(/Your records are in/)
+    cleanup()
+    await twoMeasured()
+    await db.savingsGoals.clear() // records, and nothing measured
+    await db.budgetAllocations.clear()
+    await mount()
+    expect(screen.getByText(/cannot be given yet/)).toBeInTheDocument()
+    expect(text()).toMatch(/Your records are in, but they do not yet cover enough to measure anything/)
+    expect(screen.queryByRole('link', { name: /import/ })).toBeNull()
+    expect(text()).not.toMatch(/ING/)
+  })
+
+  it('counts a record from the month in progress as records, though no completed month has any', async () => {
+    await tx('now', '2026-11-03', -1000, GROCERIES)
+    await mount()
+    expect(text()).toMatch(/Your records are in/)
   })
 
   it('stamps what it caches with the instant it was given', async () => {
@@ -253,13 +328,14 @@ describe('Money Score screen', () => {
       expect(list.allows, list.name).not.toMatch(list.pattern)
     }
     // The fresh page, and a page with measured parts (whose sentences come from other modules), are both scanned.
-    for (const setup of [async () => {}, twoMeasured]) {
+    for (const setup of [async () => {}, twoMeasured, allSixMeasured]) {
       cleanup()
       await db.delete(); await db.open(); await seedDatabase()
       await setup()
       await mount()
       const page = spoken()
-      expect(page).toMatch(setup === twoMeasured ? /weight measured/i : /cannot be given yet/)
+      expect(page).toMatch(setup === allSixMeasured ? /Weight measured: 14 of 14/ : setup === twoMeasured ? /weight measured/i : /cannot be given yet/)
+      if (setup === allSixMeasured) expect(page.match(/Measured: \d+ out of 100/g)).toHaveLength(6) // every part's own sentences are on the page
       expect(page).toContain('The six parts') // it really rendered, so this is not a scan of nothing
       expect(page).toContain(LABEL['learning'])
       expect(page).not.toMatch(causalWords)
@@ -268,18 +344,20 @@ describe('Money Score screen', () => {
     }
   })
 
+  // The click-and-focus part is only what jsdom allows: it does not follow a hash link, so focus staying put proves little.
+  // What this test really holds is that nothing on the page is a button, disabled, or focusable by tabindex, and that every
+  // link goes to a route that exists.
   it('keeps focus and renders no control that does nothing', async () => {
     await mount()
     expect(screen.queryAllByRole('button')).toHaveLength(0)
     expect(document.querySelectorAll('[disabled], [aria-disabled="true"], [tabindex]')).toHaveLength(0)
     const links = screen.getAllByRole('link')
     expect(links.length).toBeGreaterThan(0)
-    for (const a of links) expect(a.getAttribute('href')).toMatch(/^#\/[a-z]+/)
+    for (const a of links) expect(ROUTES.map((r) => '#' + r.path), a.textContent ?? '').toContain(a.getAttribute('href'))
 
-    const link = screen.getByRole('link', { name: 'import your ING statements' })
+    const link = screen.getByRole('link', { name: 'import your bank statements' })
     link.focus()
     fireEvent.click(link)
     expect(document.activeElement).toBe(link)
-    expect(screen.getByRole('heading', { level: 1, name: 'Money Score' })).toBeInTheDocument()
   })
 })

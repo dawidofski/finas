@@ -413,12 +413,20 @@ describe('learning', () => {
     expect(c.inputs).toMatch(/In 1 of 3 patterns/)
   })
 
-  it('says what it cannot see: independence, and that the best outcomes are left out', () => {
+  it('counts a pattern whose regret fell to none as improved', () => {
+    // a: 3 of 6 regretted early, 0 of 6 late (a zero-regret cluster is present in the late window): fell. b: equal. 1 of 2 = 50.
+    // Were a zero-regret cluster treated as absent, a would drop out and only b would be shared: not measured.
+    const early = [cluster('mood', 'a', 3, 6), cluster('mood', 'b', 2, 4)]
+    const late = [cluster('mood', 'a', 0, 6), cluster('mood', 'b', 2, 4)]
+    expect(learning(early, late)).toMatchObject({ kind: 'measured', score: 50 })
+  })
+
+  it('says what it cannot see: independence, and that a pattern with nothing to compare is left out', () => {
     const c = learning([cluster('mood', 'a', 2, 3), cluster('mood', 'b', 2, 3)], [cluster('mood', 'a', 1, 3), cluster('mood', 'b', 1, 3)])
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toMatch(/not independent/)
-    expect(c.inputs).toMatch(/regret fell to none no longer appears/)
-    expect(c.inputs).toMatch(/leaves out your best results/)
+    expect(c.inputs).toMatch(/no answered spends in one of the periods has nothing to compare, so it is left out/)
+    expect(c.inputs).not.toMatch(/best results/)
     expect(c.inputs).toMatch(/at least 3 answered spends/)
   })
 
