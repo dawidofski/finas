@@ -71,10 +71,8 @@ describe('battery statistics (integer only)', () => {
       expect(r * r <= n).toBe(true)
       expect((r + 1n) * (r + 1n) > n).toBe(true)
     }
-    // isqrt is isqrtBig's answer carried back into a Number, so the two must never disagree.
-    for (const n of [0, 1, 2, 15, 100000000, 123456789, Number.MAX_SAFE_INTEGER]) {
-      expect(isqrt(n)).toBe(Number(isqrtBig(BigInt(n))))
-    }
+    // No `isqrt(n) === Number(isqrtBig(BigInt(n)))` loop here: that is isqrt's body, so it could not fail on any
+    // regression. isqrt's values are pinned by the same definitional r*r <= n < (r+1)*(r+1) oracle, above.
   })
 
   it('rounds over BigInt by the same rule money.ts rounds a Number', () => {
@@ -368,6 +366,19 @@ describe('battery statistics (integer only)', () => {
     expect(cramersVBp(Number.MAX_SAFE_INTEGER + 2, 70, 2, 2)).toBeNull()
     expect(cramersVBp(121527, Number.NaN, 2, 2)).toBeNull()
     expect(cramersVBp(121527, Number.MAX_SAFE_INTEGER + 2, 2, 2)).toBeNull()
+    // The dimensions get the same treatment, and for a reason a `< 2` test alone misses: NaN, Infinity and a
+    // fraction are all NOT less than 2, so each would sail past the bounds check and reach BigInt(k), which throws.
+    // These four statistics never throw, so they are checked for being integers and not only for being in range.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2]) {
+      expect(cramersVBp(121527, 70, bad, 2)).toBeNull()
+      expect(cramersVBp(121527, 70, 2, bad)).toBeNull()
+    }
+    // A fractional dimension as well, which is the case that most plainly reaches BigInt(k): 5/2 as the SMALLER
+    // dimension makes k = 1.5, and BigInt of that throws. NaN throws from either position, since Math.min(NaN, 1) is
+    // NaN. Infinity and 2^53 are worse than a throw - unguarded they return a confident 4166 for something that is
+    // not a number of rows at all, which is the one thing this module is built not to do.
+    expect(cramersVBp(121527, 70, 5 / 2, 4)).toBeNull()
+    expect(cramersVBp(121527, 70, 4, 5 / 2)).toBeNull()
     expect(cramersVBp(121527, 70, 2, 2)).not.toBeNull()
   })
 

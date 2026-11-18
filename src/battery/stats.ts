@@ -26,6 +26,13 @@
 // Every function returns null where its statistic is undefined - too few values, a series with no variance, a table
 // with an empty row or column - rather than a number that would read as an answer. A rho of 0 and "there is nothing
 // to correlate" are different statements, and only one of them is a number.
+//
+// To be exact about that promise, because prose that overstates it is worse than no prose: the four STATISTICS
+// (spearmanRhoBp, mannWhitneyU, chiSquareScaled, cramersVBp) never throw. Anything they cannot compute on comes back
+// as null, including an argument that is not a safe integer - a NaN, an Infinity or a fraction slips past a bounds
+// comparison, so each of them is checked for being an integer and not only for being in range. isqrt and isqrtBig
+// are arithmetic rather than statistics and DO throw on an argument that is not a non-negative integer: there is no
+// root of it to be missing, so that is a caller's mistake rather than an absent statistic.
 
 import { divRound } from '../lib/money'
 
@@ -283,8 +290,8 @@ export function chiSquareScaled(table: readonly number[][]): { chiScaled: number
 
 /**
  * Cramer's V in basis points from a CHI_SCALE-scaled chi-square, or null where there is no V: a negative chi-square,
- * a table with no observations, fewer than two rows or two columns, or a chiScaled or total that is not a safe
- * integer and so is not a figure this module will compute on at all.
+ * a table with no observations, fewer than two rows or two columns, or ANY of the four arguments not being a safe
+ * integer and so not a figure this module will compute on at all.
  *
  * V = sqrt(chi-square / (total * k)) with k = min(rows-1, cols-1) - the SMALLER dimension, which is what keeps V
  * inside [0, 1]. In basis points that is sqrt(CHI_SCALE * chiScaled / (total * k)), since the two scalings of 10000
@@ -299,7 +306,10 @@ export function chiSquareScaled(table: readonly number[][]): { chiScaled: number
 export function cramersVBp(chiScaled: number, total: number, rows: number, cols: number): number | null {
   if (!Number.isSafeInteger(chiScaled) || chiScaled < 0) return null
   if (!Number.isSafeInteger(total) || total <= 0) return null
-  if (rows < 2 || cols < 2) return null
+  // rows and cols are checked the same way, and not merely against 2: NaN, Infinity and a fraction all slip past a
+  // `< 2` comparison, and each of them would reach BigInt(k) and throw - which this module promises not to do.
+  if (!Number.isSafeInteger(rows) || rows < 2) return null
+  if (!Number.isSafeInteger(cols) || cols < 2) return null
   const k = Math.min(rows - 1, cols - 1)
   return Number(isqrtBig(divRoundBig(BigInt(CHI_SCALE) * BigInt(chiScaled), BigInt(total) * BigInt(k))))
 }
