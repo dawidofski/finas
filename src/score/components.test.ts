@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { db } from '../db/db'
+import { seedDatabase } from '../db/seed'
+import type { AnnotationRow, SavingsGoalRow, TransactionRow } from '../db/schema'
+import type { RegretCluster } from '../learning/regret'
 import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
-import { budgetAwareness, improvement, savingsConsistency } from './components'
+import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness } from './components'
 
 function line(allocatedCents: number, spentCents: number, targetKind: 'category' | 'goal' = 'category'): BudgetLine {
   return {
@@ -200,5 +204,148 @@ describe('a month with no records', () => {
     // Five usable months plus one with data and spent 0: only five shares, so not measured (not a share of 0).
     const pts = [...[1, 2, 3, 4, 5].map((n) => shareMonth(n, 4000)), point(m(6))]
     expect(improvement(pts).kind).toBe('not-measured')
+  })
+})
+
+const tx = (id: string, valueDate: string, over: Partial<TransactionRow> = {}): TransactionRow => ({
+  id, accountId: 'acc', valueDate, amountCents: -1000, balanceCents: 50000, description: 'SHOP', comment: null,
+  ingCategory: null, ingSubcategory: null, kind: 'spend', dedupKey: `K${id}`, importId: 'imp', fileSeq: 1,
+  roundupParentId: null, createdAt: 1, deletedAt: null, ...over,
+})
+const ann = (transactionId: string, over: Partial<AnnotationRow> = {}): AnnotationRow => ({
+  transactionId, categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
+  note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false, dateOverride: null,
+  amountCentsOverride: null, descriptionOverride: null, updatedAt: 1, ...over,
+})
+
+describe('spendingAwareness', () => {
+  beforeEach(async () => { await db.delete(); await db.open(); await seedDatabase() })
+
+  it('counts a transaction as reviewed only when the owner actually reviewed it', async () => {
+    // Four live transactions in the window. a is reviewed; b has a note but is not reviewed; c and d are untouched.
+    // Reviewed 1 of 4 = 25. Counting annotation rows (2 of 4 = 50) would say 50.
+    await db.transactions.bulkAdd([tx('a', '2026-11-03'), tx('b', '2026-11-04'), tx('c', '2026-11-05'), tx('d', '2026-11-06')])
+    await db.annotations.bulkAdd([ann('a', { reviewed: true }), ann('b', { note: 'lunch' })])
+    const c = await spendingAwareness('2026-11-01', '2026-11-30')
+    expect(c).toMatchObject({ kind: 'measured', score: 25 })
+    if (c.kind !== 'measured') throw new Error('expected measured')
+    expect(c.inputs).toMatch(/1 of 4 transactions/)
+  })
+
+  it('does not score a window whose transactions are all unannotated', async () => {
+    await db.transactions.bulkAdd([tx('a', '2026-11-03'), tx('b', '2026-11-04')])
+    expect((await spendingAwareness('2026-11-01', '2026-11-30')).kind).toBe('not-measured')
+  })
+
+  it('does not score a window with nothing live in it, whatever is reviewed outside it or deleted', async () => {
+    // Only a reviewed October row and a soft-deleted reviewed November row exist: November has nothing live.
+    await db.transactions.bulkAdd([tx('o', '2026-10-30'), tx('x', '2026-11-03', { deletedAt: 5 })])
+    await db.annotations.bulkAdd([ann('o', { reviewed: true }), ann('x', { reviewed: true })])
+    expect((await spendingAwareness('2026-11-01', '2026-11-30')).kind).toBe('not-measured')
+  })
+
+  it('uses the window to the day, not the whole month', async () => {
+    // Nov 1-15 holds a (reviewed) and b (touched, unreviewed); c on the 20th is outside. Reviewed 1 of 2 = 50.
+    await db.transactions.bulkAdd([tx('a', '2026-11-01'), tx('b', '2026-11-15'), tx('c', '2026-11-20')])
+    await db.annotations.bulkAdd([ann('a', { reviewed: true }), ann('b', { note: 'n' }), ann('c', { reviewed: true })])
+    expect(await spendingAwareness('2026-11-01', '2026-11-15')).toMatchObject({ kind: 'measured', score: 50 })
+  })
+
+  it('scores 0 when the owner has touched transactions but reviewed none', async () => {
+    await db.transactions.bulkAdd([tx('a', '2026-11-03'), tx('b', '2026-11-04')])
+    await db.annotations.bulkAdd([ann('a', { note: 'n' })])
+    expect(await spendingAwareness('2026-11-01', '2026-11-30')).toMatchObject({ kind: 'measured', score: 0 })
+  })
+
+  it('does not award 100 while a transaction is unreviewed', async () => {
+    // 399 of 400 reviewed = 99.75 -> 100 by rounding; it must stay 99.
+    const rows = Array.from({ length: 400 }, (_, i) => tx(`t${i}`, '2026-11-03'))
+    await db.transactions.bulkAdd(rows)
+    await db.annotations.bulkAdd(rows.slice(0, 399).map((r) => ann(r.id, { reviewed: true })))
+    expect(await spendingAwareness('2026-11-01', '2026-11-30')).toMatchObject({ score: 99 })
+  })
+})
+
+const goal = (id: string, targetCents: number, over: Partial<SavingsGoalRow> = {}): SavingsGoalRow => ({
+  id, name: id, targetCents, deadline: null, contributionPercentBp: 1000, createdAt: 1, completedAt: null, archived: false, ...over,
+})
+
+describe('goalProgress', () => {
+  it('says the owner has set no goal yet, rather than scoring no progress', () => {
+    const c = goalProgress([])
+    expect(c.kind).toBe('not-measured')
+    if (c.kind !== 'not-measured') throw new Error('expected not-measured')
+    expect(c.why).toMatch(/have not set a savings goal yet/)
+    expect(c.why).not.toMatch(/no progress|not made/i)
+  })
+
+  it('scores progress against each goal target, weighted by the size of the target', () => {
+    // Reached 10000 of 10000 + 90000 = 10%. A count-based version says 1 of 2 = 50.
+    expect(goalProgress([goal('a', 10000, { completedAt: 5 }), goal('b', 90000)])).toMatchObject({ kind: 'measured', score: 10 })
+    // The big goal reached instead: 90000 of 100000 = 90.
+    expect(goalProgress([goal('a', 10000), goal('b', 90000, { completedAt: 5 })])).toMatchObject({ score: 90 })
+  })
+
+  it('leaves out a goal the owner archived unfinished, but keeps a completed one', () => {
+    // Archived unfinished 50000 is dropped: 20000 of 40000 = 50 (admitted it would be 20000 of 90000 = 22).
+    expect(goalProgress([goal('a', 20000, { completedAt: 5 }), goal('b', 20000), goal('c', 50000, { archived: true })])).toMatchObject({ score: 50 })
+    // Completed then archived still counts: 20000 of 40000 = 50. (Dropped it would be 0 of 20000 = 0.)
+    expect(goalProgress([goal('a', 20000, { completedAt: 5, archived: true }), goal('b', 20000)])).toMatchObject({ score: 50 })
+  })
+
+  it('is not measured, and says so differently, when every goal is archived unfinished', () => {
+    const c = goalProgress([goal('a', 1000, { archived: true })])
+    expect(c.kind).toBe('not-measured')
+    if (c.kind !== 'not-measured') throw new Error('expected not-measured')
+    expect(c.why).toMatch(/None of your savings goals is active/)
+  })
+
+  it('does not award 100 while a goal is unfinished', () => {
+    // 199999 of 200000 = 99.9995 -> 100 by rounding; must stay 99.
+    expect(goalProgress([goal('a', 199999, { completedAt: 5 }), goal('b', 1)])).toMatchObject({ score: 99 })
+  })
+})
+
+const cluster = (by: RegretCluster['by'], key: string, regretted: number, total: number): RegretCluster =>
+  ({ by, key, label: key, regretted, total, cents: 0 })
+
+describe('learning', () => {
+  it('compares a cluster regret rate late against early, and ignores a cluster seen once', () => {
+    // Shared: mood m (3/6 = 5000 bp -> 1/6 = 1667 bp: fell), merchant s (1/4 = 2500 -> 2/4 = 5000: rose),
+    // category c (2/4 -> 2/4: equal, not fell). 1 fell of 3 = 33. weekday 1 (early only) and reason r (late only) are ignored.
+    const early = [cluster('mood', 'm', 3, 6), cluster('merchant', 's', 1, 4), cluster('category', 'c', 2, 4), cluster('weekday', '1', 1, 2)]
+    const late = [cluster('mood', 'm', 1, 6), cluster('merchant', 's', 2, 4), cluster('category', 'c', 2, 4), cluster('reason', 'r', 1, 2)]
+    const c = learning(early, late)
+    expect(c).toMatchObject({ kind: 'measured', score: 33 })
+    if (c.kind !== 'measured') throw new Error('expected measured')
+    expect(c.inputs).toMatch(/1 of 3 patterns/)
+  })
+
+  it('compares rates, not counts', () => {
+    // Regretted count rose 1 -> 2 but the rate fell (1/2 = 5000 -> 2/10 = 2000). Both clusters fell: 2 of 2 = 100.
+    const early = [cluster('mood', 'a', 1, 2), cluster('mood', 'b', 1, 2)]
+    const late = [cluster('mood', 'a', 2, 10), cluster('mood', 'b', 2, 10)]
+    expect(learning(early, late)).toMatchObject({ kind: 'measured', score: 100 })
+  })
+
+  it('does not match the same key across different dimensions', () => {
+    // weekday "1" early and mood "1" late are different clusters: only mood x is shared, and 1 shared is too few.
+    const early = [cluster('mood', 'x', 2, 4), cluster('weekday', '1', 2, 4)]
+    const late = [cluster('mood', 'x', 1, 4), cluster('mood', '1', 1, 4)]
+    expect(learning(early, late).kind).toBe('not-measured')
+  })
+
+  it('is not measured with fewer than 2 clusters in both windows', () => {
+    expect(learning([], []).kind).toBe('not-measured')
+    expect(learning([cluster('mood', 'a', 1, 2)], [cluster('mood', 'a', 1, 4)]).kind).toBe('not-measured')
+    expect(learning([cluster('mood', 'a', 1, 2), cluster('mood', 'b', 1, 2)], [cluster('mood', 'a', 1, 4), cluster('mood', 'z', 1, 4)]).kind).toBe('not-measured')
+  })
+
+  it('does not award 100 while a cluster did not improve, and gives 0 when none did', () => {
+    // 99 of 100 shared clusters fell -> 99 (not 100); none fell (equal rates) -> 0.
+    const early = Array.from({ length: 100 }, (_, i) => cluster('merchant', `k${i}`, 1, 2))
+    const late = early.map((c, i) => (i === 0 ? cluster('merchant', c.key, 1, 2) : cluster('merchant', c.key, 1, 4)))
+    expect(learning(early, late)).toMatchObject({ score: 99 })
+    expect(learning(early, early)).toMatchObject({ kind: 'measured', score: 0 })
   })
 })
