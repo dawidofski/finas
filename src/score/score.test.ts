@@ -104,6 +104,7 @@ describe('moneyScore', () => {
     const byId = new Map(r.components.map((c) => [c.id, c]))
     expect(byId.get('improvement')?.component).toEqual(m(80))
     expect(byId.get('learning')?.component).toEqual({ kind: 'not-measured', why: 'Not enough repeated patterns yet.' })
+    // Checks each component is attached to its own weight (not one looked up by index); it does not check that any particular weight is correct.
     for (const c of r.components) expect(c.weight).toBe(WEIGHTS[c.id])
     // The list is still whole when nothing is measured.
     expect(moneyScore(six({})).components).toHaveLength(6)

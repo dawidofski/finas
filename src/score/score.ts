@@ -16,7 +16,7 @@ export interface MoneyScore {
 
 /**
  * Plain integers summing to 14, not basis points: the measured set changes month to month and the denominator is the sum
- * of the measured weights, so renormalising integers is exact. No component may exceed a quarter of the total (the spec's
+ * of the measured weights, so the renormalisation itself is exact in integers (the result is then rounded and capped by wholePoints). No component may exceed a quarter of the total (the spec's
  * only constraint: no component can dominate); a test reads this table to hold that.
  */
 export const WEIGHTS: Readonly<Record<ComponentId, number>> = {
