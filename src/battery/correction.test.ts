@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { benjaminiHochberg } from './correction'
+import { BATTERY } from './battery'
+import { FDR_BP, benjaminiHochberg } from './correction'
+import { ALPHA_BP } from './critical'
 import type { Bracket } from './critical'
 
 // Every expected value below is worked by hand from the Benjamini-Hochberg step-up rule at FDR 5 %, NOT read back from
@@ -148,5 +150,17 @@ describe('benjaminiHochberg', () => {
     const all = perms(base)
     expect(all).toHaveLength(24)
     for (const p of all) expect(verdict(p)).toEqual(expected)
+  })
+})
+
+describe('the ladder against the battery', () => {
+  it('keeps the finest rung fine enough for the battery as declared', () => {
+    // WHAT THIS PROTECTS. When every relationship in BATTERY is tested, Benjamini-Hochberg's smallest threshold is
+    // FDR_BP / BATTERY.length (500 / 10 = 50 bp today). A lone finding can survive only if the finest bracket's upper
+    // bound is at or under that, or the battery goes permanently silent exactly when all its gates open. critical.ts
+    // asserts the same thing against literals because it cannot import this module; this one reads the live values, so
+    // raising the FDR level or adding an eleventh relationship to the battery fails HERE, telling the next person the
+    // ladder may need another rung. Written as bound * count <= FDR_BP, which is the same inequality without a division.
+    expect(ALPHA_BP['p<0.001'] * BATTERY.length).toBeLessThanOrEqual(FDR_BP)
   })
 })

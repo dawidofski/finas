@@ -7,7 +7,7 @@ export interface Corrected<T> {
 }
 
 /** The false-discovery rate the whole battery is held to: 5 %, in basis points. */
-const FDR_BP = 500
+export const FDR_BP = 500
 
 /**
  * An unbracketed item is as far from significant as a p can be: p = 1, i.e. 10000 bp.
