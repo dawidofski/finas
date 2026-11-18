@@ -7,7 +7,7 @@ export type Frequency = RecurringRow['frequency']
 
 export interface Detected {
   merchantId: string
-  /** Typical amount of the payment (median of the cluster), a positive magnitude. */
+  /** What the payment costs now, a positive magnitude: the typical amount, or the new amount after a price change. */
   amountCents: number
   /** How far an amount may sit from the cluster median and still be this payment. */
   toleranceCents: number
@@ -20,7 +20,10 @@ export interface Detected {
   expectedNextDate: string | null
   /** 0-10000 basis points: how well the evidence pins the pattern. See detectRecurring. */
   matchScoreBp: number
-  /** Earlier typical amount (median before the latest payment) to the latest, when they differ. */
+  /**
+   * A price change, earlier typical amount to the current one: either a sustained step inside the amount tolerance, or an
+   * earlier run of payments chained to a later run at another price (see seriesOf).
+   */
   amountChanged: { fromCents: number; toCents: number } | null
 }
 
@@ -91,11 +94,24 @@ function sustainedChange(amounts: readonly number[]): { fromCents: number; toCen
 interface Cluster { merchantId: string; payments: Payment[]; median: number }
 
 /**
+ * How far ONE payment at a new amount may sit from the earlier price and still be read as that payment's price changing: within
+ * 50% of it, either way. Past that, a single payment is a one-off purchase that happened to land on the cadence (a 55,00 order
+ * a month after a 9,99 subscription is not a price rise). Two or more payments at the new amount are a run of their own and
+ * need no such limit. The store uses the same figure when it looks for the stored row of a payment whose price moved.
+ */
+export const PLAUSIBLE_CHANGE_PERCENT = 50
+
+export function plausibleChange(fromCents: number, toCents: number): boolean {
+  return Math.abs(toCents - fromCents) <= divRound(fromCents * PLAUSIBLE_CHANGE_PERCENT, 100)
+}
+
+/**
  * Groups clusters into series. Two clusters at one merchant are ONE payment whose price changed when they do not overlap in time
  * (every payment of the earlier is before every payment of the later) and the gap from the earlier series' last payment to the
  * later cluster's first fits the earlier series' own cadence band, so the later one is where the cadence says the next payment
- * would fall. The earlier series needs at least two payments to have a cadence at all; the later part needs no minimum of its
- * own, because the series carries the occurrences. Two subscriptions that run at the same time overlap in time and stay
+ * would fall. The earlier series needs at least two payments to have a cadence at all. The later part is either a run of two or
+ * more payments, or a single payment whose amount is a plausible change of the earlier price (plausibleChange); a single
+ * payment far from the earlier price is a one-off purchase and never joins. Two subscriptions that run at the same time overlap in time and stay
  * separate. Clusters are taken in order of their first payment, and each joins the open series with the smallest such gap.
  */
 function seriesOf(clusters: readonly Cluster[]): Cluster[][] {
@@ -113,6 +129,7 @@ function seriesOf(clusters: readonly Cluster[]): Cluster[][] {
         const pays = s.flatMap((x) => x.payments)
         const lastDate = (pays[pays.length - 1] as Payment).date
         if (pays.length < 2 || lastDate >= first) continue
+        if (c.payments.length < 2 && !plausibleChange((s[s.length - 1] as Cluster).median, c.median)) continue
         const gaps: number[] = []
         for (let i = 1; i < pays.length; i++) gaps.push(daysBetween((pays[i - 1] as Payment).date, (pays[i] as Payment).date))
         const { frequency } = classify(gaps, medianOf(gaps) ?? 0)

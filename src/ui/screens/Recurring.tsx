@@ -203,7 +203,7 @@ export default function Recurring({ today, computedAt }: { today: string; comput
       <p>
         The total counts each payment that comes at a regular interval, has not seemed to stop, and that you have not marked as cancelled. It includes payments you have not yet confirmed.
         It leaves out payments with no regular interval, payments that seem to have stopped, cancelled ones, and any you said are not recurring.
-        A weekly, three-monthly or yearly payment is worked out as a cost per month.
+        A weekly or three-monthly payment is worked out as a cost per month.
       </p>
       {views.length === 0
         ? (

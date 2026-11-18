@@ -244,8 +244,9 @@ describe('frequency band edges (median gap in days)', () => {
 describe('amount clustering edges', () => {
   // an amount joins a cluster when within max(100 cents, 5% of the cluster median), integer arithmetic
   const joined = (base: number, other: number) => {
-    const r = detectRecurring([...series('m', 30, 3, -base), row('m', addDays('2026-01-01', 90), -other)])
-    // joined, not chained as a price change: a chained outlier would also make 4 occurrences but reports a change
+    // The fourth payment falls 45 days after the third, outside every cadence band, so it can only be counted by JOINING the
+    // cluster: chaining as a price change is ruled out, and 4 occurrences means the amount was inside the tolerance.
+    const r = detectRecurring([...series('m', 30, 3, -base), row('m', addDays('2026-01-01', 105), -other)])
     return r.length === 1 && r[0]?.occurrences === 4 && r[0]?.amountChanged === null
   }
 
@@ -283,7 +284,28 @@ describe('amount clustering edges', () => {
       })
     })
 
-    it('needs no minimum of its own for the later part: one payment at the new price is enough', () => {
+    it('does not read a one-off purchase that lands on the cadence as a price rise', () => {
+      // 9,99 a month, then one 55,00 order exactly where the next payment would fall.
+      const r = detectRecurring([...series('m', 30, 4, -999), row('m', '2026-05-01', -5500)])
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ occurrences: 4, amountCents: 999, amountChanged: null, lastSeenDate: '2026-04-01' })
+    })
+
+    it('a single payment chains up to 50% from the old price and not past it, in either direction', () => {
+      const at = (x: number) => detectRecurring([...series('m', 30, 3, -1000), row('m', '2026-04-01', -x)])[0]?.occurrences
+      expect(at(1500)).toBe(4)
+      expect(at(1501)).toBe(3)
+      expect(at(500)).toBe(4)
+      expect(at(499)).toBe(3)
+    })
+
+    it('two payments at a far higher price are a run of their own and do chain', () => {
+      const r = detectRecurring([...series('m', 30, 3, -999), ...series('m', 30, 2, -5500, '2026-04-01')])
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ occurrences: 5, amountCents: 5500, amountChanged: { fromCents: 999, toCents: 5500 } })
+    })
+
+    it('one payment at a new price is enough when the new price is a plausible change of the old one', () => {
       const rows = [...series('m', 30, 3, -999), row('m', '2026-04-01', -1299)]
       const r = detectRecurring(rows)
       expect(r).toHaveLength(1)

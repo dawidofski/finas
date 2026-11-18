@@ -4,7 +4,7 @@ import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { spendsOf } from '../battery/rank'
 import { addDays, daysBetween, monthKeyOf } from '../lib/dates'
 import { divRound } from '../lib/money'
-import { detectRecurring, type Detected, type Frequency } from './detect'
+import { detectRecurring, plausibleChange, type Detected, type Frequency } from './detect'
 
 export interface RecurringView extends Detected {
   id: string
@@ -76,32 +76,46 @@ async function detectedNow(today: string): Promise<Detected[]> {
 }
 
 /**
- * WHICH STORED ROW IS WHICH PAYMENT. An id is minted once, when a series is first seen, and is never recomputed: nothing about
- * a payment's rank, amount or cadence is in the matching of a later run, so an owner's correction cannot move to another payment.
+ * WHICH STORED ROW IS WHICH PAYMENT. An id is minted once, when a series is first seen, and is never recomputed, so a
+ * correction stays with its payment through a price change, a cadence drift and a change of rank.
  *   1. Continuity: a stored row of the same merchant whose stored lastSeenDate is one of the series' payment dates is the same
  *      run of payments carrying on. (A price change, a cadence drift, an older payment ageing out of the window and a new
- *      subscription appearing beside it all leave that date among the series' payments.)
- *   2. Fallback: else the stored row of that merchant whose stored amount is within the series' tolerance, nearest first.
- *   3. Else the series is new and gets an id of its merchant and the date of its first payment, with a counter if two series
- *      began the same day at one merchant.
+ *      subscription appearing beside it all leave that date among the series' payments.) When two series at one merchant were
+ *      last paid on the same day, both rows fit both series: the pairs are then settled nearest stored amount first, so the row
+ *      goes to the series whose price it recorded, whatever order detection lists them in.
+ *   2. Fallback, for a series whose stored date is no longer among its payments (the last payment was deleted or re-dated, or a
+ *      one-off that had been read as a price change no longer is): the stored row of that merchant whose stored amount is a
+ *      plausible change away from the series' amount, nearest first, and whose stored lastSeenDate is not before the series'
+ *      first payment. A row last seen before the series began belongs to an older payment that has ended, and a new
+ *      subscription at a similar price never inherits what the owner decided about that one.
+ *   3. Else the series is new and gets an id of its merchant and the date of its first payment, with a counter if that id is
+ *      already in use.
  * Each stored row matches at most one series. All continuity matches are made before any fallback, so a fallback can never take
- * a row that another series continues. Series are taken in the order detection gives them (merchant, amount, last seen).
- * Frequency is in no part of this, so a confirmed payment whose cadence drifts keeps its confirmation.
+ * a row that another series continues. Frequency is in no part of this, so a confirmed payment whose cadence drifts keeps its
+ * confirmation.
+ *
+ * What this cannot tell apart: two payments at one merchant, last paid on the same day, whose prices cross over between two
+ * runs. Nothing in the bank rows says which is which, and the nearer amount is taken.
  */
 function assignIds(detected: readonly Detected[], rows: readonly RecurringRow[]): string[] {
   const ids: (string | null)[] = detected.map(() => null)
   const taken = new Set<string>()
-  detected.forEach((d, i) => {
+  const pairs = detected.flatMap((d, i) => {
     const dates = new Set(d.paymentDates)
-    const hit = rows
-      .filter(r => r.merchantId === d.merchantId && !taken.has(r.id) && dates.has(r.lastSeenDate))
-      .sort((a, b) => (a.lastSeenDate < b.lastSeenDate ? 1 : a.lastSeenDate > b.lastSeenDate ? -1 : a.id < b.id ? -1 : 1))[0]
-    if (hit) { ids[i] = hit.id; taken.add(hit.id) }
+    return rows.filter(r => r.merchantId === d.merchantId && dates.has(r.lastSeenDate)).map(r => ({ i, r, distance: Math.abs(r.amountCents - d.amountCents) }))
   })
+  // Latest stored date first (the live row before a stale one), then nearest amount, then a fixed order.
+  pairs.sort((a, b) => (a.r.lastSeenDate < b.r.lastSeenDate ? 1 : a.r.lastSeenDate > b.r.lastSeenDate ? -1 : a.distance - b.distance || a.i - b.i || (a.r.id < b.r.id ? -1 : 1)))
+  for (const p of pairs) {
+    if (ids[p.i] !== null || taken.has(p.r.id)) continue
+    ids[p.i] = p.r.id
+    taken.add(p.r.id)
+  }
   detected.forEach((d, i) => {
     if (ids[i] !== null) return
+    const began = d.paymentDates[0] ?? d.lastSeenDate
     const hit = rows
-      .filter(r => r.merchantId === d.merchantId && !taken.has(r.id) && Math.abs(r.amountCents - d.amountCents) <= d.toleranceCents)
+      .filter(r => r.merchantId === d.merchantId && !taken.has(r.id) && r.lastSeenDate >= began && plausibleChange(d.amountCents, r.amountCents))
       .sort((a, b) => Math.abs(a.amountCents - d.amountCents) - Math.abs(b.amountCents - d.amountCents) || (a.id < b.id ? -1 : 1))[0]
     if (hit) { ids[i] = hit.id; taken.add(hit.id) }
   })

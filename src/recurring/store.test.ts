@@ -233,6 +233,51 @@ describe('recurring store', () => {
     })
   })
 
+  describe('corrections under the cases a tie or a fallback could move them', () => {
+    it('two payments last paid on the same day keep their own corrections when their order by amount flips', async () => {
+      const dates = every('2026-05-01', 30, 4)                 // both run to 2026-07-30
+      await pay('m.apple', dates, 999)
+      await pay('m.apple', dates, 2000)
+      const first = await recurringPayments('2026-08-10', 1)
+      const cheap = first.find(v => v.amountCents === 999)!
+      const dear = first.find(v => v.amountCents === 2000)!
+      await markCancelled(dear.id)
+      // The cheaper one rises above the dearer one: detection now lists the 20,00 payment first.
+      await pay('m.apple', ['2026-08-29'], 2000)
+      await pay('m.apple', ['2026-08-29', '2026-09-28'], 2500)
+      const later = await recurringPayments('2026-10-05', 2)
+      expect(later.find(v => v.amountCents === 2000)).toMatchObject({ id: dear.id, cancelled: true })
+      expect(later.find(v => v.amountCents === 2500)).toMatchObject({ id: cheap.id, cancelled: false })
+    })
+
+    it('a new subscription at a similar price does not inherit what was decided about an old one that ended', async () => {
+      await pay('m.gym', every('2025-09-05', 30, 4), 3000)     // ends 2025-12-04
+      const [old] = await recurringPayments('2026-01-10', 1)
+      await dismissRecurring(old!.id)
+      // Much later the old payments have left the window, and a new membership starts at nearly the same price.
+      await pay('m.gym', every('2027-03-05', 30, 3), 3050)
+      const shown = await recurringPayments('2027-05-20', 2)
+      expect(shown).toHaveLength(1)
+      expect(shown[0]!.id).not.toBe(old!.id)
+      expect(shown[0]).toMatchObject({ amountCents: 3050, cancelled: false })
+      expect((await db.recurring.get(old!.id))?.dismissed).toBe(true)
+    })
+
+    it('keeps a correction when a one-off read as a price change stops being one', async () => {
+      await pay('m.stream', every('2026-05-01', 30, 4), 1000)  // to 2026-07-30
+      await pay('m.stream', ['2026-08-29'], 1300)              // on the cadence and plausible: read as a rise
+      const [before] = await recurringPayments('2026-09-05', 1)
+      expect(before).toMatchObject({ amountCents: 1300 })
+      await confirmRecurring(before!.id)
+      // The usual 10,00 carries on: the 13,00 was a one-off after all.
+      await pay('m.stream', ['2026-08-30', '2026-09-28'], 1000)
+      const after = await recurringPayments('2026-10-05', 2)
+      expect(after).toHaveLength(1)
+      expect(after[0]).toMatchObject({ id: before!.id, confirmedByUser: true, amountCents: 1000 })
+      expect(await db.recurring.count()).toBe(1)
+    })
+  })
+
   it('ignores a row dated after today', async () => {
     await pay('m.gym', [...every('2026-06-20', 30, 4), '2026-10-28'], 3000)
     const [v] = await recurringPayments('2026-10-20', 1)

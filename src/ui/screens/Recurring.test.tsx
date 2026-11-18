@@ -168,7 +168,7 @@ describe('Recurring screen', () => {
 
   it('states a price change rather than showing two payments', async () => {
     await merchant('m.tv', 'Televisión Ejemplo')
-    await payments('m.tv', LIVE, [1299, 1299, 1299, 1299, 1390, 1390])
+    await payments('m.tv', LIVE, [1299, 1299, 1299, 1299, 1299, 1390, 1390])
     await mount()
     expect(rows()).toHaveLength(1)
     const row = rowOf('Televisión Ejemplo')
