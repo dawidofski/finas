@@ -15,7 +15,7 @@ export type Bundle = {
 }
 
 /** 'write-failed' is added to the brief's three: a full disk is not a malformed file, and saying so would mislead (cf. design 24). */
-export type RefusedReason = 'format' | 'newer-schema' | 'older-schema' | 'malformed' | 'write-failed' | 'salt-mismatch' | 'conflict'
+export type RefusedReason = 'format' | 'newer-schema' | 'older-schema' | 'malformed' | 'write-failed' | 'salt-mismatch' | 'conflict' | 'cannot-open' | 'newer-format'
 
 export type RestoreReport = {
   ok: boolean
