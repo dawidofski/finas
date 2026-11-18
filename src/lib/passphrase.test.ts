@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PASSPHRASE_MESSAGES, PASSPHRASE_MIN_CHARS, newPassphraseProblem, passphraseBytes } from './passphrase'
+import { causalWords, jargonWords, shamingWords } from '../test/bannedWords'
 
 const twelve = 'abcdefghijkl'
 const composed = 'café-café-café' // e with acute as one character
@@ -76,6 +77,8 @@ describe('passphrase rules', () => {
       expect(m.length).toBeGreaterThan(20)
       expect(m).not.toMatch(/nfc|utf|unicode|entropy|normali|byte|code ?point|encod|invalid|illegal|error|weak|strong|strength|bad|wrong|stupid|obvious|guess|crack/i)
       expect(m).not.toMatch(/%|\bscore\b/i)
+      // The project's shared lists, not only the words above: these sentences reach the owner on the Settings screen.
+      for (const list of [causalWords, jargonWords, shamingWords]) expect(m).not.toMatch(list)
     }
     expect(PASSPHRASE_MESSAGES['too-short']).toContain('12')
   })

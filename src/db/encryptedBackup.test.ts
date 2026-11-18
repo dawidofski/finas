@@ -123,7 +123,7 @@ describe('encrypted envelope', () => {
     expect(bare.ok).toBe(false)
   }, 20000)
 
-  it('refuses a newer envelope version as newer-format without deriving a key', () => {
+  it('refuses a newer envelope version as newer-format without deriving a key', async () => {
     const derive = vi.spyOn(crypto.subtle, 'deriveKey')
     const checked = checkEnvelope({ ...envelope, version: ENCRYPTED_VERSION + 1 })
     expect(checked.ok).toBe(false)
@@ -138,6 +138,11 @@ describe('encrypted envelope', () => {
       expect(bad.reason).toBe('malformed')
       expectPlainOwnerText(bad.detail)
     }
+    // The opening function is handed the same two files directly, past the check: it refuses them itself, and derives nothing.
+    const newer = await decryptEnvelope({ ...envelope, version: ENCRYPTED_VERSION + 1 }, PASS)
+    const broken = await decryptEnvelope({ ...envelope, salt: 'not base64!' }, PASS)
+    expect(newer.ok).toBe(false)
+    expect(broken.ok).toBe(false)
     expect(derive).not.toHaveBeenCalled()
   })
 
