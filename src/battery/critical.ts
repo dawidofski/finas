@@ -63,19 +63,31 @@ export const ALPHA_BP = { 'p<0.001': 10, 'p<0.01': 100, 'p<0.05': 500 } as const
  *
  * Each was computed, not recalled, as the root of erfc(z/√2) = α, and each squares to this module's own df-1
  * chi-square critical, which is the cross-check: 1.9599640² = 3.8414588, 2.5758293² = 6.6348966 and
- * 3.2905267² = 10.8275662 are the three df-1 entries of CHI_CRIT below, to the last digit computed.
+ * 3.2905267315² = 10.8275662 are the three df-1 entries of CHI_CRIT below, to the last digit computed. (The
+ * squares are of the UNTRUNCATED criticals: 3.2905267² alone comes to 10.8275660, which is a different number.)
  */
 export const Z_BP = { 'p<0.001': 32906, 'p<0.01': 25759, 'p<0.05': 19600 } as const
 
 /**
  * Below this many paired observations spearmanBracket returns 'none' rather than a bracket.
  *
- * Spearman's z = ρ·√(n−1) is the standard large-sample approximation, and n = 10 is where it stops over-claiming.
- * At n = 10 it asks for |ρ| ≥ 1.96/√9 = 0.6533, where the tabulated exact two-tailed 5 % critical is ≈ 0.648: the
- * approximation demands slightly MORE than the exact test, so it errs toward silence. At n = 20 the two have
- * converged (1.96/√19 = 0.4496 against ≈ 0.447). Below n = 10 the comparison reverses — the approximation starts
- * calling things significant that the exact test does not — and ρ itself takes only a handful of distinct values, so
- * a bracket there would be a made-up finding rather than a weak one.
+ * Spearman's z = ρ·√(n−1) is the standard large-sample approximation. At n = 10 it asks for |ρ| ≥ 1.96/√9 =
+ * 0.6533 where the exact two-tailed 5 % critical is 107/165 = 0.6485, so it demands MORE than the exact test and
+ * errs toward silence; at n = 20 the two have converged (0.4496 against ≈ 0.447).
+ *
+ * Below 10 it does NOT simply reverse, which this comment claimed for three rounds. By the exact permutation
+ * distribution of ρ the approximation is stricter at some sizes and looser at others, with no crossing point:
+ *
+ *     n:        5        6        7        8        9       10
+ *     exact:   1        31/35    11/14    31/42    7/10     107/165
+ *            = 1.0000   0.8857   0.7857   0.7381   0.7000   0.6485
+ *     approx:  0.9800   0.8765   0.8002   0.7408   0.6930   0.6533
+ *              looser   looser   STRICT   STRICT   looser   STRICT
+ *
+ * So the floor is not the point where the approximation stops over-claiming — there is no such point below 10. It
+ * is the point from which it is reliably at least as strict as the exact test, and below which ρ takes so few
+ * distinct values that a bracket would be a made-up finding rather than a weak one: at n = 5, ρ can only be 1.0,
+ * 0.9, 0.7 and so on down, and the exact test rejects nothing short of a perfect ordering.
  *
  * §12's minimum-data gates do not cover this: category → savings performance runs on ≥ 4 months and
  * days-after-payday on ≥ 3 income events, so it is this floor, not the gate, that stops a four-point correlation
@@ -86,10 +98,18 @@ const SPEARMAN_MIN_N = 10
 /**
  * Both groups must reach this size or mannWhitneyBracket returns 'none'.
  *
- * At n₁ = n₂ = 8 the approximation asks for |U − 32| ≥ 1.96·√(64·17/12) = 1.96·9.5219 = 18.66, i.e. U ≤ 13 or
- * U ≥ 51 — and 13 is exactly the exact test's own two-tailed 5 % critical U for 8 against 8, so at this size the
- * approximation and the exact test agree on the verdict. Below it they come apart, and §12's weekend gate (≥ 8
- * weekends observed) sits precisely here, so the floor and the gate are the same line.
+ * At n₁ = n₂ = 8, V = 1088 and σ = √(1088/12) = 9.5219. The derivation that used to stand here computed the
+ * UNCORRECTED test — |U − 32| ≥ 1.96·9.5219 = 18.66, i.e. U ≤ 13 or U ≥ 51 — and concluded that it agreed exactly
+ * with the exact test, which also rejects at U ≤ 13 or U ≥ 51. That is not the test this module runs.
+ *
+ * With the continuity correction applied the demand is |U − 32| − 0.5 ≥ 1.96·9.5219, i.e. |U − 32| ≥ 19.16, so this
+ * module rejects at U ≤ 12 or U ≥ 52 — ONE UNIT OF U STRICTER than the exact test on each side. At U = 13 the exact
+ * test rejects and this module returns 'none'. So the floor is still justified, but not because the two agree: it is
+ * justified because at 8 against 8 the disagreement is a single step of U and it falls on the side of silence.
+ *
+ * §12's weekend gate (≥ 8 weekends observed) is NOT the same line, which this comment also claimed. The gate counts
+ * WEEKENDS; this floor counts PURCHASES IN EACH GROUP. Eight weekends force at least eight weekend purchases, but
+ * they constrain the weekday group not at all, so this floor still bites after that gate has opened.
  *
  * The variance carries NO tie correction, deliberately. Ties make the true variance SMALLER, so using the untied
  * variance makes |z| smaller and the bracket weaker than it could be — the omission errs toward silence, which is
@@ -138,7 +158,7 @@ const CHI_CRIT: readonly { readonly p001: number; readonly p01: number; readonly
   { p001: 108276, p01: 66349, p05: 38415 }, // df 1   10.8275662, 6.6348966, 3.8414588
   { p001: 138156, p01: 92104, p05: 59915 }, // df 2   13.8155106, 9.2103404, 5.9914645
   { p001: 162663, p01: 113449, p05: 78148 }, // df 3   16.2662362, 11.3448667, 7.8147279
-  { p001: 184669, p01: 132768, p05: 94878 }, // df 4   18.4668274, 13.2767041, 9.4877290
+  { p001: 184669, p01: 132768, p05: 94878 }, // df 4   18.4668270, 13.2767041, 9.4877290
   { p001: 205151, p01: 150863, p05: 110705 }, // df 5   20.5150057, 15.0862725, 11.0704977
   { p001: 224578, p01: 168119, p05: 125916 }, // df 6   22.4577445, 16.8118938, 12.5915872
   { p001: 243219, p01: 184754, p05: 140672 }, // df 7   24.3218863, 18.4753069, 14.0671404

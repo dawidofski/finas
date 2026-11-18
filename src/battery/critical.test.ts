@@ -97,8 +97,9 @@ describe('critical: significance as a squared integer comparison', () => {
     //     2U = 170 (U = 85)   → C = 69 → 4761 · 3 · 10⁸ = 1 428 300 000 000  ≥  1 393 404 770 100  → p<0.01
     expect(mannWhitneyBracket(150, 10, 10)).toBe('none')
     expect(mannWhitneyBracket(152, 10, 10)).toBe('none')
-    // Reachable only with a tie, and the first value that CROSSES rather than one sitting on the line:
-    // 811 200 000 000 exceeds 806 736 000 000 — no input to this comparison lands exactly on a threshold.
+    // Reachable only with a tie, and here the first value that CROSSES rather than one sitting on the line:
+    // 811 200 000 000 exceeds 806 736 000 000. Exact equality IS reachable at other sizes, and the test below
+    // pins it — this comment used to claim no input ever lands on a threshold, which was false.
     expect(mannWhitneyBracket(153, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(154, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(168, 10, 10)).toBe('p<0.05')
@@ -332,6 +333,87 @@ describe('critical: significance as a squared integer comparison', () => {
       'spearman p<0.01',
       'spearman p<0.05',
     ])
+  })
+
+  it('counts a statistic exactly equal to its critical value as significant', () => {
+    // The inclusive boundary is the single decision at the heart of this module, and until now nothing held it: the
+    // long-way oracle compares with >= too, so mutating >= to > in either rank bracket passed every test. It is
+    // pinned here against INTEGER equality instead, which needs no oracle to be certain about.
+    //
+    // Chi-square had it already, since chiScaled and the stored criticals are both integers and the boundary tests
+    // use the critical itself. For the rank brackets exact equality needs 3*10^8*C^2 == Z_BP^2*V, which has
+    // solutions but not obvious ones. These are ALL of them for n1 <= n2 <= 200, found by exhaustive search; every
+    // one falls at 0.05, and none exists at 0.01 or 0.001 in that range.
+    const exactMW = [
+      [9, 125, 441],
+      [24, 25, 196],
+      [25, 49, 343],
+      [60, 64, 784],
+      [24, 200, 1176],
+      [49, 150, 1372],
+      [90, 125, 1764],
+      [125, 189, 3087],
+    ] as const
+    for (const [n1, n2, c] of exactMW) {
+      const pairs = n1 * n2
+      // C = |D| - 1, so |D| = c + 1 and uDoubled sits c + 1 either side of the null midpoint.
+      expect([n1, n2, mannWhitneyBracket(pairs + c + 1, n1, n2)]).toEqual([n1, n2, 'p<0.05'])
+      expect([n1, n2, mannWhitneyBracket(pairs - c - 1, n1, n2)]).toEqual([n1, n2, 'p<0.05'])
+      // And one step short of equality is below the line, so the pair brackets the decision from both sides.
+      expect([n1, n2, mannWhitneyBracket(pairs + c, n1, n2)]).toEqual([n1, n2, 'none'])
+      expect([n1, n2, mannWhitneyBracket(pairs - c, n1, n2)]).toEqual([n1, n2, 'none'])
+    }
+    // Spearman has the same solutions where rhoBp^2*(n-1) == Z_BP^2 exactly. These are all of them for n <= 400,
+    // again all at 0.05. n = 5 is below SPEARMAN_MIN_N, so there equality is not enough and never can be.
+    const exactSpearman = [
+      [4900, 17],
+      [3920, 26],
+      [2800, 50],
+      [2450, 65],
+      [1960, 101],
+      [1400, 197],
+      [1225, 257],
+    ] as const
+    for (const [rhoBp, n] of exactSpearman) {
+      expect([rhoBp, n, spearmanBracket(rhoBp, n)]).toEqual([rhoBp, n, 'p<0.05'])
+      expect([rhoBp, n, spearmanBracket(-rhoBp, n)]).toEqual([rhoBp, n, 'p<0.05'])
+      expect([rhoBp, n, spearmanBracket(rhoBp - 1, n)]).toEqual([rhoBp, n, 'none'])
+    }
+    expect(spearmanBracket(9800, 5)).toBe('none') // exact equality, but the sample is below the floor
+
+    // The two stricter rungs need their own cases, and WHY they look nothing like the ones above is arithmetic:
+    // equality needs rhoBp to divide Z_BP, and Z_BP['p<0.05'] = 19600 = 2^4*5^2*7^2 is highly composite, while
+    // Z_BP['p<0.01'] = 25759 is PRIME and Z_BP['p<0.001'] = 32906 = 2*16453 with 16453 prime. So at 0.01 the only
+    // rhoBp at or under 10000 that divides it is 1, and n-1 must be 25759^2. These are boundary probes, not
+    // plausible samples -- no owner has six hundred million annotated purchases -- but they are legal integer
+    // inputs and they are the only way to hold the >= at these two lines.
+    expect(spearmanBracket(1, 663526082)).toBe('p<0.01') // 1 * 25759^2 = 25759^2, exactly
+    expect(spearmanBracket(1, 663526081)).toBe('p<0.05') // one short of it
+    expect(spearmanBracket(2, 270701210)).toBe('p<0.001') // 4 * 16453^2 = 32906^2, exactly
+    expect(spearmanBracket(2, 270701209)).toBe('p<0.01')
+    expect(1 * 663526081).toBe(25759 * 25759)
+    expect(4 * 270701209).toBe(32906 * 32906)
+
+    // Mann-Whitney has NO exact equality at 0.01 or 0.001, and that is a fact about the constants rather than a gap
+    // in the search: equality needs 3*10^8*C^2 == Z_BP^2*V, and since 25759 is prime and does not divide 3*10^8 it
+    // must divide C, which forces V = n1*n2*(n1+n2+1) to be exactly 3*10^8*k^2. No pair of groups up to 1500 each
+    // satisfies that -- and 1500 annotated purchases on each side is already far past anything this app will hold.
+    // So the >= at those two lines is unpinned for mannWhitneyBracket, said plainly rather than left to be found:
+    // mutating >= to > there survives. The 0.05 line above is the one real samples can reach.
+
+    // Chi-square needs no special case: chiScaled and the stored criticals are both integers in the same units, so
+    // every boundary test in this file sits exactly on a threshold already.
+    expect(chiSquareBracket(38415, 1)).toBe('p<0.05')
+    // df 4 at 0.001 is pinned too, because its comment digit was wrong for a round (18.4668274 for a true
+    // 18.4668269529) and a row whose prose has already been wrong is the row most likely to be mis-edited next.
+    expect(chiSquareBracket(184668, 4)).toBe('p<0.01')
+    expect(chiSquareBracket(184669, 4)).toBe('p<0.001')
+    // The arithmetic of one case, written out, so the list above is checkable without running anything:
+    //   rhoBp = 4900, n = 17:  4900^2 * 16 = 24 010 000 * 16 = 384 160 000 = 19600^2, exactly.
+    //   n1 = 24, n2 = 25, C = 196:  V = 600 * 50 = 30 000, and
+    //   3 * 10^8 * 196^2 = 3 * 10^8 * 38 416 = 11 524 800 000 000 = 384 160 000 * 30 000 = 19600^2 * V, exactly.
+    expect(4900 * 4900 * 16).toBe(19600 * 19600)
+    expect(3 * 100000000 * 196 * 196).toBe(19600 * 19600 * (24 * 25 * (24 + 25 + 1)))
   })
 
   it('returns none where the sample is too small for the normal approximation to mean anything', () => {
