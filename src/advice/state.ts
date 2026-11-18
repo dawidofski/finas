@@ -26,13 +26,13 @@ async function update(key: string, change: (row: RecommendationStateRow) => void
 
 /**
  * `suppressed` is terminal: every writer below returns early on it, so no call order (a stale second tab, an
- * out-of-order screen) can bring back advice the owner rejected twice. Only shownCount/lastShownAt move.
+ * out-of-order screen) can bring back advice the owner rejected twice. A suppressed row is not touched at all.
  */
 export async function recordShown(key: string, fingerprint: string, at: number): Promise<void> {
   await update(key, (row) => {
+    if (row.status === 'suppressed') return // untouched: counts, time and the evidence the owner dismissed all stay as they were
     row.shownCount += 1
     row.lastShownAt = at
-    if (row.status === 'suppressed') return // the evidence the owner dismissed stays as it was
     if (row.status === 'accepted' && row.evidenceFingerprint === fingerprint) return // the occurrence they already acted on
     if (row.status === 'snoozed') {
       if (row.suppressedUntil !== null && row.suppressedUntil > at) return // still asleep
@@ -53,10 +53,14 @@ export async function recordAccepted(key: string): Promise<void> {
   })
 }
 
-/** Counts once per showing: a call while the row is already 'rejected' is a double-fire and is ignored. Two rejections need two showings. */
+/**
+ * Counts once per showing. 'active' (set only by recordShown) means shown and not yet acted on, so a rejection counts only
+ * then, or when there is no row at all (a first rejection the screen never recorded a showing for). Any other status
+ * (rejected: a double-fire; snoozed, accepted: an out-of-order call; suppressed: terminal) is ignored.
+ */
 export async function recordRejected(key: string): Promise<void> {
   await update(key, (row) => {
-    if (row.status === 'suppressed' || row.status === 'rejected') return
+    if (row.status !== 'active') return // a missing row arrives here as a fresh 'active' one
     row.rejectedCount += 1
     row.suppressedUntil = null
     row.status = row.rejectedCount >= SUPPRESS_AFTER_REJECTIONS ? 'suppressed' : 'rejected'

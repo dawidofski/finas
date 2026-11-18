@@ -56,6 +56,7 @@ describe('recommendation state', () => {
     const shown = await db.recommendationState.get('k')
     expect(shown?.status).toBe('suppressed') // showing never un-suppresses
     expect(shown?.evidenceFingerprint).toBe('f1') // nor rewrites the evidence the owner dismissed
+    expect([shown?.shownCount, shown?.lastShownAt]).toEqual([2, T0 + 1]) // nor counts a showing that was withheld
     expect((await withheldKeys(fp('k', 'f2-new-transactions'), T0 + 5)).has('k')).toBe(true)
   })
 
@@ -112,17 +113,47 @@ describe('recommendation state', () => {
     expect(row?.evidenceFingerprint).toBe('f2')
   })
 
-  it('ignores a double-fired rejection but counts one on each of two showings', async () => {
+  it('ignores a double-fired rejection', async () => {
     await recordShown('k', 'same', T0)
     await recordRejected('k')
     await recordRejected('k') // double-click
-    let row = await db.recommendationState.get('k')
+    const row = await db.recommendationState.get('k')
     expect([row?.rejectedCount, row?.status]).toEqual([1, 'rejected'])
-    await recordShown('k', 'same', T0 + 1) // re-offered with unchanged evidence
+    expect((await withheldKeys(fp('k', 'same'), T0 + 1)).has('k')).toBe(false)
+  })
+
+  it('counts one rejection on each of two showings, even with unchanged evidence', async () => {
+    await recordShown('k', 'same', T0)
+    await recordRejected('k')
+    await recordShown('k', 'same', T0 + 1)
     expect((await db.recommendationState.get('k'))?.status).toBe('active')
     await recordRejected('k')
-    row = await db.recommendationState.get('k')
+    const row = await db.recommendationState.get('k')
     expect([row?.rejectedCount, row?.status]).toEqual([2, 'suppressed'])
+  })
+
+  it('counts a first rejection even when no showing was ever recorded', async () => {
+    await recordRejected('k')
+    const row = await db.recommendationState.get('k')
+    expect([row?.rejectedCount, row?.status]).toEqual([1, 'rejected'])
+  })
+
+  it('does not count a rejection that follows a snooze with no showing in between', async () => {
+    await recordShown('k', 'f', T0)
+    await recordRejected('k')
+    await recordSnoozed('k', T0 + 1)
+    await recordRejected('k') // stale tab
+    const row = await db.recommendationState.get('k')
+    expect([row?.rejectedCount, row?.status]).toEqual([1, 'snoozed'])
+  })
+
+  it('does not count a rejection that follows an acceptance with no showing in between', async () => {
+    await recordShown('k', 'f', T0)
+    await recordRejected('k')
+    await recordAccepted('k')
+    await recordRejected('k') // stale tab
+    const row = await db.recommendationState.get('k')
+    expect([row?.rejectedCount, row?.status]).toEqual([1, 'accepted'])
   })
 
   it('treats suppressed as terminal for every writer', async () => {
