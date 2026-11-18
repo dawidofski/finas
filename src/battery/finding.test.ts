@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { BATTERY, type RelationshipId } from './battery'
 import type { Bracket } from './critical'
 import type { ContingencyResult, ContingencyRow } from './contingency'
-import { findingFor, type BatteryResults, type ContingencyContext, type CorrectionVerdict, type Finding } from './finding'
+import { findingFor, type BatteryResults, type CorrectionVerdict, type Finding, type Observation } from './finding'
 
 /**
  * The wording of §12's eight fields. Every assertion here is about a sentence a person reads about their own money, so
@@ -41,22 +41,20 @@ const PERIOD = { from: '2026-01-05', to: '2026-11-15' }
 
 const rank = (effectBp: number, bracket: Bracket, n: number) => ({ effectBp, bracket, n, period: PERIOD })
 
-const contingency = (over: Partial<ContingencyResult> = {}): ContingencyContext => ({
+const contingency = (over: Partial<ContingencyResult> = {}): ContingencyResult => ({
+  n: 64,
   period: PERIOD,
-  result: {
-    n: 64,
-    columns: ['Impulse', 'Not impulse'],
-    rows: [
-      { key: 'mood.bored', label: 'Bored', counts: [14, 10] },
-      { key: 'mood.not-bored', label: 'Any other mood', counts: [8, 32] },
-    ],
-    chiScaled: 95000,
-    df: 1,
-    vBp: 3400,
-    bracket: 'p<0.01',
-    verdict: 'tested',
-    ...over,
-  },
+  columns: ['Impulse', 'Not impulse'],
+  rows: [
+    { key: 'mood.bored', label: 'Bored', counts: [14, 10] },
+    { key: 'mood.not-bored', label: 'Any other mood', counts: [8, 32] },
+  ],
+  chiScaled: 95000,
+  df: 1,
+  vBp: 3400,
+  bracket: 'p<0.01',
+  verdict: 'tested',
+  ...over,
 })
 
 const reasonRows: ContingencyRow[] = [
@@ -107,7 +105,7 @@ function build<K extends RelationshipId>(id: K, verdict: CorrectionVerdict = VER
 }
 
 /** Every string a person reads off one finding. `id` is a key, not copy, so it is checked separately. */
-const copyOf = (f: Finding): string[] => [f.pattern, f.period, f.effect.label, f.confidence, f.limitation, f.meaning, f.action]
+const copyOf = (f: Finding): string[] => [f.pattern, f.unit, f.period, f.effect.label, f.confidence, f.limitation, f.meaning, f.action]
 
 /**
  * A wide spread of every template: both signs and a flat effect, all four rungs, surviving and not, and all three
@@ -123,11 +121,11 @@ function everyFinding(): { id: RelationshipId; finding: Finding }[] {
     if ('effectBp' in base) {
       shapes.push({ ...base, effectBp: -base.effectBp }, { ...base, effectBp: 0 })
     }
-    if ('result' in base) {
+    if ('verdict' in base) {
       shapes.push(
-        { ...base, result: { ...base.result, verdict: 'sparse' } },
-        { ...base, result: { ...base.result, verdict: 'too-many-categories' } },
-        { ...base, result: { ...base.result, rows: [] } },
+        { ...base, verdict: 'sparse' },
+        { ...base, verdict: 'too-many-categories' },
+        { ...base, rows: [] },
       )
     }
     if ('categories' in base) {
@@ -167,7 +165,9 @@ describe('the eight fields a finding carries', () => {
     expect(Object.keys(FIXTURES).sort()).toEqual([...ids].sort())
     for (const id of ids) {
       const f = build(id)
-      expect(Object.keys(f).sort()).toEqual(['action', 'confidence', 'effect', 'id', 'limitation', 'meaning', 'pattern', 'period', 'transactions'])
+      // §12's eight, plus `id` and `unit`: the screen must never label the count "transactions", since for four of
+      // the ten it holds weeks, days or months, so the template declares the unit rather than leaving it to prose.
+      expect(Object.keys(f).sort()).toEqual(['action', 'confidence', 'effect', 'id', 'limitation', 'meaning', 'pattern', 'period', 'transactions', 'unit'])
       expect(f.id).toBe(id)
       expect(f.pattern.length).toBeGreaterThan(30)
       expect(Number.isSafeInteger(f.transactions)).toBe(true)
@@ -234,16 +234,22 @@ describe('the eight fields a finding carries', () => {
       expect(finding.limitation.length, id).toBeGreaterThan(80)
     }
     // The count in `transactions` is named in its own unit, so a week or a month can never read as a transaction.
-    const units: Record<RelationshipId, string> = {
+    // Both halves are pinned: the unit each relationship DECLARES, and that its limitation says the same word in
+    // prose next to the count. Changing one without the other fails, which a check of either alone would not catch.
+    const units: Record<RelationshipId, Observation> = {
       'mood-amount': 'purchases', 'mood-frequency': 'weeks', 'stress-discretionary': 'purchases',
       'boredom-impulse': 'purchases', 'reason-worthwhile': 'purchases', weekend: 'purchases',
       payday: 'days', 'small-purchases': 'purchases', 'salary-lifestyle': 'months', 'category-savings': 'months',
     }
     for (const id of ids) {
       const f = build(id)
-      expect(f.limitation, `${id} leaves its count of ${units[id]} unnamed`)
-        .toMatch(new RegExp(`\\b${f.transactions}\\b[^.]{0,30}\\b${units[id]}\\b`))
+      expect(f.unit, `${id} declares the wrong unit for its count`).toBe(units[id])
+      expect(f.limitation, `${id} leaves its count of ${f.unit} unnamed`)
+        .toMatch(new RegExp(`\\b${f.transactions}\\b[^.]{0,30}\\b${f.unit}\\b`))
     }
+    // Four of the ten count something other than a transaction, which is the whole reason the field exists.
+    expect(ids.filter((id) => build(id).unit !== 'purchases').sort())
+      .toEqual(['category-savings', 'mood-frequency', 'payday', 'salary-lifestyle'])
   })
 
   it('says a result is uncertain in words, never as a number pretending to be exact', () => {
@@ -406,6 +412,15 @@ describe('the eight fields a finding carries', () => {
 
   it('reports the period as the bank dates the result covers', () => {
     expect(build('weekend').period).toBe('05/01/2026 to 15/11/2026')
+    // Every result module reports the span of the data it ACTUALLY used, and this module reads that field and
+    // nothing else. It takes no window from its caller: the caller is the screen, which knows only what it asked
+    // for, so echoing the request would claim months the owner may have no records in.
+    for (const id of ids) {
+      if (id === 'small-purchases') continue // its scope is a month key, so its period is that month's two ends
+      expect(build(id).period, id).toBe('05/01/2026 to 15/11/2026')
+    }
+    const narrower = findingFor('boredom-impulse', contingency({ period: { from: '2026-03-02', to: '2026-04-20' } }), VERDICT)
+    expect(narrower.period).toBe('02/03/2026 to 20/04/2026')
     // A month-shaped result still reports whole bank dates: the first day of the month to its last.
     expect(build('small-purchases').period).toBe('01/10/2026 to 31/10/2026')
     // A result whose period never got filled in says so rather than throwing on a screen.

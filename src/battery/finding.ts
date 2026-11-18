@@ -43,11 +43,24 @@ import type { ContingencyResult, ContingencyRow } from './contingency'
  * No float: every figure arrives in integer cents or basis points and is rendered with formatEur, formatBp or
  * percentBpOf from src/lib/money.ts. There is no second formatter here.
  */
+/**
+ * What ONE observation is for a relationship, so the count beside it can be labelled rather than guessed at.
+ *
+ * §12 calls the count "the number of transactions analysed" and for six of the ten it is exactly that, but
+ * mood -> frequency counts weeks, days-after-payday counts single days, and both month-walking relationships count
+ * months. The template is the only place that knows which, so it says so in a field: a screen that had to read the
+ * unit out of the limitation's prose would be inferring it, and a screen that labelled the count "transactions"
+ * would be stating something false four times in ten.
+ */
+export type Observation = 'purchases' | 'weeks' | 'days' | 'months'
+
 export interface Finding {
   id: RelationshipId
   pattern: string
-  /** Observations the figure was computed from. §12 names the field; for four of the ten an observation is a week, a day or a month, and `limitation` always names the unit so no sentence calls a month a transaction. */
+  /** Observations the figure was computed from. `unit` says what one of them is; `limitation` also names it in words. */
   transactions: number
+  /** The ninth field, and not one of §12's eight: what `transactions` counts. */
+  unit: Observation
   period: string
   effect: { label: string; bp: number }
   /** The bracket in plain words, never a number. */
@@ -74,24 +87,19 @@ export interface SmallPurchasesContext {
 }
 
 /**
- * A contingency table and the bank dates it was built over.
+ * The result each relationship hands in. A key missing here makes TEMPLATES fail to type-check.
  *
- * rank.ts and trend.ts each report a `period` with their result; contingency.ts does NOT — it counts answers and
- * never looks at a date. §12 asks every finding for the period it covers, so the caller passes the window it read
- * over rather than this module inventing one or leaving the field blank.
+ * All four result modules report their own `period`, and this module never takes one from its caller. The caller is
+ * the screen, which knows only the window it ASKED for; the module that built the figure is the only code that knows
+ * which bank dates its data actually spans. Echoing the request back would claim months the owner may have no
+ * records in, and it would do so worst on the relationships where the records are thinnest.
  */
-export interface ContingencyContext {
-  result: ContingencyResult
-  period: { from: string; to: string }
-}
-
-/** The result each relationship hands in. A key missing here makes TEMPLATES fail to type-check. */
 export interface BatteryResults {
   'mood-amount': RankFinding
   'mood-frequency': MoodFrequencyFinding
   'stress-discretionary': RankFinding
-  'boredom-impulse': ContingencyContext
-  'reason-worthwhile': ContingencyContext
+  'boredom-impulse': ContingencyResult
+  'reason-worthwhile': ContingencyResult
   weekend: RankFinding
   payday: TrendFinding
   'small-purchases': SmallPurchasesContext
@@ -102,6 +110,7 @@ export interface BatteryResults {
 interface Parts {
   pattern: string
   transactions: number
+  unit: Observation
   period: { from: string; to: string }
   effect: { label: string; bp: number }
   limitation: string
@@ -201,6 +210,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'On the discretionary purchases you gave a mood to, the lower the mood you recorded, the larger the purchase tended to be.'
         : 'The discretionary purchases you gave a mood to came to much the same size whichever mood you recorded.',
     transactions: r.n,
+    unit: 'purchases',
     period: r.period,
     effect: { label: 'How closely the mood you recorded and the size of a discretionary purchase moved together', bp: r.effectBp },
     limitation: `This is ${count(r.n, 'discretionary purchase', 'discretionary purchases')} you gave a mood to. Rent, bills and the other fixed essentials are left out on purpose, as they cannot move with a mood, and a purchase you gave no mood to is not here at all: these are the purchases you chose to annotate, not everything you spent.`,
@@ -219,6 +229,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'In the weeks when most of what you recorded was feeling good, you made more purchases than in the weeks when most of it was feeling low.'
         : 'You made about as many purchases in the weeks when most of what you recorded was feeling low as in the weeks when most of it was feeling good.',
     transactions: r.n,
+    unit: 'weeks',
     period: r.period,
     effect: { label: 'How far apart the two kinds of week were in the number of purchases they held', bp: r.effectBp },
     limitation: `This is ${count(r.n, 'week', 'weeks')} of records rather than a count of purchases: ${count(r.lowMood.weeks, 'week', 'weeks')} of mostly low mood holding ${count(r.lowMood.purchases, 'purchase', 'purchases')}, against ${count(r.goodMood.weeks, 'week', 'weeks')} of mostly good mood holding ${count(r.goodMood.purchases, 'purchase', 'purchases')}, and it leaves out ${count(r.tiedWeeks, 'week', 'weeks')} that held as many of one as of the other. A mood lives here only as a note on a purchase, so a week you bought nothing in has no mood and is counted nowhere: these are weeks when you recorded feeling something while buying, and not weeks of your life.`,
@@ -239,6 +250,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
           ? `Of the purchases you recorded while stressed, ${gap} fewer of them went on wants rather than needs than of the purchases you recorded while not stressed.`
           : 'The same share of your purchases went on wants rather than needs whether or not you recorded feeling stressed.',
       transactions: r.n,
+      unit: 'purchases',
       period: r.period,
       effect: { label: 'The gap in the share of purchases that went on wants rather than needs', bp: r.effectBp },
       limitation: `This is a share and not an amount: across ${count(r.n, 'purchase', 'purchases')} it says which way your spending leaned and nothing at all about how much each one came to. Only the purchases you gave a mood to and sorted into wants or needs are counted, so an uncategorised one is in neither group, and these are the purchases you chose to annotate rather than everything you spent.`,
@@ -249,8 +261,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
 
   // contingency.ts boredomImpulse: bored against any other mood, impulse-tagged against any other reason. Read
   // `verdict`, not `bracket`: a sparse table carries a placeholder 'none'.
-  'boredom-impulse': (c) => {
-    const r = c.result
+  'boredom-impulse': (r) => {
     const bored = r.rows[0]
     const other = r.rows[1]
     const tag = r.columns[0].toLowerCase()
@@ -259,7 +270,8 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'There were not two groups of purchases here to set beside one another.'
         : `Of the ${count(rowTotal(bored), 'purchase', 'purchases')} you recorded while ${bored.label.toLowerCase()}, ${bored.counts[0]} carried the ${tag} tag; of the ${count(rowTotal(other), 'purchase', 'purchases')} you recorded in ${other.label.toLowerCase()}, ${other.counts[0]} did.`,
       transactions: r.n,
-      period: c.period,
+      unit: 'purchases',
+      period: r.period,
       effect: { label: 'How strongly the mood you recorded and the tag you gave a purchase went together', bp: r.vBp },
       limitation: `This covers ${count(r.n, 'purchase', 'purchases')} that carry both a mood and a reason. ${FLOORED_STRENGTH} It also cannot tell apart a purchase that felt like an impulse at the time from one you tagged that way afterwards.`,
       ...verdictWords(r, {
@@ -275,8 +287,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   // contingency.ts reasonWorthwhile: each reason against worthwhile / not worthwhile. The row named is the one you
   // were least often glad about, which is the row worth acting on; a label two removed reasons share is flagged as
   // shared rather than quietly presented as one answer.
-  'reason-worthwhile': (c) => {
-    const r = c.result
+  'reason-worthwhile': (r) => {
     const worst = lowestFirstColumn(r.rows)
     const shared = r.rows.filter((row) => worst !== undefined && row.label === worst.label).length
     const name = worst === undefined ? '' : shared > 1 ? `${worst.label} (one of ${shared} rows reading the same way)` : worst.label
@@ -285,7 +296,8 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'There were no answered purchases here to set beside one another.'
         : `Across ${count(r.n, 'purchase', 'purchases')} where you gave both a reason and a verdict afterwards, ${name} is the reason you were least often glad about: ${worst.counts[0]} of ${rowTotal(worst)} felt worthwhile.`,
       transactions: r.n,
-      period: c.period,
+      unit: 'purchases',
+      period: r.period,
       effect: { label: 'How strongly the reason you give for a purchase and how worthwhile it felt afterwards go together', bp: r.vBp },
       limitation: `This covers ${count(r.n, 'purchase', 'purchases')} that carry both a reason and a verdict, spread over ${count(r.rows.length, 'reason', 'reasons')}. ${FLOORED_STRENGTH}${sharedLabelClause(r.rows)} It also cannot tell whether a reason was chosen before you bought or picked afterwards to fit the purchase.`,
       ...verdictWords(r, {
@@ -308,6 +320,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'Your weekday purchases ran larger than your weekend ones.'
         : 'Your weekend and weekday purchases came to much the same size.',
     transactions: r.n,
+    unit: 'purchases',
     period: r.period,
     effect: { label: 'How consistently a weekend purchase outsized a weekday one', bp: r.effectBp },
     limitation: `This reads all ${count(r.n, 'purchase', 'purchases')} in the window and not only the ones you annotated. It sets single purchases beside one another, so a weekend that is one big shop and a weekend of many small ones are not told apart, and a Friday night counts as a weekday.`,
@@ -324,6 +337,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'Your spending ran higher on the days just after payday and eased off later in the month.'
         : 'Your daily spending sat about level across the days after payday.',
     transactions: r.n,
+    unit: 'days',
     period: r.period,
     effect: { label: 'How closely the number of days since payday and that day’s spending moved together', bp: r.effectBp },
     limitation: `This is ${count(r.n, 'single day', 'single days')} of spending, pooled across the months that had a payment in them. Each day is counted whole, so one large purchase and a day of many small ones look alike, and a month whose payday fell late contributes only the few days left in it.`,
@@ -336,6 +350,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   'small-purchases': (c) => ({
     pattern: `Your purchases under ${formatEur(c.ceilingCents)} in ${formatMonthTitle(c.month)} came to ${formatEur(c.small.totalCents)} between them.`,
     transactions: c.small.count,
+    unit: 'purchases',
     period: { from: `${c.month}-01`, to: addDays(nextMonthStart(c.month), -1) },
     effect: { label: `The part of that month’s spending that went in purchases under ${formatEur(c.ceilingCents)}`, bp: percentBpOf(c.small.totalCents, c.monthSpendCents) },
     limitation: `This is a straight count of the ${count(c.small.count, 'purchase', 'purchases')} under ${formatEur(c.ceilingCents)} that ${formatMonthTitle(c.month)} holds${c.small.medianCents === null ? '' : `, where the middle one of them came to ${formatEur(c.small.medianCents)}`}. It is one month standing on its own, and it counts every purchase under that line whether it was a coffee or a bus fare, so it says what the small ones came to and nothing about which of them you would miss.`,
@@ -354,6 +369,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         ? 'In the months at your higher income, a smaller share of your spending went on wants than in the months at your lower income.'
         : 'The share of your spending that went on wants was much the same at both income levels.',
     transactions: r.n,
+    unit: 'months',
     period: r.period,
     effect: { label: 'How consistently the months at the higher income held the larger share of wants', bp: r.effectBp },
     limitation: `This compares ${count(r.n, 'whole month', 'whole months')}, grouped into a higher and a lower income level. They are two sets of different months and not one month before and after, a month whose income had to be estimated is left out, and with this few on each side the comparison can show a gap without being able to say how settled it is.`,
@@ -376,6 +392,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
             ? `Of the ${many} that moved from month to month, ${top.label} tracked your savings most closely: the months you spent more in it were the months you saved less.`
             : `None of the ${many} that moved from month to month tracked your savings either way.`,
       transactions: r.months,
+      unit: 'months',
       period: r.period,
       effect: {
         label: top === undefined
@@ -431,6 +448,7 @@ export function findingFor<K extends RelationshipId>(id: K, result: BatteryResul
     id,
     pattern: parts.pattern,
     transactions: parts.transactions,
+    unit: parts.unit,
     period: periodText(parts.period),
     effect: parts.effect,
     confidence: parts.confidence ?? confidenceOf(corrected),
