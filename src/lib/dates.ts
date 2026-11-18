@@ -81,6 +81,18 @@ export function epochMsToIso(ms: number): string {
   return toIso(ms)
 }
 
+const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/
+
+/** The month `n` months after (negative: before) a 'YYYY-MM' month. Throws on a malformed month or a count that is not a whole number. */
+export function addMonths(month: string, n: number): string {
+  const m = MONTH_RE.exec(month)
+  if (!m) throw new Error(`Invalid month, expected YYYY-MM: ${month}`)
+  if (!Number.isInteger(n)) throw new Error(`Invalid month count: ${n}`)
+  const index = Number(m[1]) * 12 + (Number(m[2]) - 1) + n
+  const year = Math.floor(index / 12)
+  return `${String(year).padStart(4, '0')}-${String(index - year * 12 + 1).padStart(2, '0')}`
+}
+
 // ===========================================================================
 // DISPLAY ONLY - everything above this line is for computation; the two
 // functions below are for the owner's eyes and nothing else.

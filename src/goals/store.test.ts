@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
-import { allocationsFor } from '../budget/allocations'
+import { allocationsFor, saveAllocation } from '../budget/allocations'
+import { attribute } from './contributions'
 import { archiveGoal, completeGoal, createGoal, updateGoal } from './store'
 
 const AT = Date.UTC(2026, 10, 5, 12) // 2026-11-05
+const DEC10 = Date.UTC(2026, 11, 10) // 2026-12-10
 const input = { name: 'Viaje inventado', targetCents: 120000, deadline: '2027-06-30', contributionPercentBp: 1000 }
 
 beforeEach(async () => {
@@ -60,7 +62,7 @@ describe('createGoal', () => {
 describe('updateGoal', () => {
   it('edits only the fields given and leaves the allocation alone when the percentage is unchanged', async () => {
     const g = await createGoal(input, AT)
-    await updateGoal(g.id, { name: 'Nuevo', targetCents: 5000 })
+    await updateGoal(g.id, { name: 'Nuevo', targetCents: 5000 }, DEC10)
     expect(await db.savingsGoals.get(g.id)).toEqual({ ...g, name: 'Nuevo', targetCents: 5000 })
     expect(await db.budgetAllocations.count()).toBe(1)
   })
@@ -74,53 +76,88 @@ describe('updateGoal', () => {
 
   it('refuses bad input and changes nothing', async () => {
     const g = await createGoal(input, AT)
-    await expect(updateGoal(g.id, { targetCents: 0 })).rejects.toThrow(/above zero/)
-    await expect(updateGoal(g.id, { contributionPercentBp: 10001 })).rejects.toThrow(/between/)
-    await expect(updateGoal(g.id, { name: '' })).rejects.toThrow(/name/)
-    await expect(updateGoal(g.id, { deadline: 'mañana' })).rejects.toThrow(/deadline/)
-    await expect(updateGoal('nope', { name: 'x' })).rejects.toThrow(/no longer exists/)
+    await expect(updateGoal(g.id, { targetCents: 0 }, DEC10)).rejects.toThrow(/above zero/)
+    await expect(updateGoal(g.id, { contributionPercentBp: 10001 }, DEC10)).rejects.toThrow(/between/)
+    await expect(updateGoal(g.id, { name: '' }, DEC10)).rejects.toThrow(/name/)
+    await expect(updateGoal(g.id, { deadline: 'mañana' }, DEC10)).rejects.toThrow(/deadline/)
+    await expect(updateGoal('nope', { name: 'x' }, DEC10)).rejects.toThrow(/no longer exists/)
     expect(await db.savingsGoals.get(g.id)).toEqual(g)
   })
 
   it('writes the new percentage with the goal in one transaction, or neither', async () => {
     const g = await createGoal(input, AT)
     vi.spyOn(db.budgetAllocations, 'put').mockRejectedValue(new Error('disk full'))
-    await expect(updateGoal(g.id, { name: 'Nuevo', contributionPercentBp: 2000 })).rejects.toThrow()
+    await expect(updateGoal(g.id, { name: 'Nuevo', contributionPercentBp: 2000 }, DEC10)).rejects.toThrow()
     expect(await db.savingsGoals.get(g.id)).toEqual(g)
     vi.restoreAllMocks()
     expect((await db.budgetAllocations.toArray())[0]?.percentBp).toBe(1000)
   })
 
-  it('without a date replaces the latest allocation in place; with a date adds history', async () => {
+  it('never edits an allocation in place: a changed percentage starts a new one on the day given', async () => {
     const g = await createGoal(input, AT)
     const [first] = await db.budgetAllocations.toArray()
-    await updateGoal(g.id, { contributionPercentBp: 2000 })
-    const after = await db.budgetAllocations.toArray()
-    expect(after).toHaveLength(1)
-    expect(after[0]).toMatchObject({ id: first?.id, percentBp: 2000, effectiveFrom: '2026-11-05' })
-
-    await updateGoal(g.id, { contributionPercentBp: 3000 }, Date.UTC(2026, 11, 10))
+    await updateGoal(g.id, { contributionPercentBp: 2000 }, DEC10)
     expect(await db.budgetAllocations.count()).toBe(2)
-    expect((await allocationsFor('2026-11'))[0]?.percentBp).toBe(2000)
-    expect((await allocationsFor('2026-12'))[0]?.percentBp).toBe(3000)
+    expect(await db.budgetAllocations.get(first?.id ?? '')).toEqual(first) // untouched, same start date
+    expect((await allocationsFor('2026-11'))[0]?.percentBp).toBe(1000) // a month already lived keeps its share
+    expect((await allocationsFor('2026-12'))[0]).toMatchObject({ percentBp: 2000, effectiveFrom: '2026-12-10' })
+    expect((await db.savingsGoals.get(g.id))?.contributionPercentBp).toBe(2000)
+  })
+
+  it('compares the new percentage with the allocation in force, not with the goal row', async () => {
+    const g = await createGoal(input, AT) // row says 1000
+    await saveAllocation({ categoryId: null, savingsGoalId: g.id, percentBp: 2000, fixedCents: null, effectiveFrom: '2026-11-20', note: null }) // a Budget-screen edit
+    await updateGoal(g.id, { contributionPercentBp: 1000 }, DEC10) // equals the row, differs from what is in force
+    expect((await allocationsFor('2026-12'))[0]).toMatchObject({ percentBp: 1000, effectiveFrom: '2026-12-10' })
+    await updateGoal(g.id, { contributionPercentBp: 1000 }, Date.UTC(2026, 11, 20)) // now equal to what is in force
+    expect(await db.budgetAllocations.count()).toBe(3)
   })
 })
 
+/** The shares in force for a month, as attribute() takes them (basis points stand in for cents: only the ratio matters). */
+const inForce = async (month: string) =>
+  (await allocationsFor(month)).map((a) => ({ goalId: a.savingsGoalId ?? '', allocatedCents: (a.percentBp ?? 0) * 10 }))
+
 describe('archiveGoal and completeGoal', () => {
-  it('archives without deleting, and keeps past contributions readable', async () => {
-    const g = await createGoal(input, AT)
-    await archiveGoal(g.id)
-    expect((await db.savingsGoals.get(g.id))?.archived).toBe(true)
-    expect(await db.budgetAllocations.count()).toBe(1)
-    expect((await allocationsFor('2026-11')).map((a) => a.savingsGoalId)).toEqual([g.id])
-    await expect(archiveGoal('nope')).rejects.toThrow(/no longer exists/)
+  it('archiving ends the allocation from that day: later months give it nothing and the other goal gets more', async () => {
+    const a = await createGoal(input, AT)
+    const b = await createGoal({ ...input, name: 'Otra' }, AT)
+    const before = attribute(10000, await inForce('2026-12'))
+    expect(before.get(a.id)).toBe(5000)
+    expect(before.get(b.id)).toBe(5000)
+
+    await archiveGoal(a.id, DEC10)
+    expect((await db.savingsGoals.get(a.id))?.archived).toBe(true)
+    expect(await db.budgetAllocations.where('savingsGoalId').equals(a.id).count()).toBe(2) // history kept, one zero added
+    // November (before the day) is untouched, so past contributions stay computable.
+    const nov = attribute(10000, await inForce('2026-11'))
+    expect(nov.get(a.id)).toBe(5000)
+    for (const month of ['2026-12', '2027-01', '2030-06']) {
+      const after = attribute(10000, await inForce(month))
+      expect(after.get(a.id), month).toBe(0)
+      expect(after.get(b.id), month).toBe(10000)
+    }
+    await expect(archiveGoal('nope', DEC10)).rejects.toThrow(/no longer exists/)
   })
 
-  it('marks a goal complete once, keeping the first time', async () => {
-    const g = await createGoal(input, AT)
-    await completeGoal(g.id, AT + 1000)
-    await completeGoal(g.id, AT + 9000)
-    expect((await db.savingsGoals.get(g.id))?.completedAt).toBe(AT + 1000)
+  it('completing ends the allocation the same way, and only the first completion does', async () => {
+    const a = await createGoal(input, AT)
+    const b = await createGoal({ ...input, name: 'Otra' }, AT)
+    await completeGoal(a.id, DEC10)
+    await completeGoal(a.id, Date.UTC(2027, 2, 1))
+    expect((await db.savingsGoals.get(a.id))?.completedAt).toBe(DEC10)
+    expect(await db.budgetAllocations.where('savingsGoalId').equals(a.id).count()).toBe(2)
+    const after = attribute(10000, await inForce('2027-01'))
+    expect(after.get(a.id)).toBe(0)
+    expect(after.get(b.id)).toBe(10000)
     await expect(completeGoal('nope', AT)).rejects.toThrow(/no longer exists/)
+  })
+
+  it('writes the row change and the allocation together, or neither', async () => {
+    const g = await createGoal(input, AT)
+    vi.spyOn(db.budgetAllocations, 'put').mockRejectedValue(new Error('disk full'))
+    await expect(archiveGoal(g.id, DEC10)).rejects.toThrow()
+    await expect(completeGoal(g.id, DEC10)).rejects.toThrow()
+    expect(await db.savingsGoals.get(g.id)).toEqual(g)
   })
 })

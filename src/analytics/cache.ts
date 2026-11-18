@@ -45,7 +45,8 @@ const allocationText = (a: BudgetAllocationRow): string =>
 /**
  * One savings goal as text, for the content digest below, built exactly as allocationText is: every field named, in a fixed
  * order, JSON-escaped (`name` is free text). A field added to SavingsGoalRow later must be added here too, or a change to it
- * is invisible. `archived` and `completedAt` are in on purpose: archiving or completing a goal changes what a budget shows.
+ * is invisible. `archived` and `completedAt` are in on purpose: they are what a goals list shows (open, done, put away), and a change to either
+ * has to reach it. (Archiving or completing also ends the goal's allocation, which the allocations digest sees on its own.)
  */
 const goalText = (g: SavingsGoalRow): string =>
   JSON.stringify([g.id, g.name, g.targetCents, g.deadline, g.contributionPercentBp, g.createdAt, g.completedAt, g.archived])
@@ -81,7 +82,7 @@ const goalText = (g: SavingsGoalRow): string =>
  *   deletes one, and the importer bulk-adds the pairs the pairing module matched (the only other writer, and an add). No
  *   writer anywhere updates a row in place — checked writer by writer, because that is what this key rests on.
  *   The key set therefore determines the table exactly, and it is an INDEX-ONLY read — the primary-key index is walked and no
- *   row is fetched, so this is the cheapest of the four. `matchedAt` would be the obvious alternative and is NOT indexed, so
+ *   row is fetched, so this is the cheapest of the five. `matchedAt` would be the obvious alternative and is NOT indexed, so
  *   it can neither order nor bound a read; §29 forbids adding an index for it. A restore is the one path that bulk-PUTs these
  *   rows, and a restore clears this whole table (31.3), so it needs nothing from the digest.
  *

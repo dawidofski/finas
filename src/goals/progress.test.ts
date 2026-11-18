@@ -41,6 +41,7 @@ describe('progressOf', () => {
     // 4 months but only 2 with something put aside: still short.
     const p = progressOf(goal(), seq([0, 0, 5000, 5000]), LAST)
     expect(p.estimate).toBeNull()
+    expect(p.estimateNote).toBeNull()
     expect(p.estimateWhy).toContain('3')
     expect(p.estimateWhy).toContain('2')
 
@@ -62,6 +63,7 @@ describe('progressOf', () => {
     expect(a.remainingCents).toBe(790000)
     expect(a.estimate).toEqual({ earliestMonth: '2028-02', latestMonth: '2030-02' })
     expect(a.estimateWhy).toBeNull()
+    expect(a.estimateNote).toBeNull()
 
     // Seven months 100..700 EUR, target 10000.01 EUR. Odd count: the middle month (400) belongs to neither half.
     // Lower 100/200/300 -> 20000c; upper 500/600/700 -> 60000c. Contributed 280000, remaining 720001.
@@ -81,7 +83,9 @@ describe('progressOf', () => {
     // Contributed 1000 EUR, target 5000 EUR, remaining 4000 EUR (400000c). 400000/30000 = 13.3 -> 14: 2026-10 + 14 = 2027-12.
     const p = progressOf(goal({ targetCents: 500000 }), seq([0, 0, 10000, 20000, 30000, 40000]), LAST)
     expect(p.estimate).toEqual({ earliestMonth: '2027-12', latestMonth: null })
-    expect(p.estimateWhy).toContain('no sooner than')
+    expect(p.estimateWhy).toBeNull() // there IS an estimate, so there is no reason to give for its absence
+    expect(p.estimateNote).toContain('record so far')
+    expect(p.estimateNote).not.toContain('no sooner')
   })
 
   it('marks a goal reached once contributions meet the target', () => {
@@ -89,6 +93,8 @@ describe('progressOf', () => {
     expect(exact.reached).toBe(true)
     expect(exact.remainingCents).toBe(0)
     expect(exact.estimate).toBeNull()
+    expect(exact.estimateWhy).toBeNull()
+    expect(exact.estimateNote).toBeNull()
     const over = progressOf(goal({ targetCents: 50000 }), seq([10000, 20000, 30000]), LAST)
     expect(over.reached).toBe(true)
     expect(over.estimate).toBeNull()
@@ -115,10 +121,21 @@ describe('progressOf', () => {
     expect(p.contributedCents).toBe(60000)
   })
 
+  it('ignores months after the last completed month', () => {
+    const later: GoalMonth[] = [
+      { month: '2026-11', goalId: 'g1', contributedCents: 999999, allocatedCents: 0 },
+      { month: '2027-03', goalId: 'g1', contributedCents: 999999, allocatedCents: 0 },
+    ]
+    const p = progressOf(goal({ targetCents: 1000001 }), [...seq([10000, 20000, 30000]), ...later], LAST)
+    expect(p.contributedCents).toBe(60000)
+    expect(p.estimate).toEqual({ earliestMonth: '2029-06', latestMonth: '2034-09' })
+  })
+
   it('uses plain words, with no jargon', () => {
     const texts = [
       progressOf(goal(), [], LAST).estimateWhy,
-      progressOf(goal({ targetCents: 500000 }), seq([0, 0, 10000, 20000, 30000, 40000]), LAST).estimateWhy,
+      progressOf(goal({ targetCents: 500000 }), seq([0, 0, 10000, 20000, 30000, 40000]), LAST).estimateNote,
+      progressOf(goal(), seq([10000]), LAST).estimateWhy,
     ]
     for (const t of texts) {
       expect(t).not.toBeNull()

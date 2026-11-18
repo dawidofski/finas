@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeAll } from 'vitest'
-import { excelSerialToIso, isoToExcelSerial, parseSpanishDate, monthKeyOf, daysBetween, addDays, formatSpanishDate, formatMonthTitle, isoWeekday, spanishWeekdayName } from './dates'
+import { excelSerialToIso, isoToExcelSerial, parseSpanishDate, monthKeyOf, daysBetween, addDays, addMonths, formatSpanishDate, formatMonthTitle, isoWeekday, spanishWeekdayName } from './dates'
 
 // Local hour of 2026-01-01T00:00Z in each zone: UTC+0, UTC+14, UTC-11 (not the 1970 epoch: Kiritimati was UTC-10:40 then).
 const EXPECTED_EPOCH_HOUR: Record<string, number> = { 'UTC': 0, 'Pacific/Kiritimati': 14, 'Pacific/Niue': 13 }
@@ -86,5 +86,23 @@ describe('isoWeekday', () => {
   })
   it('names the weekdays in Spanish', () => {
     expect([1, 2, 3, 4, 5, 6, 7].map(spanishWeekdayName)).toEqual(['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'])
+  })
+})
+
+describe('addMonths', () => {
+  it('moves a month forward or back across year ends', () => {
+    expect(addMonths('2026-10', 0)).toBe('2026-10')
+    expect(addMonths('2026-10', 1)).toBe('2026-11')
+    expect(addMonths('2026-10', 3)).toBe('2027-01')
+    expect(addMonths('2026-10', 40)).toBe('2030-02')
+    expect(addMonths('2026-01', -1)).toBe('2025-12')
+    expect(addMonths('2026-01', -13)).toBe('2024-12')
+    expect(addMonths('0999-12', 1)).toBe('1000-01')
+  })
+  it('throws on a malformed month or a count that is not a whole number', () => {
+    for (const bad of ['2026-13', '2026-00', '2026-1', '26-10', '2026-10-01', '', 'NaN-NaN']) {
+      expect(() => addMonths(bad, 1), bad).toThrow()
+    }
+    for (const n of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(() => addMonths('2026-10', n)).toThrow()
   })
 })

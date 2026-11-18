@@ -275,11 +275,11 @@ describe('figures that depend on tables other than transactions and annotations'
     const AT = Date.UTC(2026, 10, 5, 12)
     const input = { name: 'Viaje inventado', targetCents: 120000, deadline: '2027-06-30', contributionPercentBp: 1000 }
     const edits: [string, (id: string) => Promise<void>][] = [
-      ['target', (id) => updateGoal(id, { targetCents: 130000 })],
-      ['percentage', (id) => updateGoal(id, { contributionPercentBp: 1500 })],
-      ['name', (id) => updateGoal(id, { name: 'Otro nombre' })],
-      ['deadline', (id) => updateGoal(id, { deadline: '2027-07-01' })],
-      ['archived', (id) => archiveGoal(id)],
+      ['target', (id) => updateGoal(id, { targetCents: 130000 }, AT + 9)],
+      ['percentage', (id) => updateGoal(id, { contributionPercentBp: 1500 }, AT + 9)],
+      ['name', (id) => updateGoal(id, { name: 'Otro nombre' }, AT + 9)],
+      ['deadline', (id) => updateGoal(id, { deadline: '2027-07-01' }, AT + 9)],
+      ['archived', (id) => archiveGoal(id, AT + 9)],
       ['completedAt', (id) => completeGoal(id, AT + 5)],
     ]
 
@@ -325,7 +325,7 @@ describe('figures that depend on tables other than transactions and annotations'
       const g = await createGoal(input, AT)
       const before = await inputsHash()
       const allocBefore = JSON.stringify(await db.budgetAllocations.toArray())
-      await updateGoal(g.id, { targetCents: 130000 })
+      await updateGoal(g.id, { targetCents: 130000 }, AT + 9)
       expect(JSON.stringify(await db.budgetAllocations.toArray())).toBe(allocBefore) // only the goal row moved
       expect(await inputsHash()).not.toBe(before)
     })
@@ -334,7 +334,7 @@ describe('figures that depend on tables other than transactions and annotations'
       const g = await createGoal(input, AT)
       await createGoal({ ...input, name: 'Segundo' }, AT)
       const before = await inputsHash()
-      await updateGoal(g.id, { name: input.name, targetCents: input.targetCents, contributionPercentBp: input.contributionPercentBp })
+      await updateGoal(g.id, { name: input.name, targetCents: input.targetCents, contributionPercentBp: input.contributionPercentBp }, AT + 9)
       expect(await inputsHash()).toBe(before)
       expect(await inputsHash()).toBe(before)
     })
@@ -354,7 +354,7 @@ describe('figures that depend on tables other than transactions and annotations'
       const figure = async (computedAt: number): Promise<number[]> =>
         cached('goal-targets', async () => (await db.savingsGoals.toArray()).map((x) => x.targetCents), computedAt)
       expect(await figure(1)).toEqual([120000])
-      await updateGoal(g.id, { targetCents: 130000 })
+      await updateGoal(g.id, { targetCents: 130000 }, AT + 9)
       expect(await figure(2)).toEqual([130000])
     })
   })
