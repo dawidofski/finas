@@ -15,10 +15,10 @@ const TODAY_NOV = '2026-11-10' // inside November: the month is still running
 const TODAY_DEC = '2026-12-05' // November is over
 
 let uid = 0
-const tx = async (id: string, valueDate: string, amountCents: number, ing: [string, string] | null = null): Promise<void> => {
+const tx = async (id: string, valueDate: string, amountCents: number, ing: [string, string] | null = null, kind: TransactionRow['kind'] = amountCents > 0 ? 'income' : 'spend'): Promise<void> => {
   const row: TransactionRow = {
     id, accountId: 'acc.1', valueDate, amountCents, balanceCents: 0, description: 'Movimiento inventado', comment: null,
-    ingCategory: ing?.[0] ?? null, ingSubcategory: ing?.[1] ?? null, kind: amountCents > 0 ? 'income' : 'spend',
+    ingCategory: ing?.[0] ?? null, ingSubcategory: ing?.[1] ?? null, kind,
     dedupKey: `k.${++uid}`, importId: 'imp.1', fileSeq: uid, roundupParentId: null, createdAt: 1, deletedAt: null,
   }
   await db.transactions.add(row)
@@ -50,6 +50,35 @@ const fill = (label: RegExp | string, value: string) => fireEvent.change(screen.
 guardWording(10)
 
 describe('Budget screen', () => {
+  it('words a goal line as money set aside, never as spent', async () => {
+    await db.savingsGoals.add({ id: 'goal.1', name: 'Viaje inventado', targetCents: 100000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: null, archived: false })
+    await tx('pay', '2026-11-01', 200000)
+    await tx('s', '2026-11-04', -2000, ['Ahorro', 'Redondeo'], 'roundup')
+    await saveAllocation({ categoryId: null, savingsGoalId: 'goal.1', percentBp: null, fixedCents: 5000, effectiveFrom: '2026-01-01', note: null })
+    render(<Budget today={TODAY_DEC} initialMonth="2026-11" />)
+    const goal = await lineOf('goal:goal.1')
+    expect(goal).toHaveTextContent(`Set aside: ${formatEur(2000)}`)
+    expect(goal).toHaveTextContent('60 % below plan')
+    expect(goal).toHaveTextContent(`${formatEur(3000)} still to set aside`)
+    expect(goal).not.toHaveTextContent(/Spent|\bleft\b|\bover\b|\bunder\b/)
+  })
+
+  it('words a goal line that reached its plan with nothing still to set aside, and leaves category wording as it was', async () => {
+    await db.savingsGoals.add({ id: 'goal.1', name: 'Viaje inventado', targetCents: 100000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: null, archived: false })
+    await tx('pay', '2026-11-01', 200000)
+    await tx('s', '2026-11-04', -9000, ['Ahorro', 'Redondeo'], 'roundup')
+    await tx('a', '2026-11-03', -10000, GROCERIES)
+    await allocate('cat.groceries', 1500)
+    await saveAllocation({ categoryId: null, savingsGoalId: 'goal.1', percentBp: null, fixedCents: 5000, effectiveFrom: '2026-01-01', note: null })
+    render(<Budget today={TODAY_DEC} initialMonth="2026-11" />)
+    expect(await lineOf('goal:goal.1')).toHaveTextContent(`Set aside: ${formatEur(5000)} · ${formatEur(0)} still to set aside`)
+    const groceries = await lineOf('category:cat.groceries')
+    expect(groceries).toHaveTextContent(`Spent: ${formatEur(10000)}`)
+    expect(groceries).toHaveTextContent('under plan')
+    expect(groceries).toHaveTextContent(`${formatEur(20000)} left`)
+    expect(groceries).not.toHaveTextContent('Set aside')
+  })
+
   it('shows each allocation with its euros and its percentage', async () => {
     await tx('pay', '2026-11-01', 200000)
     await tx('a', '2026-11-03', -10000, GROCERIES)

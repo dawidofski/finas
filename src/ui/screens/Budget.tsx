@@ -180,11 +180,22 @@ function BudgetedRow({ line, budget, onOpen }: { line: BudgetLine; budget: Month
         <Share bp={share} note={basisNote(income)} />
         {share === null && !line.fixed && basisNote(income) ? ` (${basisNote(income)})` : null}
       </p>
-      <p className="budget-fig">
-        {budget.partial ? 'Spent so far' : 'Spent'}: {formatEur(line.spentCents)}
-        {line.varianceBp !== null && ` · ${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'over' : 'under'} plan`}
-        {' · '}{over ? `${formatEur(-line.remainingCents)} over` : `${formatEur(line.remainingCents)} left`}
-      </p>
+      {line.targetKind === 'goal'
+        // A goal line is money set aside (the month's savings attributed to the goal), not money spent.
+        ? (
+          <p className="budget-fig">
+            {budget.partial ? 'Set aside so far' : 'Set aside'}: {formatEur(line.spentCents)}
+            {line.varianceBp !== null && line.varianceBp !== 0 && ` · ${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'above' : 'below'} plan`}
+            {' · '}{over ? `${formatEur(-line.remainingCents)} set aside beyond the plan` : `${formatEur(line.remainingCents)} still to set aside`}
+          </p>
+        )
+        : (
+          <p className="budget-fig">
+            {budget.partial ? 'Spent so far' : 'Spent'}: {formatEur(line.spentCents)}
+            {line.varianceBp !== null && ` · ${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'over' : 'under'} plan`}
+            {' · '}{over ? `${formatEur(-line.remainingCents)} over` : `${formatEur(line.remainingCents)} left`}
+          </p>
+        )}
     </li>
   )
 }

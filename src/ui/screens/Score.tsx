@@ -7,15 +7,14 @@ import type { SavingsGoalRow } from '../../db/schema'
 import { regretClustersBetween } from '../../learning/regret'
 import { goalContributions } from '../../goals/contributions'
 import { progressOf } from '../../goals/progress'
-import { addDays, epochMsToIso, monthKeyOf } from '../../lib/dates'
+import { GOAL_MONTHS, goalWindow } from '../../goals/window'
+import { addDays, monthKeyOf } from '../../lib/dates'
 import { divRound } from '../../lib/money'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, type Component } from '../../score/components'
 import { moneyScore, type ComponentId, type MoneyScore, type ScoredComponent } from '../../score/score'
 
 /** Completed months the series-based measures look back over. Improvement needs six of them to have spending, so this leaves room for gaps. */
 const SERIES_MONTHS = 12
-/** The most completed months of goal history the goal-progress measure reads; a goal older than this counts only its last 36 months, and the measure says so. */
-const GOAL_MONTHS = 36
 /** Months in the review window, counting the one in progress: the review measure speaks about recent activity. */
 const REVIEW_MONTHS = 6
 /** Each of the two windows the repeated-regret measure compares: the latest completed months, and the same number before them. */
@@ -75,10 +74,7 @@ async function measures(today: string, computedAt: number): Promise<{ parts: Rec
  */
 async function goalMeasure(goals: readonly SavingsGoalRow[], last: string, today: string, computedAt: number): Promise<Component> {
   if (goals.length === 0) return goalProgress([])
-  const earliest = goals.map((g) => monthKeyOf(epochMsToIso(g.createdAt))).sort()[0] ?? last
-  const windowStart = monthsBack(last, GOAL_MONTHS - 1)
-  const capped = earliest < windowStart
-  const from = capped ? windowStart : earliest
+  const { from, capped } = goalWindow(goals, last)
   const compute = async (): Promise<Component> => {
     const months = from > last ? [] : await goalContributions(from, last, today, computedAt)
     const c = goalProgress(goals.map((goal) => ({ goal, progress: progressOf(goal, months, last) })))

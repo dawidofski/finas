@@ -6,6 +6,7 @@ import Reports from './screens/Reports'
 import Score from './screens/Score'
 import Learning from './screens/Learning'
 import Recurring from './screens/Recurring'
+import Goals from './screens/Goals'
 import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
@@ -76,6 +77,12 @@ function RecurringRoute() {
   return <Recurring today={epochMsToIso(now)} computedAt={now} />
 }
 
+/** The day and the instant together: every change the owner makes here is dated by `computedAt`, so the screen never reads the clock. */
+function GoalsRoute() {
+  const now = Date.now()
+  return <Goals today={epochMsToIso(now)} computedAt={now} />
+}
+
 function WorthItRoute() {
   return <WorthIt today={epochMsToIso(Date.now())} />
 }
@@ -94,7 +101,7 @@ export const ROUTES: ReadonlyArray<RouteDef> = [
   { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false },
   { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false },
   screen('/coach', 'AI coach'),
-  screen('/goals', 'Goals'),
+  { path: '/goals', title: 'Goals', element: <GoalsRoute />, primary: false },
   { path: '/recurring', title: 'Recurring', element: <RecurringRoute />, primary: false },
   { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false },
   { path: '/score', title: 'Money Score', element: <ScoreRoute />, primary: false },

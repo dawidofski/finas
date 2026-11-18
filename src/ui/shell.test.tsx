@@ -96,8 +96,8 @@ describe('shell', () => {
   })
   // A stub renders a level-1 heading with its title, exactly as a real screen does, so a heading assertion alone cannot tell
   // them apart: on a previous plan a headline screen was unreachable while every test passed. "Not built yet" is what tells them apart.
-  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/settings']
-  const STUBS = ['/coach', '/goals']
+  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/goals', '/settings']
+  const STUBS = ['/coach']
   it('has pinned every route as either a real screen or a stub', () => {
     expect([...REAL, ...STUBS].sort()).toEqual(ROUTES.map(r => r.path).sort())
   })
