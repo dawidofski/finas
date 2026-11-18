@@ -4,7 +4,7 @@ A personal finance app that runs entirely in your browser. It is installable on 
 
 ## Where this stands today
 
-Nine of the fourteen screens are real: **Dashboard**, **Import**, **Transactions**, **Budget**, **Intelligence**, **Mood**, **Worth it?**, **Reports** and **Settings**. The other five (Learning, AI coach, Goals, Recurring and Money Score) are still placeholders that say "Not built yet". What exists:
+Eleven of the fourteen screens are real: **Dashboard**, **Import**, **Transactions**, **Budget**, **Intelligence**, **Learning**, **Money Score**, **Mood**, **Worth it?**, **Reports** and **Settings**. The other three (AI coach, Goals and Recurring) are still placeholders that say "Not built yet". What exists:
 
 - **Import an ING Spain Excel export (`.xlsx`).** Choosing a file shows a preview first, and nothing is written until you press the one import button. The preview lists the new rows, the rows already imported, rows left out and why, and any gap in the dates the account covers. A file is checked for a continuous running balance, the account number and your name are never stored (only a one-way fingerprint and the last four digits of the account number), and the same file or the same movements are never imported twice. PDF and CSV statements are refused with an explanation, and that is permanent — you decided against supporting them, so the Excel export is the only way in.
 - **Dashboard.** The first screen: this month's income, spending, savings and what is left over, how that compares with last month, where the spending went, and a line of spending month by month. An income figure that is an estimate is marked as one, and the screen says plainly when there is nothing to show yet and how to begin.
@@ -17,7 +17,10 @@ Nine of the fourteen screens are real: **Dashboard**, **Import**, **Transactions
 - **Backup and restore**, from Settings (see "Back up your data").
 - The app shell: navigation, light and dark themes, installation as an app, and offline use.
 
-What you **cannot** do yet: set savings goals or track recurring payments, get recommendations or a Money Score, or use the optional AI coach. There are still no charts — figures are shown as numbers and words, not graphs. Later plans replace the remaining placeholders one screen at a time; those plans are not built.
+- **Money Score.** Six parts, each measured against your own history and never against an income level: budget awareness, savings consistency, discretionary share over time, spending review, goal progress, and fewer repeats of purchases you marked not worth it. Every part shows its weight, what it was worked out from and the arithmetic. A part that cannot be measured yet says what it is waiting for and is left out of the sum — it is never counted as zero — and when nothing can be measured there is no number at all. Goal progress stays "not yet measured" until savings goals are built.
+- **Learning.** Advice drawn from your own records: a budget line that has passed its figure, small purchases adding up, savings that come in some months and not others, a purchase well above your usual, purchases you marked not worth it, and a larger share going on wants in higher-income months. Each piece shows what was noticed, the purchases behind it, what it means and something you could do, with a short note and optional challenges. You can accept, snooze or reject each one: rejecting hides it for the month, and rejecting the same advice in two different months removes it for good.
+
+What you **cannot** do yet: set savings goals or track recurring payments, or use the optional AI coach. There are still no charts — figures are shown as numbers and words, not graphs. Later plans replace the remaining placeholders one screen at a time; those plans are not built.
 
 **Verified on the live site:** it loads, the service worker installs and activates, and a new version does reach an already-installed copy — with one caveat worth knowing, because it was observed rather than assumed.
 
