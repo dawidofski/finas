@@ -51,9 +51,20 @@ export interface ContingencyRow {
   counts: [number, number]
 }
 
+/** The earliest and latest BANK date (§41/§43) among the spends that entered the table, as 'YYYY-MM-DD'. */
+export interface Period {
+  from: string
+  to: string
+}
+
 export interface ContingencyResult {
   /** Answered spends the table was built from. */
   n: number
+  /**
+   * The span of the spends actually counted, never the window the caller asked about: the caller only knows what it asked
+   * for, and this module is the only code that knows which dates its table really covers.
+   */
+  period: Period
   columns: [string, string]
   rows: ContingencyRow[]
   /** CHI_SCALE times chi-square, exactly as chiSquareScaled returns it. */
@@ -71,6 +82,8 @@ export interface ContingencyResult {
 export interface Withheld {
   withheld: true
   n: number
+  /** The span of what was counted. Null only when nothing was counted, which no gate-passing table can be; kept honest rather than ''. */
+  period: Period | null
   why: string
 }
 
@@ -120,20 +133,32 @@ function isSparse(rows: readonly ContingencyRow[]): boolean {
   return small * 100 > cells * SMALL_CELLS_ALLOWED_PERCENT
 }
 
-function build(rows: ContingencyRow[], columns: [string, string], n: number): ContingencyResult | Withheld {
+/** Bank dates are 'YYYY-MM-DD', so string order is date order. Null for no spends: there is no period to invent. */
+function periodOf(spends: readonly Answers[]): Period | null {
+  const dates = spends.map((s) => s.bankDate).sort()
+  const from = dates[0]
+  const to = dates[dates.length - 1]
+  return from === undefined || to === undefined ? null : { from, to }
+}
+
+function build(rows: ContingencyRow[], columns: [string, string], spends: readonly Answers[]): ContingencyResult | Withheld {
+  const n = spends.length
+  const period = periodOf(spends)
   const stat = chiSquareScaled(rows.map((r) => [r.counts[0], r.counts[1]]))
   if (stat === null) {
-    return { withheld: true, n, why: 'A row or column of the table is empty, so there is nothing to compare.' }
+    return { withheld: true, n, period, why: 'A row or column of the table is empty, so there is nothing to compare.' }
   }
   const vBp = cramersVBp(stat.chiScaled, n, rows.length, 2)
-  if (vBp === null) return { withheld: true, n, why: 'The strength of the association cannot be measured on this table.' }
-  const base = { n, columns, rows, chiScaled: stat.chiScaled, df: stat.df, vBp }
+  if (vBp === null || period === null) return { withheld: true, n, period, why: 'The strength of the association cannot be measured on this table.' }
+  const base = { n, period, columns, rows, chiScaled: stat.chiScaled, df: stat.df, vBp }
   if (stat.df > CHI_TABLE_MAX_DF) return { ...base, bracket: 'none', verdict: 'too-many-categories' }
   if (isSparse(rows)) return { ...base, bracket: 'none', verdict: 'sparse' }
   return { ...base, bracket: chiSquareBracket(stat.chiScaled, stat.df), verdict: 'tested' }
 }
 
 interface Answers {
+  /** The bank's valueDate, never an owner-corrected one (§41/§43). */
+  bankDate: string
   moodId: string | null
   reasonId: string | null
   worthwhile: boolean | null
@@ -143,14 +168,14 @@ interface Answers {
  * The answers on every spend (money out, owner-resolved kind spend, §41/§43) that satisfies `keep`. The read goes through
  * annotatedTransactions, so it is bounded by the owner's own annotations and never reads the whole ledger (§39.4).
  */
-async function answeredSpends(keep: (a: Answers) => boolean): Promise<Answers[]> {
+async function answeredSpends(keep: (a: Omit<Answers, 'bankDate'>) => boolean): Promise<Answers[]> {
   const bank = await annotatedTransactions((a) => keep({ moodId: a.moodId, reasonId: a.purchaseReasonId, worthwhile: a.worthwhile }))
   const byId = new Map(bank.map((t) => [t.id, t]))
   const out: Answers[] = []
   for (const r of await resolveMany(bank)) {
     const t = byId.get(r.id)
     if (t === undefined || r.kind !== 'spend' || t.amountCents > 0) continue
-    const answers = { moodId: r.moodId, reasonId: r.purchaseReasonId, worthwhile: r.worthwhile }
+    const answers = { bankDate: t.valueDate, moodId: r.moodId, reasonId: r.purchaseReasonId, worthwhile: r.worthwhile }
     if (keep(answers)) out.push(answers)
   }
   return out
@@ -177,7 +202,7 @@ export async function boredomImpulse(computedAt: number): Promise<ContingencyOut
         { key: 'mood.not-bored', label: 'Any other mood', counts: other },
       ],
       [impulseLabel, `Not ${impulseLabel.toLowerCase()}`],
-      spends.length,
+      spends,
     )
   }, computedAt)
 }
@@ -199,6 +224,6 @@ export async function reasonWorthwhile(computedAt: number): Promise<ContingencyO
     const rows: ContingencyRow[] = [...byReason.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, counts]) => ({ key, label: labels.get(key) ?? 'Removed reason', counts }))
-    return build(rows, ['Worthwhile', 'Not worthwhile'], spends.length)
+    return build(rows, ['Worthwhile', 'Not worthwhile'], spends)
   }, computedAt)
 }

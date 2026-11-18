@@ -31,6 +31,10 @@ interface Group {
   worthwhile?: boolean | null
   amountCents?: number
   kind?: TransactionRow['kind']
+  /** The bank's valueDate. */
+  date?: string
+  /** The owner's correction of the date, which must never move a period. */
+  dateOverride?: string
   annotate?: boolean
 }
 /** Adds `n` spends per group, each with the annotation the group describes. */
@@ -40,9 +44,9 @@ async function put(groups: Group[]): Promise<void> {
   for (const g of groups) {
     for (let i = 0; i < g.n; i++) {
       const id = `t${(seq += 1)}`
-      txs.push(tx(id, { amountCents: g.amountCents ?? -1000, kind: g.kind ?? 'spend' }))
+      txs.push(tx(id, { amountCents: g.amountCents ?? -1000, kind: g.kind ?? 'spend', valueDate: g.date ?? '2026-11-16' }))
       if (g.annotate === false) continue
-      anns.push(ann(id, { purchaseReasonId: g.reason ?? null, moodId: g.mood ?? null, worthwhile: g.worthwhile ?? null }))
+      anns.push(ann(id, { purchaseReasonId: g.reason ?? null, moodId: g.mood ?? null, worthwhile: g.worthwhile ?? null, dateOverride: g.dateOverride ?? null }))
     }
   }
   await db.transactions.bulkAdd(txs)
@@ -226,6 +230,37 @@ describe('reasonWorthwhile', () => {
     expect(Math.abs(r.chiScaled - Math.round(31.83965 * CHI_SCALE))).toBeLessThanOrEqual(10)
     expect(r.verdict).toBe('sparse')
     expect(r.bracket).toBe('none')
+  })
+
+  it('reports the period of the spends it counted, by bank date, not the owners corrected date', async () => {
+    // Counted: 12 + 3 + 5 + 12 = 32 spends. Bank dates run 2026-03-05 (first group) to 2026-09-20 (last group).
+    // One counted spend carries a dateOverride of 2027-01-01 and one of 2025-01-01: if the period read the resolved date it
+    // would be 2025-01-01 to 2027-01-01. Uncounted spends (no hindsight answer, no reason, no annotation) sit at 2020 and
+    // 2030 and must not widen it either.
+    await put([
+      { n: 12, reason: E, worthwhile: true, date: '2026-03-05' }, { n: 3, reason: E, worthwhile: false, date: '2026-04-10' },
+      { n: 5, reason: I, worthwhile: true, date: '2026-06-01', dateOverride: '2027-01-01' },
+      { n: 12, reason: I, worthwhile: false, date: '2026-09-20' },
+      { n: 1, reason: I, worthwhile: false, date: '2026-07-01', dateOverride: '2025-01-01' },
+      { n: 2, reason: I, worthwhile: null, date: '2020-01-01' }, { n: 2, reason: null, worthwhile: true, date: '2030-01-01' },
+      { n: 2, annotate: false, date: '2030-06-01' },
+    ])
+    const r = asResult(await reasonWorthwhile(1))
+    expect(r.n).toBe(33)
+    expect(r.period).toEqual({ from: '2026-03-05', to: '2026-09-20' })
+  })
+
+  it('reports the period on a boredom result and on a withheld table', async () => {
+    await put([
+      { n: 15, mood: 'mood.bored', reason: I, date: '2026-02-01' }, { n: 5, mood: 'mood.bored', reason: E, date: '2026-02-02' },
+      { n: 5, mood: 'mood.sad', reason: I, date: '2026-05-30' }, { n: 15, mood: 'mood.happy', reason: E, date: '2026-04-15' },
+    ])
+    expect(asResult(await boredomImpulse(1)).period).toEqual({ from: '2026-02-01', to: '2026-05-30' })
+
+    // Thirty-one spends all judged worthwhile: withheld for the empty column, and still says what span it looked at.
+    await db.annotations.clear(); await db.transactions.clear()
+    await put([{ n: 16, reason: E, worthwhile: true, date: '2026-08-01' }, { n: 15, reason: I, worthwhile: true, date: '2026-08-09' }])
+    expect(asWithheld(await reasonWorthwhile(2)).period).toEqual({ from: '2026-08-01', to: '2026-08-09' })
   })
 
   it('pins the p<0.001 rung: a strong, certain table', async () => {
