@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { BATTERY, type RelationshipId } from './battery'
 import type { Bracket } from './critical'
 import type { ContingencyResult, ContingencyRow } from './contingency'
-import { findingFor, type BatteryResults, type CorrectionVerdict, type Finding, type Observation } from './finding'
+import { findingFor, formatEffect, type BatteryResults, type CorrectionVerdict, type Finding, type Observation, type Scale } from './finding'
 
 /**
  * The wording of §12's eight fields. Every assertion here is about a sentence a person reads about their own money, so
@@ -105,7 +105,8 @@ function build<K extends RelationshipId>(id: K, verdict: CorrectionVerdict = VER
 }
 
 /** Every string a person reads off one finding. `id` is a key, not copy, so it is checked separately. */
-const copyOf = (f: Finding): string[] => [f.pattern, f.unit, f.period, f.effect.label, f.confidence, f.limitation, f.meaning, f.action]
+const copyOf = (f: Finding): string[] =>
+  [f.pattern, f.unit, f.period, f.effect.label, formatEffect(f.effect), f.confidence, f.limitation, f.meaning, f.action]
 
 /**
  * A wide spread of every template: both signs and a flat effect, all four rungs, surviving and not, and all three
@@ -168,6 +169,7 @@ describe('the eight fields a finding carries', () => {
       // §12's eight, plus `id` and `unit`: the screen must never label the count "transactions", since for four of
       // the ten it holds weeks, days or months, so the template declares the unit rather than leaving it to prose.
       expect(Object.keys(f).sort()).toEqual(['action', 'confidence', 'effect', 'id', 'limitation', 'meaning', 'pattern', 'period', 'transactions', 'unit'])
+      expect(Object.keys(f.effect).sort()).toEqual(['bp', 'label', 'scale'])
       expect(f.id).toBe(id)
       expect(f.pattern.length).toBeGreaterThan(30)
       expect(Number.isSafeInteger(f.transactions)).toBe(true)
@@ -206,18 +208,32 @@ describe('the eight fields a finding carries', () => {
   it('never renders the name of the test that was run', () => {
     // The banned words are derived from BATTERY's own `test` strings: the capitalised words of each that its
     // owner-facing `question` does not itself use. A new relationship brings its own test name under this rule.
-    const banned = new Set<string>()
-    for (const r of BATTERY) {
-      if (r.test === null) continue
-      banned.add(r.test)
-      for (const word of r.test.split(/\s+/)) {
-        if (word.length >= 5 && /^[A-Z]/.test(word) && !r.question.includes(word)) banned.add(word)
+    const bannedFrom = (relationships: readonly { question: string; test: string | null }[]): Set<string> => {
+      const out = new Set<string>()
+      for (const r of relationships) {
+        if (r.test === null) continue
+        out.add(r.test)
+        for (const word of r.test.split(/\s+/)) {
+          if (word.length >= 5 && /^[A-Z]/.test(word) && !r.question.includes(word)) out.add(word)
+        }
       }
+      return out
     }
-    expect(banned).toContain('Spearman')
-    expect(banned).toContain('Mann-Whitney')
-    expect(banned).toContain('Chi-square')
-    expect(banned).toContain('Poisson')
+    // The DERIVATION is pinned, not the names it happens to find today: a test name may legitimately be corrected in
+    // battery.ts (mood -> frequency's was, from a Poisson rate test to the rank comparison it really is), and a guard
+    // that named it would have gone stale rather than followed. These fixtures prove it is not vacuous.
+    const sample = bannedFrom([
+      { question: 'Does the amount you spend go up or down with your mood?', test: 'Spearman rank correlation of mood against amount' },
+      { question: 'Do you spend differently at weekends?', test: 'Mann-Whitney U' },
+      { question: 'How much do your small purchases add up to?', test: null },
+    ])
+    expect(sample).toContain('Spearman')
+    expect(sample).toContain('Mann-Whitney')
+    expect(sample).not.toContain('mood') // a word the owner-facing question already uses is not jargon
+    const banned = bannedFrom(BATTERY)
+    // Every live test string, plus at least one bare name per relationship that has one.
+    for (const r of BATTERY) if (r.test !== null) expect(banned).toContain(r.test)
+    expect([...banned].filter((w) => !w.includes(' ')).length).toBeGreaterThanOrEqual(3)
     for (const { id, finding } of everyFinding()) {
       for (const s of copyOf(finding)) {
         for (const word of banned) expect(s, `${id} names the test: ${word}`).not.toContain(word)
@@ -290,9 +306,9 @@ describe('the eight fields a finding carries', () => {
     // to the type checker, so each call site's documented first group is pinned here.
     // rank.ts stressDiscretionary: a = the stressed spends, positive r = spending shifted toward discretionary.
     const stressedMore = findingFor('stress-discretionary', rank(1850, 'p<0.01', 46), VERDICT).pattern
-    expect(stressedMore).toMatch(/while stressed, .*more of them went on wants/)
+    expect(stressedMore).toMatch(/went on wants rather than needs was .* higher among the ones you recorded while stressed/)
     const stressedLess = findingFor('stress-discretionary', rank(-1850, 'p<0.01', 46), VERDICT).pattern
-    expect(stressedLess).toMatch(/while stressed, .*fewer of them went on wants/)
+    expect(stressedLess).toMatch(/went on wants rather than needs was .* lower among the ones you recorded while stressed/)
     // rank.ts weekend: a = the weekend purchases, positive r = the weekend ones were larger.
     expect(findingFor('weekend', rank(1200, 'p<0.05', 210), VERDICT).pattern).toMatch(/weekend purchases ran larger/i)
     expect(findingFor('weekend', rank(-1200, 'p<0.05', 210), VERDICT).pattern).toMatch(/weekday purchases ran larger/i)
@@ -301,8 +317,8 @@ describe('the eight fields a finding carries', () => {
     expect(findingFor('salary-lifestyle', rank(-4200, 'p<0.05', 9), VERDICT).pattern).toMatch(/higher income, a smaller share/)
     // trend.ts moodFrequency: a = the LOW-mood weeks, positive r = more purchases in weeks of low mood.
     const low = { ...FIXTURES['mood-frequency'] }
-    expect(findingFor('mood-frequency', { ...low, effectBp: 3200 }, VERDICT).pattern).toMatch(/feeling low, you made more purchases/)
-    expect(findingFor('mood-frequency', { ...low, effectBp: -3200 }, VERDICT).pattern).toMatch(/feeling good, you made more purchases/)
+    expect(findingFor('mood-frequency', { ...low, effectBp: 3200 }, VERDICT).pattern).toMatch(/feeling low, you gave a mood to more purchases/)
+    expect(findingFor('mood-frequency', { ...low, effectBp: -3200 }, VERDICT).pattern).toMatch(/feeling good, you gave a mood to more purchases/)
     // rank.ts moodAmount is Spearman: x = valence, y = money out, so positive rho = happier moods, larger purchases.
     expect(findingFor('mood-amount', rank(2600, 'p<0.05', 34), VERDICT).pattern).toMatch(/happier the mood .*the larger the purchase/)
     expect(findingFor('mood-amount', rank(-2600, 'p<0.05', 34), VERDICT).pattern).toMatch(/lower the mood .*the larger the purchase/)
@@ -334,8 +350,11 @@ describe('the eight fields a finding carries', () => {
     expect(f.effect.label).toMatch(/share/)
     expect(f.limitation).toMatch(/a share and not an amount/)
     for (const s of copyOf(f)) expect(s).not.toMatch(/spent more|bigger purchases|larger purchases|purchases got/i)
-    // The figure is literally the difference in discretionary share, so it is spelled as a percentage.
-    expect(f.pattern).toContain('18,5 %')
+    // The figure is one share MINUS the other, so it reads as percentage points. "18,5 % more of them" would be a
+    // relative claim, and a smaller one: 40 % against 58,5 % is 18,5 points apart and about 46 % more.
+    expect(f.pattern).toContain('18,5 percentage points higher')
+    expect(f.pattern).not.toMatch(/18,5 % (more|fewer|higher|lower)/)
+    expect(f.effect.scale).toBe('points')
   })
 
   it('never claims a floored strength is "at least" that much, and says instead that it is rounded down', () => {
@@ -360,8 +379,20 @@ describe('the eight fields a finding carries', () => {
     // The weekend relationship reads every live transaction, so it must claim no such limit and name its own.
     const w = build('weekend')
     expect(w.limitation).not.toMatch(/you chose to annotate/)
-    expect(w.limitation).toMatch(/reads all 210 purchases/)
+    expect(w.limitation).toMatch(/reads 210 purchases from the window and not only the ones you annotated/)
     expect(w.limitation).toMatch(/one big shop|Friday/)
+    // It reads the window's purchases, but it still filters: spendsOf keeps only what the Budget screen calls
+    // spending and drops transfer legs, so "all the purchases" would claim nothing was left out.
+    expect(w.limitation).toMatch(/the way the Budget screen counts spending/)
+    expect(w.limitation).toMatch(/money you moved into savings/)
+    // And it KEEPS a refunded purchase where the Budget screen nets it out, so the two figures can differ and the
+    // owner could put them side by side. The limitation says so rather than letting them find it.
+    expect(w.limitation).toMatch(/refunded for still counts/)
+    expect(w.limitation).toMatch(/can sit above the total the Budget screen shows/)
+    // No relationship in this battery reads everything, so none of the ten may claim to.
+    for (const id of ids) {
+      expect(build(id).limitation, id).not.toMatch(/(all|every one of) (the |your )?(purchases|transactions|spending)/i)
+    }
   })
 
   it('gives a sparse or oversized table its own words, never the words of a plain absence', () => {
@@ -391,14 +422,17 @@ describe('the eight fields a finding carries', () => {
     // src/learning/regret.ts labels every removed purchase reason 'Removed reason', so two deleted reasons arrive as
     // two rows under one name. The counts keep them apart; the wording must not pretend the name does.
     const f = build('reason-worthwhile')
-    expect(f.limitation).toMatch(/2 of the rows read "Removed reason"/)
+    expect(f.limitation).toMatch(/2 of the rows carry the same name, Removed reason/)
     expect(f.limitation).toMatch(/kept apart in the counts but not in their names/)
+    // No literal quotation marks in the prose: the screen decides how a label is set off, and marks only the
+    // owner's OWN words as a quotation. Quoting here as well gave "Removed reason" a doubled quotation.
+    for (const s of copyOf(f)) expect(s).not.toMatch(/["“”]/)
     // With no shared label there is no such clause to read.
     const distinct = findingFor('reason-worthwhile', contingency({
       n: 96, columns: ['Worthwhile', 'Not worthwhile'], df: 2, vBp: 4100,
       rows: reasonRows.slice(0, 3),
     }), VERDICT)
-    expect(distinct.limitation).not.toMatch(/read "/)
+    expect(distinct.limitation).not.toMatch(/carry the same name/)
   })
 
   it('offers two readings of a tested result rather than one explanation of it', () => {
@@ -408,6 +442,47 @@ describe('the eight fields a finding carries', () => {
       expect(f.meaning, id).toMatch(/One reading/)
       expect(f.meaning, id).toMatch(/Another/)
     }
+  })
+
+  it('declares what each effect figure is, so a correlation is never rendered as a percentage', () => {
+    // Every effect leaves this module as basis points, which makes three different quantities look alike. Rendering
+    // all three with formatBp made two of them claim things the arithmetic does not support: a Spearman rho of 0.42
+    // read as "42 %" of nothing at all, and a difference of two shares read as a relative percentage.
+    const scales: Record<RelationshipId, Scale> = {
+      'mood-amount': 'closeness', 'mood-frequency': 'percent', 'stress-discretionary': 'points',
+      'boredom-impulse': 'percent', 'reason-worthwhile': 'percent', weekend: 'percent',
+      payday: 'closeness', 'small-purchases': 'percent', 'salary-lifestyle': 'percent',
+      'category-savings': 'closeness',
+    }
+    for (const id of ids) expect(build(id).effect.scale, `${id} declares the wrong scale`).toBe(scales[id])
+    // The three correlations and the one difference of shares, and no others: a relationship added later cannot
+    // inherit 'percent' by omission, since Scale is a closed union and TEMPLATES must name one.
+    expect(ids.filter((id) => build(id).effect.scale === 'closeness').sort())
+      .toEqual(['category-savings', 'mood-amount', 'payday'])
+    expect(ids.filter((id) => build(id).effect.scale === 'points')).toEqual(['stress-discretionary'])
+
+    // One formatter, so the scale cannot be honoured here and guessed at on the screen.
+    expect(formatEffect({ bp: 4200, scale: 'percent' })).toBe('42 %')
+    expect(formatEffect({ bp: 1850, scale: 'points' })).toBe('18,5 percentage points')
+    expect(formatEffect({ bp: 1850, scale: 'points' })).not.toContain('%')
+    const closeness = formatEffect({ bp: 4200, scale: 'closeness' })
+    expect(closeness).not.toContain('%')
+    expect(closeness).toMatch(/^42 out of 100, where 100 would be moving together perfectly/)
+    expect(formatEffect({ bp: -4200, scale: 'closeness' })).toMatch(/^-42 out of 100/)
+    // A correlation says its scale outright: a bare figure beside "how closely these moved" invites the % reading.
+    for (const id of ['mood-amount', 'payday', 'category-savings'] as const) {
+      expect(formatEffect(build(id).effect), id).toContain('out of 100')
+    }
+  })
+
+  it('says the weekly count is of the purchases that carry a mood, not of everything bought', () => {
+    // The weekly value is only the valenced-mood-tagged purchases, so a week of twenty purchases with a mood on
+    // three of them scores three. The `meaning` field already concedes that confound; the limitation has to state it.
+    const f = build('mood-frequency')
+    expect(f.pattern).toMatch(/you gave a mood to more purchases/)
+    expect(f.pattern).not.toMatch(/you made more purchases/)
+    expect(f.limitation).toMatch(/counts only the purchases you gave a mood to and not everything you bought in it/)
+    expect(f.limitation).toMatch(/twenty purchases with a mood on three of them counts as three/)
   })
 
   it('names how many categories were searched, so the strongest of them carries its own correction', () => {
@@ -451,7 +526,9 @@ describe('the eight fields a finding carries', () => {
     // nothing else. It takes no window from its caller: the caller is the screen, which knows only what it asked
     // for, so echoing the request would claim months the owner may have no records in.
     for (const id of ids) {
-      if (id === 'small-purchases') continue // its scope is a month key, so its period is that month's two ends
+      // The one relationship whose period is built HERE rather than read off a result: §12 gives it no test and
+      // SmallPurchases carries no dates, so its scope is a month key and its period is that month's two ends.
+      if (id === 'small-purchases') continue
       expect(build(id).period, id).toBe('05/01/2026 to 15/11/2026')
     }
     const narrower = findingFor('boredom-impulse', contingency({ period: { from: '2026-03-02', to: '2026-04-20' } }), VERDICT)

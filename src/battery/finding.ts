@@ -54,6 +54,26 @@ import type { ContingencyResult, ContingencyRow } from './contingency'
  */
 export type Observation = 'purchases' | 'weeks' | 'days' | 'months'
 
+/**
+ * WHAT AN EFFECT FIGURE IS, declared by the template rather than guessed at from its size.
+ *
+ * Every effect leaves here as basis points, which makes three different quantities look alike, and rendering all
+ * three as a percentage made two of them claim things the arithmetic does not support:
+ *
+ *   'percent'    a genuine proportion: Cramer's V, Kerby's rank-biserial r (the net share of compared pairs that
+ *                went one way), and the small purchases' share of a month's spending. "42 %" is honest.
+ *   'points'     a DIFFERENCE of two shares — stress -> discretionary is literally one share minus the other, so it
+ *                is percentage POINTS. "18,5 % more of them" reads as relative, which is a different and smaller
+ *                claim: 40 % against 58,5 % is 18,5 points apart and about 46 % more, so the percentage reading
+ *                understates it by more than half.
+ *   'closeness'  a CORRELATION. Spearman's rho is not a percentage of anything at all; 0.42 is not "42 %" of
+ *                anything the owner could count. It reads as a closeness on a stated scale or not at all.
+ *
+ * A closed union, so a relationship added later cannot inherit the wrong one by omission, and finding.test.ts pins
+ * the scale each of the ten declares — the same reason `unit` exists and is pinned the same way.
+ */
+export type Scale = 'percent' | 'points' | 'closeness'
+
 export interface Finding {
   id: RelationshipId
   pattern: string
@@ -62,7 +82,7 @@ export interface Finding {
   /** The ninth field, and not one of §12's eight: what `transactions` counts. */
   unit: Observation
   period: string
-  effect: { label: string; bp: number }
+  effect: { label: string; bp: number; scale: Scale }
   /** The bracket in plain words, never a number. */
   confidence: string
   limitation: string
@@ -89,10 +109,16 @@ export interface SmallPurchasesContext {
 /**
  * The result each relationship hands in. A key missing here makes TEMPLATES fail to type-check.
  *
- * All four result modules report their own `period`, and this module never takes one from its caller. The caller is
- * the screen, which knows only the window it ASKED for; the module that built the figure is the only code that knows
- * which bank dates its data actually spans. Echoing the request back would claim months the owner may have no
- * records in, and it would do so worst on the relationships where the records are thinnest.
+ * All four result modules report their own `period`, and for NINE of the ten that is the period reported: the module
+ * that built the figure is the only code that knows which bank dates its data actually spans, while the caller is the
+ * screen, which knows only the window it ASKED for. Echoing a request back would claim months the owner may have no
+ * records in, and it would do so worst where the records are thinnest.
+ *
+ * THE ONE EXCEPTION is the small purchases, whose period IS built here, from the `month` the caller names. §12 gives
+ * that relationship no test and `SmallPurchases` carries no dates, so its scope is a month key and the two ends of
+ * that month are its honest period — and a month key cannot overstate coverage the way a multi-month window can,
+ * since the caller only ever names a month it has already found records in. finding.test.ts skips it for that reason
+ * and says so at the skip.
  */
 export interface BatteryResults {
   'mood-amount': RankFinding
@@ -112,7 +138,7 @@ interface Parts {
   transactions: number
   unit: Observation
   period: { from: string; to: string }
-  effect: { label: string; bp: number }
+  effect: { label: string; bp: number; scale: Scale }
   limitation: string
   meaning: string
   action: string
@@ -134,6 +160,25 @@ function periodText(period: { from: string; to: string }): string {
 
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
 
+/**
+ * The figure out of formatBp without its per-cent sign. formatBp is the repository's only basis-point formatter and
+ * the only code that gets the fractional digit right, so the two non-percentage scales reuse it and drop the sign
+ * rather than a second formatter being written beside it.
+ */
+const bareFigure = (bp: number): string => formatBp(bp).replace(' %', '')
+
+/**
+ * An effect figure in words, and the ONLY place that happens: both this module's own prose and the screen call it, so
+ * the scale cannot be honoured in one and guessed at in the other. A correlation gets its scale spelled out, because
+ * a bare number against "how closely these moved together" invites being read as a percentage, which is the reading
+ * this function exists to stop.
+ */
+export function formatEffect(effect: { bp: number; scale: Scale }): string {
+  if (effect.scale === 'percent') return formatBp(effect.bp)
+  if (effect.scale === 'points') return `${bareFigure(effect.bp)} percentage points`
+  return `${bareFigure(effect.bp)} out of 100, where 100 would be moving together perfectly, 0 not at all, and -100 perfectly the opposite way`
+}
+
 const rowTotal = (row: ContingencyRow): number => row.counts[0] + row.counts[1]
 
 /**
@@ -147,7 +192,7 @@ function sharedLabelClause(rows: readonly ContingencyRow[]): string {
   return [...seen.entries()]
     .filter(([, n]) => n > 1)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([label, n]) => ` ${n} of the rows read "${label}": they are ${n} different answers of yours, kept apart in the counts but not in their names.`)
+    .map(([label, n]) => ` ${n} of the rows carry the same name, ${label}: they are ${n} different answers of yours, kept apart in the counts but not in their names.`)
     .join('')
 }
 
@@ -224,7 +269,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     transactions: r.n,
     unit: 'purchases',
     period: r.period,
-    effect: { label: 'How closely the mood you recorded and the size of a discretionary purchase moved together', bp: r.effectBp },
+    effect: { label: 'How closely the mood you recorded and the size of a discretionary purchase moved together', bp: r.effectBp, scale: 'closeness' },
     limitation: `This is ${count(r.n, 'discretionary purchase', 'discretionary purchases')} you gave a mood to. Rent, bills and the other fixed essentials are left out on purpose, as they cannot move with a mood, and a purchase you gave no mood to is not here at all: these are the purchases you chose to annotate, not everything you spent.`,
     meaning: 'One reading is that how you feel and what a want seems worth travel together in the moment of buying. Another is that the purchases you stop to annotate are the ones you already felt something about, which would look the same from here.',
     action: 'Next time you are about to buy something you want rather than need, record the mood first on the Mood screen and give it an hour before you decide.',
@@ -236,15 +281,15 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   // and have to be accounted for to the owner.
   'mood-frequency': (r) => ({
     pattern: r.effectBp > 0
-      ? 'In the weeks when most of what you recorded was feeling low, you made more purchases than in the weeks when most of it was feeling good.'
+      ? 'In the weeks when most of what you recorded was feeling low, you gave a mood to more purchases than in the weeks when most of it was feeling good.'
       : r.effectBp < 0
-        ? 'In the weeks when most of what you recorded was feeling good, you made more purchases than in the weeks when most of it was feeling low.'
-        : 'You made about as many purchases in the weeks when most of what you recorded was feeling low as in the weeks when most of it was feeling good.',
+        ? 'In the weeks when most of what you recorded was feeling good, you gave a mood to more purchases than in the weeks when most of it was feeling low.'
+        : 'You gave a mood to about as many purchases in the weeks when most of what you recorded was feeling low as in the weeks when most of it was feeling good.',
     transactions: r.n,
     unit: 'weeks',
     period: r.period,
-    effect: { label: 'How far apart the two kinds of week were in the number of purchases they held', bp: r.effectBp },
-    limitation: `This is ${count(r.n, 'week', 'weeks')} of records rather than a count of purchases: ${count(r.lowMood.weeks, 'week', 'weeks')} of mostly low mood holding ${count(r.lowMood.purchases, 'purchase', 'purchases')}, against ${count(r.goodMood.weeks, 'week', 'weeks')} of mostly good mood holding ${count(r.goodMood.purchases, 'purchase', 'purchases')}, and it leaves out ${count(r.tiedWeeks, 'week', 'weeks')} that held as many of one as of the other. A mood lives here only as a note on a purchase, so a week you bought nothing in has no mood and is counted nowhere: these are weeks when you recorded feeling something while buying, and not weeks of your life.`,
+    effect: { label: 'How far apart the two kinds of week were in the number of purchases they held', bp: r.effectBp, scale: 'percent' },
+    limitation: `This is ${count(r.n, 'week', 'weeks')} of records rather than a count of purchases: ${count(r.lowMood.weeks, 'week', 'weeks')} of mostly low mood holding ${count(r.lowMood.purchases, 'purchase', 'purchases')}, against ${count(r.goodMood.weeks, 'week', 'weeks')} of mostly good mood holding ${count(r.goodMood.purchases, 'purchase', 'purchases')}, and it leaves out ${count(r.tiedWeeks, 'week', 'weeks')} that held as many of one as of the other. A week counts only the purchases you gave a mood to and not everything you bought in it, so a week of twenty purchases with a mood on three of them counts as three. A mood lives here only as a note on a purchase, so a week you bought nothing in has no mood and is counted nowhere: these are weeks when you recorded feeling something while buying, and not weeks of your life.`,
     meaning: 'One reading is that a low week is a week of more small trips to buy something. Another is that a low week is a week you open the app more often, which would put a mood on more purchases and look the same from here.',
     action: 'In a week you have already noticed feels low, keep one list instead of buying as each thing comes to mind, and do a single shop at the end of it.',
   }),
@@ -254,17 +299,20 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   // the groups, which is why it can be spelled as a percentage here and why the sentence must never claim purchases
   // got bigger: it is a share, not an amount.
   'stress-discretionary': (r) => {
-    const gap = formatBp(Math.abs(r.effectBp))
+    // The figure is one share MINUS the other, so it is percentage points and is worded as points. "18,5 % more of
+    // them" would read as relative — 40 % against 58,5 % is 18,5 points apart but about 46 % more — and the relative
+    // reading is the smaller claim, so saying it that way would understate the owner's own figure by more than half.
+    const gap = formatEffect({ bp: Math.abs(r.effectBp), scale: 'points' })
     return {
       pattern: r.effectBp > 0
-        ? `Of the purchases you recorded while stressed, ${gap} more of them went on wants rather than needs than of the purchases you recorded while not stressed.`
+        ? `The share of your purchases that went on wants rather than needs was ${gap} higher among the ones you recorded while stressed than among the ones you recorded while not stressed.`
         : r.effectBp < 0
-          ? `Of the purchases you recorded while stressed, ${gap} fewer of them went on wants rather than needs than of the purchases you recorded while not stressed.`
+          ? `The share of your purchases that went on wants rather than needs was ${gap} lower among the ones you recorded while stressed than among the ones you recorded while not stressed.`
           : 'The same share of your purchases went on wants rather than needs whether or not you recorded feeling stressed.',
       transactions: r.n,
       unit: 'purchases',
       period: r.period,
-      effect: { label: 'The gap in the share of purchases that went on wants rather than needs', bp: r.effectBp },
+      effect: { label: 'The gap in the share of purchases that went on wants rather than needs', bp: r.effectBp, scale: 'points' },
       limitation: `This is a share and not an amount: across ${count(r.n, 'purchase', 'purchases')} it says which way your spending leaned and nothing at all about how much each one came to. Only the purchases you gave a mood to and sorted into wants or needs are counted, so an uncategorised one is in neither group, and these are the purchases you chose to annotate rather than everything you spent.`,
       meaning: 'One reading is that a stressed hour is an hour when a want feels like a need. Another is that the hours you record as stressed are your busiest, when a want is simply what is nearest to hand.',
       action: 'Name the one want you reach for when stressed, the coffee or the takeaway, and settle now on what you would rather do instead, so the choice is already made the next time.',
@@ -284,7 +332,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
       transactions: r.n,
       unit: 'purchases',
       period: r.period,
-      effect: { label: 'How strongly the mood you recorded and the tag you gave a purchase went together', bp: r.vBp },
+      effect: { label: 'How strongly the mood you recorded and the tag you gave a purchase went together', bp: r.vBp, scale: 'percent' },
       limitation: `This covers ${count(r.n, 'purchase', 'purchases')} that carry both a mood and a reason. ${FLOORED_STRENGTH} It also cannot tell apart a purchase that felt like an impulse at the time from one you tagged that way afterwards.`,
       ...verdictWords(r, {
         meaning: 'One reading is that an empty hour and a quick purchase keep each other company. Another is that boredom is simply the mood you are readiest to admit to on a purchase you have already tagged that way.',
@@ -310,7 +358,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
       transactions: r.n,
       unit: 'purchases',
       period: r.period,
-      effect: { label: 'How strongly the reason you give for a purchase and how worthwhile it felt afterwards go together', bp: r.vBp },
+      effect: { label: 'How strongly the reason you give for a purchase and how worthwhile it felt afterwards go together', bp: r.vBp, scale: 'percent' },
       limitation: `This covers ${count(r.n, 'purchase', 'purchases')} that carry both a reason and a verdict, spread over ${count(r.rows.length, 'reason', 'reasons')}. ${FLOORED_STRENGTH}${sharedLabelClause(r.rows)} It also cannot tell whether a reason was chosen before you bought or picked afterwards to fit the purchase.`,
       ...verdictWords(r, {
         meaning: 'One reading is that some of your reasons for buying hold up better in hindsight than others. Another is that you answer the hindsight question days later, when the reason you picked at the time is already part of what you remember.',
@@ -323,8 +371,16 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   },
 
   // rank.ts weekend: a = the WEEKEND purchases, so a POSITIVE r means the weekend ones were the larger. This is the
-  // one relationship that reads every live transaction rather than only the annotated ones, so it carries NO
-  // annotation caveat — and the limitation it does carry is its own: it compares single purchases.
+  // one relationship that reads the window's live transactions rather than only the annotated ones, so it carries NO
+  // annotation caveat - and the limitations it does carry are its own.
+  //
+  // IT STILL FILTERS, so the sentence does not say "all". spendsOf keeps only what treatmentOf calls spending, which
+  // is the Budget screen's own definition, and drops both legs of every non-refund transfer; "all the purchases"
+  // would claim nothing was left out, which is false of this relationship and of every other one in the battery. It
+  // also KEEPS a refunded purchase, deliberately (the decision was still made), where monthlyBudget nets the refund
+  // out - so this count can legitimately exceed the Budget screen's total for the same weeks, and the owner can put
+  // the two side by side. A limitation that let them find that difference for themselves would have been the kind
+  // this field exists to prevent.
   weekend: (r) => ({
     pattern: r.effectBp > 0
       ? 'Your weekend purchases ran larger than your weekday ones.'
@@ -334,8 +390,8 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     transactions: r.n,
     unit: 'purchases',
     period: r.period,
-    effect: { label: 'How consistently a weekend purchase outsized a weekday one', bp: r.effectBp },
-    limitation: `This reads all ${count(r.n, 'purchase', 'purchases')} in the window and not only the ones you annotated. It sets single purchases beside one another, so a weekend that is one big shop and a weekend of many small ones are not told apart, and a Friday night counts as a weekday.`,
+    effect: { label: 'How consistently a weekend purchase outsized a weekday one', bp: r.effectBp, scale: 'percent' },
+    limitation: `This reads ${count(r.n, 'purchase', 'purchases')} from the window and not only the ones you annotated — counted the way the Budget screen counts spending, so money you moved into savings, a transfer between your own accounts and anything you marked as income are not purchases here. A purchase you were later refunded for still counts, since the decision to buy it was still made, so this figure can sit above the total the Budget screen shows for the same weeks. It sets single purchases beside one another, so a weekend that is one big shop and a weekend of many small ones are not told apart, and a Friday night counts as a weekday.`,
     meaning: 'One reading is that the weekend is when the bigger wants get bought. Another is that weekday spending is mostly fixed and small by its nature, which would widen the same gap on its own.',
     action: 'Pick one weekend day and look through your Transactions list before you go out, so the weekend’s bigger purchases are a decision rather than a surprise.',
   }),
@@ -351,7 +407,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     transactions: r.n,
     unit: 'days',
     period: r.period,
-    effect: { label: 'How closely the number of days since payday and that day’s spending moved together', bp: r.effectBp },
+    effect: { label: 'How closely the number of days since payday and that day’s spending moved together', bp: r.effectBp, scale: 'closeness' },
     limitation: `This is ${count(r.n, 'single day', 'single days')} of spending, pooled across the months that had a payment in them. Each day is counted whole, so one large purchase and a day of many small ones look alike, and a month whose payday fell late contributes only the few days left in it.`,
     meaning: 'One reading is that the month has a shape for you: a fuller start and a thinner end, or the other way round. Another is that bills land on fixed days of the month, so part of this shape is the calendar rather than a choice.',
     action: 'Look at the Budget screen in the first days after your next payment, so what the rest of the month needs is clear before the easy spending starts.',
@@ -364,7 +420,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     transactions: c.small.count,
     unit: 'purchases',
     period: { from: `${c.month}-01`, to: addDays(nextMonthStart(c.month), -1) },
-    effect: { label: `The part of that month’s spending that went in purchases under ${formatEur(c.ceilingCents)}`, bp: percentBpOf(c.small.totalCents, c.monthSpendCents) },
+    effect: { label: `The part of that month’s spending that went in purchases under ${formatEur(c.ceilingCents)}`, bp: percentBpOf(c.small.totalCents, c.monthSpendCents), scale: 'percent' },
     limitation: `This is a straight count of the ${count(c.small.count, 'purchase', 'purchases')} under ${formatEur(c.ceilingCents)} that ${formatMonthTitle(c.month)} holds${c.small.medianCents === null ? '' : `, where the middle one of them came to ${formatEur(c.small.medianCents)}`}. It is one month standing on its own, and it counts every purchase under that line whether it was a coffee or a bus fare, so it says what the small ones came to and nothing about which of them you would miss.`,
     meaning: 'Small purchases of this kind add up to a sum most people would notice if it left the account in one go, and some of them are essentials that merely happen to be cheap. The figure is what they came to, and it is for you to say which of them was worth it.',
     action: `Pick the one kind of purchase under ${formatEur(c.ceilingCents)} you make most often and buy it in a weekly batch instead of one at a time, then look at this figure again next month.`,
@@ -383,7 +439,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     transactions: r.n,
     unit: 'months',
     period: r.period,
-    effect: { label: 'How consistently the months at the higher income held the larger share of wants', bp: r.effectBp },
+    effect: { label: 'How consistently the months at the higher income held the larger share of wants', bp: r.effectBp, scale: 'percent' },
     limitation: `This compares ${count(r.n, 'whole month', 'whole months')}, grouped into a higher and a lower income level. They are two sets of different months and not one month before and after, a month whose income had to be estimated is left out, and with this few on each side the comparison can show a gap without being able to say how settled it is.`,
     meaning: 'One reading is that a step up in income goes mostly to wants rather than to the fixed costs. Another is that the higher-income months fell in a different part of the year, with spending of its own.',
     action: 'The next time your income steps up, write down the one thing you want the difference to go to before the month starts, then check it against the Budget screen at the end of it.',
@@ -423,6 +479,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
           ? 'How closely spending in a category and that month’s savings moved together'
           : `How closely spending in ${top.label} and that month’s savings moved together`,
         bp: top?.effectBp ?? 0,
+        scale: 'closeness',
       },
       limitation: `This is ${count(r.months, 'month', 'months')} of records rather than a count of purchases. ${searchClause(r.categories.length, top?.label)} A category you spent the same in every month was not compared at all, and the savings figure is simply what was left at the end of a month, which one large purchase can move on its own.`,
       meaning: 'One reading is that this is where the spare money goes in a month that has any. Another is that this category and your savings both follow the same quiet and busy months, which would look the same from here.',

@@ -9,7 +9,7 @@ import { writeAnnotation } from '../../db/annotations'
 import { ENGINE_VERSION, inputsHash } from '../../analytics/cache'
 import { BATTERY, type RelationshipId } from '../../battery/battery'
 import { FDR_BP } from '../../battery/correction'
-import { findingFor } from '../../battery/finding'
+import { findingFor, formatEffect } from '../../battery/finding'
 import type { ContingencyResult } from '../../battery/contingency'
 import type { RankFinding } from '../../battery/rank'
 import type { CategorySavings, MoodFrequencyFinding, TrendFinding } from '../../battery/trend'
@@ -259,7 +259,8 @@ const SMALL_MONTH = '2026-10' // the latest COMPLETE month in that window
 
 const KEY = {
   'mood-amount': 'battery.rank.mood-amount',
-  'mood-frequency': 'battery.trend.mood-frequency',
+  // Keyed by the day, since trend.ts excludes the RUNNING week and so has to know which week that is.
+  'mood-frequency': `battery.trend.mood-frequency:${TODAY}`,
   'stress-discretionary': 'battery.rank.stress-discretionary',
   'boredom-impulse': 'battery:boredom-impulse',
   'reason-worthwhile': 'battery:reason-worthwhile',
@@ -284,13 +285,18 @@ const PERIOD_TEXT = '05/01/2026 to 15/11/2026'
 
 const WEEKEND: RankFinding = { effectBp: 4200, bracket: 'p<0.001', n: 96, period: PERIOD }
 const MOOD_AMOUNT: RankFinding = { effectBp: 2600, bracket: 'p<0.05', n: 34, period: PERIOD }
+/** A difference of two shares, which is percentage POINTS and not a percentage. */
+const STRESS: RankFinding = { effectBp: 1850, bracket: 'p<0.01', n: 46, period: PERIOD }
 const PAYDAY: TrendFinding = { effectBp: 400, bracket: 'none', n: 120, period: PERIOD }
 const MOOD_FREQUENCY: MoodFrequencyFinding = {
   effectBp: 3200, bracket: 'p<0.05', n: 17, period: PERIOD,
   lowMood: { weeks: 9, purchases: 41 }, goodMood: { weeks: 8, purchases: 26 }, tiedWeeks: 3,
 }
 
-/** A category the owner named themselves: it reaches the pattern, the effect's label and the action. */
+/**
+ * A category the owner named THEMSELVES: it reaches the pattern, the effect's label and the action, and it is the
+ * `isUserCreated` row below that makes it the owner's words rather than the app's. A seeded label would not be.
+ */
 const OWN_CATEGORY = 'Vermut con los amigos'
 const CATEGORY_SAVINGS: CategorySavings = {
   months: 7, period: PERIOD,
@@ -311,8 +317,19 @@ const SPARSE: ContingencyResult = {
   chiScaled: 12000, df: 1, vBp: 2200, bracket: 'none', verdict: 'sparse',
 }
 
-/** A reason the owner wrote in their own words, and more rows than the comparison can weigh at once. */
+/** A reason the owner wrote in their own words (the `isCustom` row below), and more rows than can be weighed at once. */
 const OWN_REASON = 'Because I was tired'
+/** What contingency.ts calls a reason id whose row is gone. The APP's placeholder for a lost name, never the owner's. */
+const REMOVED_REASON = 'Removed reason'
+
+/**
+ * The two vocabulary rows that make those labels the owner's own. The screen reads `isCustom` / `isUserCreated`
+ * rather than matching strings, so this is the fixture that decides what renders as a quotation.
+ */
+const seedOwnVocabulary = async () => {
+  await db.purchaseReasons.add({ id: 'reason.tired', label: OWN_REASON, isCustom: true, order: 90, archived: false })
+  await db.categories.add({ id: 'cat.own', name: OWN_CATEGORY, parentId: null, kind: 'discretionary', isUserCreated: true, ingMappings: [] })
+}
 const REASONS: ContingencyResult = {
   n: 40, period: PERIOD,
   columns: ['Worthwhile', 'Not worthwhile'],
@@ -348,6 +365,7 @@ const seedThree = async () => {
 
 /** Every state at once: three verdicts of the correction, three withheld, a plain count, and two still gated. */
 const seedAll = async () => {
+  await seedOwnVocabulary()
   await seedThree()
   await cacheRow(KEY['mood-frequency'], MOOD_FREQUENCY)
   await cacheRow(KEY['category-savings'], CATEGORY_SAVINGS)
@@ -369,6 +387,8 @@ const questionFor = (id: RelationshipId): HTMLElement => {
 }
 /** The one-line state each question carries, read as its own element: "a finding" must not be matched inside a longer sentence. */
 const stateOf = (item: HTMLElement): string => item.querySelector('.battery-state')?.textContent ?? ''
+/** The line that carries the effect FIGURE, so the scale it is rendered on can be read on its own. */
+const effectLine = (item: HTMLElement): string => item.querySelector('.battery-effect')?.textContent ?? ''
 /**
  * The line that says how much was read, whole. Asserting the count anywhere in the item would pass on the limitation
  * sentence, which states the count in its own words too; this is the line that LABELS the figure.
@@ -416,7 +436,7 @@ describe('Intelligence screen: the ten questions', () => {
     const item = questionFor('weekend')
     expect(stateOf(item)).toBe('A finding')
     expect(item).toHaveTextContent(f.pattern)
-    expect(item).toHaveTextContent(`${f.effect.label}: ${formatBp(f.effect.bp)}`)
+    expect(item).toHaveTextContent(`${f.effect.label}: ${formatEffect(f.effect)}`)
     expect(item).toHaveTextContent(f.confidence)
     expect(item).toHaveTextContent('96 purchases')
     expect(item).toHaveTextContent(PERIOD_TEXT)
@@ -430,13 +450,42 @@ describe('Intelligence screen: the ten questions', () => {
     await mountBattery()
     const f = findingFor('weekend', WEEKEND, { bracket: 'p<0.001', survives: true })
     const item = questionFor('weekend')
-    const size = within(item).getByText(`${f.effect.label}: ${formatBp(f.effect.bp)}`, { exact: false })
+    const size = within(item).getByText(`${f.effect.label}: ${formatEffect(f.effect)}`, { exact: false })
     const sure = within(item).getByText(f.confidence, { exact: false })
     expect(size).not.toBe(sure)
     expect(size.textContent ?? '').not.toContain(f.confidence)
-    expect(sure.textContent ?? '').not.toContain(formatBp(f.effect.bp))
+    expect(sure.textContent ?? '').not.toContain(formatEffect(f.effect))
     // No single merged score, bar or adjective standing for both.
     expect(item.textContent ?? '').not.toMatch(/\b(score|rating|out of 10|strength and certainty)\b/i)
+  })
+
+  it('renders each kind of effect figure as what it is, never all three as a percentage', async () => {
+    // Every effect leaves findingFor as basis points, so formatBp applied to all of them made two of the three claim
+    // something else. A correlation is not a percentage of anything the owner could count, and a difference of two
+    // shares is percentage POINTS - "18,5 % more" is a relative claim, and a smaller one. The screen must render
+    // what the template DECLARED, which is why this is checked on all three scales and not only on the one where
+    // formatEffect and formatBp happen to agree.
+    await cacheRow(KEY.weekend, WEEKEND)
+    await cacheRow(KEY['mood-amount'], MOOD_AMOUNT)
+    await cacheRow(KEY['stress-discretionary'], STRESS)
+    await mountBattery()
+
+    // A genuine proportion: Kerby's r over the compared pairs, which does read as a percentage.
+    expect(effectLine(questionFor('weekend'))).toContain('42 %')
+    // A correlation: a closeness on a scale the sentence states, never "26 %".
+    const closeness = effectLine(questionFor('mood-amount'))
+    expect(closeness).toContain('26 out of 100')
+    expect(closeness).toContain('100 would be moving together perfectly')
+    expect(closeness).not.toContain('26 %')
+    // A difference of shares: points, and not a relative percentage.
+    const points = effectLine(questionFor('stress-discretionary'))
+    expect(points).toContain('18,5 percentage points')
+    expect(points).not.toContain('18,5 %')
+    // The screen renders the template's own words for the figure and does not format it a second way of its own.
+    for (const [id, result] of [['weekend', WEEKEND], ['mood-amount', MOOD_AMOUNT], ['stress-discretionary', STRESS]] as const) {
+      const f = findingFor(id, result, { bracket: 'p<0.05', survives: true })
+      expect(effectLine(questionFor(id))).toContain(formatEffect(f.effect))
+    }
   })
 
   it('shows the corrected threshold it applied, and what testing ten things means', async () => {
@@ -537,6 +586,58 @@ describe('Intelligence screen: the ten questions', () => {
     // And the owner's own reason, likewise.
     const reasons = [...questionFor('reason-worthwhile').querySelectorAll('q')].map((q) => q.textContent)
     expect(reasons).toContain(OWN_REASON)
+    // But a SEEDED reason is the app's own wording, which the owner only picked from a list.
+    expect(reasons).not.toContain('Impulse')
+    expect(reasons).not.toContain('Planned')
+  })
+
+  it("never renders the app's own placeholder for a removed reason as the owner's words", async () => {
+    // Two reasons the owner has deleted both arrive labelled 'Removed reason' - the app's placeholder for a name it
+    // no longer has. Quoting it back would credit the owner with a phrase the app wrote, which is the one thing the
+    // quotation exists to prevent, and finding.ts no longer wraps it in literal quotes either, so there is no
+    // doubled quotation left to produce.
+    await seedOwnVocabulary()
+    await cacheRow(KEY['reason-worthwhile'], {
+      n: 48, period: PERIOD, columns: ['Worthwhile', 'Not worthwhile'],
+      rows: [
+        { key: 'reason.planned', label: 'Planned', counts: [14, 2] },
+        { key: 'reason.tired', label: OWN_REASON, counts: [1, 11] },
+        { key: 'reason.gone-a', label: REMOVED_REASON, counts: [2, 9] },
+        { key: 'reason.gone-b', label: REMOVED_REASON, counts: [3, 7] },
+      ],
+      chiScaled: 30000, df: 3, vBp: 2800, bracket: 'p<0.05', verdict: 'tested',
+    })
+    await mountBattery()
+    const item = questionFor('reason-worthwhile')
+    // It is on the page, named and counted, and it is the app speaking.
+    expect(item).toHaveTextContent(REMOVED_REASON)
+    expect(item).toHaveTextContent('2 of the rows carry the same name')
+    const quoted = [...item.querySelectorAll('q')].map((q) => q.textContent)
+    expect(quoted).not.toContain(REMOVED_REASON)
+    expect(quoted).toContain(OWN_REASON) // and the owner's own reason still is theirs
+    // No doubled quotation anywhere: the app's prose carries no quotation marks of its own.
+    expect(item.textContent ?? '').not.toMatch(/["“”]/)
+  })
+
+  it("never names the test it ran, anywhere on the page", async () => {
+    // The ban was pinned only over findingFor's output, but this screen holds BATTERY itself and renders
+    // `relationship.question`; rendering `relationship.test` would trip none of the three banned-word lists, since
+    // "Spearman", "Mann-Whitney" and "Chi-square" match no entry in any of them. So it is pinned over the page too,
+    // off BATTERY's own `test` values, and a relationship added later brings its test name under the rule.
+    await seedAll()
+    await mountBattery()
+    const banned = new Set<string>()
+    for (const r of BATTERY) {
+      if (r.test === null) continue
+      banned.add(r.test)
+      for (const word of r.test.split(/\s+/)) {
+        if (word.length >= 5 && /^[A-Z]/.test(word) && !r.question.includes(word)) banned.add(word)
+      }
+    }
+    expect(banned.size).toBeGreaterThanOrEqual(BATTERY.filter((r) => r.test !== null).length)
+    const page = pageText()
+    expect(page).toContain(BATTERY[0]!.question) // the page really did render, so this is not a scan of nothing
+    for (const word of banned) expect(page, `the page names the test: ${word}`).not.toContain(word)
   })
 
   it('uses no causal or statistical wording anywhere on the page', async () => {

@@ -10,7 +10,7 @@ import { boredomImpulse, reasonWorthwhile, type ContingencyOutcome, type Conting
 import { moodAmount, stressDiscretionary, weekend } from '../../battery/rank'
 import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle } from '../../battery/trend'
 import {
-  findingFor,
+  findingFor, formatEffect,
   type Bracket, type CorrectionVerdict, type Finding, type Observation, type SmallPurchasesContext,
 } from '../../battery/finding'
 import { addDays, epochMsToIso, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
@@ -59,8 +59,10 @@ async function loadTaught(): Promise<Taught[]> {
 //
 // Ten declared relationships, each read through the analytics cache exactly as every other figure on this screen is:
 // the four result modules call `cached` themselves, so nothing here reads the transactions table and nothing here
-// reads a clock. This screen is also the battery's ONLY consumer (§7.2: the battery feeds nothing else), which
-// src/sourceRules.test.ts enforces over the whole tree.
+// reads a clock. This screen is also the battery's only consumer today (§7.2: the battery feeds nothing else), but
+// that is a fact about the tree as it stands and NOT an enforced rule: src/sourceRules.test.ts forbids one direction
+// only, src/learning/ importing from src/battery/, so any other module may import the battery freely and nothing
+// would fail if one did.
 //
 // THE FOUR THINGS A RELATIONSHIP CAN SAY, and the reason they are four and not two:
 //   gated      its gate is unmet. Nothing was tested, so nothing is claimed and nothing enters the correction. This
@@ -156,10 +158,11 @@ function contingencyBody(
  */
 async function loadBattery(today: string, computedAt: number): Promise<Record<RelationshipId, Body>> {
   const { from, to } = windowOf(today.slice(0, 7))
-  const [points, mood, frequency, stress, boredom, reasons, week, payday, salary, savings] = await Promise.all([
+  const [mine, points, mood, frequency, stress, boredom, reasons, week, payday, salary, savings] = await Promise.all([
+    ownVocabulary(),
     monthSeries(from, to, today, computedAt),
     moodAmount(computedAt),
-    moodFrequency(computedAt),
+    moodFrequency(computedAt, today),
     stressDiscretionary(computedAt),
     boredomImpulse(computedAt),
     reasonWorthwhile(computedAt),
@@ -170,6 +173,8 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
   ])
   // A complete month is one with records that has ENDED: the running month's small purchases are a part of a month,
   // and a part of a month compared with whole ones would read as a fall in spending that is only the calendar.
+  /** Of the labels a finding may quote, the ones the owner actually authored. */
+  const ownOnly = (labels: readonly string[]): string[] => labels.filter((l) => mine.has(l))
   const complete = points.filter((p) => p.hasData && p.month < to)
   const latest = complete[complete.length - 1]
   const small = latest === undefined ? null : await smallPurchases(latest.month, SMALL_PURCHASE_CEILING_CENTS, computedAt)
@@ -188,10 +193,12 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
     'mood-amount': Array.isArray(mood) ? gated(mood) : looked(mood.bracket, (v) => findingFor('mood-amount', mood, v)),
     'mood-frequency': Array.isArray(frequency) ? gated(frequency) : looked(frequency.bracket, (v) => findingFor('mood-frequency', frequency, v)),
     'stress-discretionary': Array.isArray(stress) ? gated(stress) : looked(stress.bracket, (v) => findingFor('stress-discretionary', stress, v)),
-    // The owner's own words that reach this one's sentences: the label of the reason tag the table is built on.
-    'boredom-impulse': contingencyBody(boredom, (r) => [r.columns[0]], (r, v) => findingFor('boredom-impulse', r, v)),
-    // Every row here is a reason the owner answered with, so every row label is theirs.
-    'reason-worthwhile': contingencyBody(reasons, (r) => r.rows.map((row) => row.label), (r, v) => findingFor('reason-worthwhile', r, v)),
+    // The label of the reason tag the table is built on, and only if the owner wrote it: a seeded tag is the app's
+    // own wording, so quoting it back would credit the owner with a phrase they only chose from a list.
+    'boredom-impulse': contingencyBody(boredom, (r) => ownOnly([r.columns[0]]), (r, v) => findingFor('boredom-impulse', r, v)),
+    // Every row is a reason the owner ANSWERED with, which is not the same as one they NAMED: the seeded reasons are
+    // the app's words, and a row whose reason has been removed carries the app's placeholder for a lost name.
+    'reason-worthwhile': contingencyBody(reasons, (r) => ownOnly(r.rows.map((row) => row.label)), (r, v) => findingFor('reason-worthwhile', r, v)),
     weekend: Array.isArray(week) ? gated(week) : looked(week.bracket, (v) => findingFor('weekend', week, v)),
     payday: Array.isArray(payday) ? gated(payday) : looked(payday.bracket, (v) => findingFor('payday', payday, v)),
     'small-purchases': counted,
@@ -201,7 +208,7 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
     'category-savings': Array.isArray(savings)
       ? gated(savings)
       : looked(savings.categories[0]?.bracket ?? 'none', (v) => findingFor('category-savings', savings, v),
-        savings.categories[0] === undefined ? [] : [savings.categories[0].label]),
+        ownOnly(savings.categories[0] === undefined ? [] : [savings.categories[0].label])),
   }
 }
 
@@ -251,6 +258,27 @@ function ownWords(text: string, labels: readonly string[]): ReactNode {
   return out
 }
 
+/**
+ * The labels the owner wrote THEMSELVES, read off the three vocabularies rather than listed here.
+ *
+ * A finding's sentences can carry a purchase reason, a mood or a category name, and only the ones the owner authored
+ * may render as their own words. A SEEDED label is the app's wording that the owner merely picked from a list, and
+ * 'Removed reason' - what a reason id with no row left is called - is the app's placeholder for a name it no longer
+ * has. Marking either as the owner's quotation is the app putting words in their mouth, which is the one thing the
+ * <q> treatment exists to prevent. `isCustom` / `isUserCreated` is the stored fact that answers this, so it is what
+ * is read: no string here has to be kept in step with src/learning/regret.ts.
+ */
+async function ownVocabulary(): Promise<ReadonlySet<string>> {
+  const [reasons, moods, categories] = await Promise.all([
+    db.purchaseReasons.toArray(), db.moods.toArray(), db.categories.toArray(),
+  ])
+  return new Set([
+    ...reasons.filter((r) => r.isCustom).map((r) => r.label),
+    ...moods.filter((m) => m.isCustom).map((m) => m.label),
+    ...categories.filter((c) => c.isUserCreated).map((c) => c.name),
+  ])
+}
+
 /** §12 names the count field "transactions analysed"; for four of the ten it is weeks, days or whole months. */
 const UNIT: Record<Observation, [string, string]> = {
   purchases: ['purchase', 'purchases'], weeks: ['week', 'weeks'], days: ['day', 'days'], months: ['month', 'months'],
@@ -266,7 +294,7 @@ function Fields({ finding, own }: { finding: Finding; own: readonly string[] }):
   return (
     <>
       <p><strong>What your records show:</strong> {ownWords(finding.pattern, own)}</p>
-      <p className="battery-effect"><strong>How large it is:</strong> {ownWords(finding.effect.label, own)}: {formatBp(finding.effect.bp)}</p>
+      <p className="battery-effect"><strong>How large it is:</strong> {ownWords(finding.effect.label, own)}: {formatEffect(finding.effect)}</p>
       <p className="battery-sure"><strong>How sure the app is:</strong> {finding.confidence}</p>
       <p><strong>Read from:</strong> {observations(finding)}, {finding.period}</p>
       <p><strong>What it cannot tell you:</strong> {finding.limitation}</p>
