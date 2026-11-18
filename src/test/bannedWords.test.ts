@@ -21,6 +21,7 @@ const INNOCENT = [
   'It is easy to lose track of a month.',
   'Prices are just as the bank lists them.',
   'Pick one category and set its line.',
+  'Food waste is a category.', 'Spending on Food waste is shown.', 'The fee could not be applied.', 'An excessive number of rows were set aside.', 'The match failed to load, so it was set aside.',
   'You need to choose a month first.',
 ]
 
@@ -28,7 +29,10 @@ const SHAMING = [
   'You spent too much.', 'Too much on takeaway.', 'Excessive spending.', 'Excessive.', 'Poorly spent.', 'Money wasted.', 'A wasted month.',
   'You will regret it.', 'You’ll regret it.', 'You regret it.', 'Irresponsible.', 'Irresponsibly done.', 'Careless.', 'Carelessly.', 'Wasteful.',
   'Extravagant.', 'Extravagance.', 'Indulgent.', 'Indulging yourself.', 'Needless.', 'Needless purchases.', 'A bad buy.', 'A bad purchase.',
-  'A poorly judged buy.', 'You are wasting money.', 'That was a waste.', 'Squandered.', 'A lack of control.', 'You shouldn’t.', 'You overspent again.',
+  'A poorly judged buy.', 'You are wasting money.',
+  'Don’t waste it.', 'Do not waste your money.', 'What a waste.', 'Stop wasting.', 'Waste!', 'You waste it every month.', 'Excessive amount on takeaway.', 'An excessive amount on coffee.',
+  'Excessively.', 'You spent excessively.', 'Your spending is out of control.', 'Greedy.', 'You failed to save.', 'You’ve failed to stick to it.', 'You could have saved more.', 'You could’ve saved it.',
+  'You can’t afford this.', 'You cannot afford this.', 'That was a waste.', 'Squandered.', 'A lack of control.', 'You shouldn’t.', 'You overspent again.',
 ]
 
 const MEANS = [

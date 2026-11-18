@@ -6,7 +6,7 @@ import { SMALL_PURCHASE_CEILING_CENTS, smallPurchases } from '../../analytics/ha
 import { monthSeries } from '../../analytics/series'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from '../../battery/battery'
 import { FDR_BP, type Corrected } from '../../battery/correction'
-import { contingencyBracket, correct, readBattery, savingsBracket, windowOf } from '../../battery/run'
+import { contingencyBracket, correct, enteredBrackets, readBattery, savingsBracket, windowOf } from '../../battery/run'
 import type { ContingencyOutcome, ContingencyResult } from '../../battery/contingency'
 import {
   findingFor, formatEffect,
@@ -142,7 +142,10 @@ function contingencyBody(
  * The window is the one thing this screen decides and hands down; the PERIOD shown beside a figure is always the
  * result's own, which is the span of the records that really entered it and can be narrower than the window asked for.
  */
-async function loadBattery(today: string, computedAt: number): Promise<Record<RelationshipId, Body>> {
+/** The screen's rows, and which of them entered the correction (decided by the shared entry rule, not here). */
+interface Loaded { rows: Record<RelationshipId, Body>; judged: { item: RelationshipId; bracket: Bracket }[] }
+
+async function loadBattery(today: string, computedAt: number): Promise<Loaded> {
   const { from, to } = windowOf(today.slice(0, 7))
   const [mine, points, reads] = await Promise.all([ownVocabulary(), monthSeries(from, to, today, computedAt), readBattery(today, computedAt)])
   const { mood, frequency, stress, boredom, reasons, week, payday, salary, savings } = reads
@@ -164,7 +167,7 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
       own: [],
     }
 
-  return {
+  const rows: Record<RelationshipId, Body> = {
     'mood-amount': Array.isArray(mood) ? gated(mood) : looked(mood.bracket, (v) => findingFor('mood-amount', mood, v)),
     'mood-frequency': Array.isArray(frequency) ? gated(frequency) : looked(frequency.bracket, (v) => findingFor('mood-frequency', frequency, v)),
     'stress-discretionary': Array.isArray(stress) ? gated(stress) : looked(stress.bracket, (v) => findingFor('stress-discretionary', stress, v)),
@@ -185,6 +188,9 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
       : looked(savingsBracket(savings), (v) => findingFor('category-savings', savings, v),
         ownOnly(savings.categories[0] === undefined ? [] : [savings.categories[0].label])),
   }
+  // The entry rule is read from the reads by the one function that owns it (src/battery/run.ts), never rebuilt from the
+  // bodies above: the advice module applies the same rule to the same reads, and two copies would drift.
+  return { rows, judged: enteredBrackets(reads) }
 }
 
 const LETTER = /[\p{L}\p{N}]/u
@@ -303,15 +309,9 @@ function stateText(body: Body, verdict: CorrectionVerdict): string {
   return verdict.survives ? 'A finding' : 'Shown, and not called a finding'
 }
 
-function Battery({ rows }: { rows: Record<RelationshipId, Body> }): ReactNode {
-  // ONLY a validly tested relationship enters the correction. An unmet gate was never tested; a sparse or oversized
-  // table was not validly tested either, since the assumption its certainty rests on failed; the small purchases are
-  // a count and §12 gives them no test. A result that WAS tested and came back 'none' does count: it was looked at
-  // and came back unremarkable, which is an answer.
-  const judged = BATTERY.flatMap((r) => {
-    const body = rows[r.id]
-    return body.kind === 'looked' ? [{ item: r.id, bracket: body.bracket }] : []
-  })
+function Battery({ rows, judged }: { rows: Record<RelationshipId, Body>; judged: readonly { item: RelationshipId; bracket: Bracket }[] }): ReactNode {
+  // WHICH relationships enter the correction is decided once, in src/battery/run.ts (`enteredBrackets`), and arrives
+  // here as `judged`. Only a validly tested relationship enters; see the entry rule there.
   const { verdicts, thresholdBp } = correct(judged)
 
   return (
@@ -366,7 +366,7 @@ export default function Intelligence({ today, computedAt }: { today: string; com
   const [taught, setTaught] = useState<Taught[] | null>(null)
   const [period, setPeriod] = useState<Period>('all')
   const [clusters, setClusters] = useState<RegretCluster[] | null>(null)
-  const [battery, setBattery] = useState<Record<RelationshipId, Body> | null>(null)
+  const [battery, setBattery] = useState<Loaded | null>(null)
   const [batteryError, setBatteryError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const latest = useRef(0)
@@ -384,7 +384,7 @@ export default function Intelligence({ today, computedAt }: { today: string; com
   // which narrow only the answers to "Worth it?".
   useEffect(() => {
     let live = true
-    loadBattery(today, computedAt).then((rows) => { if (live) setBattery(rows) }, (e: unknown) => {
+    loadBattery(today, computedAt).then((loaded) => { if (live) setBattery(loaded) }, (e: unknown) => {
       if (live) setBatteryError(`The questions about your spending could not be worked out${e instanceof Error && e.message ? ` (${e.message})` : ''}. Nothing was changed.`)
     })
     return () => { live = false }
@@ -507,7 +507,7 @@ export default function Intelligence({ today, computedAt }: { today: string; com
         {batteryError !== null && <div role="alert" className="notice notice-refusal"><p>{batteryError}</p></div>}
         {batteryError === null && (battery === null
           ? <p role="status">Loading what your records can answer…</p>
-          : <Battery rows={battery} />)}
+          : <Battery rows={battery.rows} judged={battery.judged} />)}
       </section>
     </section>
   )
