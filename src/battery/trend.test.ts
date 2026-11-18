@@ -1,0 +1,217 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { db } from '../db/db'
+import { seedDatabase } from '../db/seed'
+import type { AnnotationRow, TransactionRow } from '../db/schema'
+import { addDays } from '../lib/dates'
+import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle } from './trend'
+
+let uid = 0
+const TODAY = '2027-06-30'
+const SHOP: [string, string] = ['Compras', 'Compras (otros)']          // discretionary
+const FOOD: [string, string] = ['Alimentación', 'Supermercados y alimentación'] // essential
+
+const tx = async (
+  id: string, valueDate: string, amountCents: number, over: Partial<TransactionRow> = {}, ing: [string, string] | null = null,
+): Promise<void> => {
+  await db.transactions.add({
+    id, accountId: 'acc.1', valueDate, amountCents, balanceCents: 0, description: 'Movimiento inventado', comment: null,
+    ingCategory: ing?.[0] ?? null, ingSubcategory: ing?.[1] ?? null, kind: amountCents > 0 ? 'income' : 'spend',
+    dedupKey: `k.${++uid}`, importId: 'imp.1', fileSeq: uid, roundupParentId: null, createdAt: 1, deletedAt: null, ...over,
+  })
+}
+const ann = (transactionId: string, over: Partial<AnnotationRow>): Promise<unknown> =>
+  db.annotations.add({
+    transactionId, categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
+    note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false, dateOverride: null,
+    amountCentsOverride: null, descriptionOverride: null, updatedAt: 1, ...over,
+  })
+
+beforeEach(async () => {
+  uid = 0
+  await db.delete(); await db.open(); await seedDatabase()
+})
+
+describe('paydayTrend', () => {
+  // Three paydays, each late in its month so the series is four days: offsets 0, 1, 2, 3 by the bank's dates.
+  // Oct 28..31, Nov 27..30, Dec 28..31. Every month spends 40.00, 30.00, 20.00, 10.00 on offsets 0..3, so pooled
+  // x = 0,1,2,3 three times over and y = 4000,3000,2000,1000 three times over: the y ranks are the x ranks reversed,
+  // tie for tie, so rho = -1 exactly = -10000 bp. n = 12; 10000^2 * 11 = 1.1e9 >= 32906^2 = 1.0827e9, so p<0.001.
+  const seedPaydays = async (months: [string, number][]): Promise<void> => {
+    for (const [paydayDate, start] of months) {
+      await tx(`pay.${paydayDate}`, paydayDate, 200000, { kind: 'income' })
+      for (let off = 0; off < 4; off++) {
+        const day = `${paydayDate.slice(0, 8)}${String(start + off).padStart(2, '0')}`
+        await tx(`sp.${paydayDate}.${off}`, day, -(4000 - off * 1000))
+      }
+    }
+  }
+
+  it('correlates days since payday against that days spending, over the bank dates', async () => {
+    await seedPaydays([['2026-10-28', 28], ['2026-11-27', 27], ['2026-12-28', 28]])
+    // The owner "corrects" the last day of October to look like payday itself. The bank's date stands, so nothing moves.
+    await ann('sp.2026-10-28.3', { dateOverride: '2026-10-28' })
+    const r = await paydayTrend('2026-10', '2026-12', TODAY, 1000)
+    expect(r).toEqual({ effectBp: -10000, bracket: 'p<0.001', n: 12, period: { from: '2026-10', to: '2026-12' } })
+  })
+
+  it('withholds below three payments received, naming what is short', async () => {
+    await seedPaydays([['2026-10-28', 28], ['2026-11-27', 27]])
+    const r = await paydayTrend('2026-10', '2026-12', TODAY, 1000)
+    expect(r).toHaveLength(1)
+    expect(r).toMatchObject([{ have: 2, need: 3 }])
+    expect(JSON.stringify(r)).toContain('1 more payment is needed')
+  })
+})
+
+describe('salaryLifestyle', () => {
+  const month = async (m: string, income: number, wants: number, needs: number): Promise<void> => {
+    await tx(`pay.${m}`, `${m}-02`, income, { kind: 'income' })
+    await tx(`want.${m}`, `${m}-10`, -wants, {}, SHOP)
+    await tx(`need.${m}`, `${m}-11`, -needs, {}, FOOD)
+  }
+
+  it('compares discretionary share across two income levels with at least two months each', async () => {
+    // High level (3000.00): shares 3000 bp and 3500 bp.
+    await month('2026-01', 300000, 30000, 70000)
+    await month('2026-02', 300000, 35000, 65000)
+    // A month with spending but no income of its own, all of it on needs (share 0). Its income would be the trailing
+    // average of the two before it, 3000.00: an estimate that lands in the high level. It must be no part of any level;
+    // admitted, the high months would be 3000, 3500, 0 and r = (4 wins - 2 losses) / 6 = +3333 instead of +10000.
+    await tx('need.2026-03', '2026-03-11', -50000, {}, FOOD)
+    // Low level (2000.00): shares 20000/100000 = 2000 bp and 25000/100000 = 2500 bp. Every high month is above every
+    // low month: wins = 2*2 = 4 of 4 pairs, so r = (4 - 0) / 4 = +1 = +10000 bp, and uDoubled = 2*4 = 8.
+    await month('2026-04', 200000, 20000, 80000)
+    await month('2026-05', 200000, 25000, 75000)
+    const r = await salaryLifestyle('2026-01', '2026-05', TODAY, 1000)
+    // Four months a side is under the floor of eight, so the effect is real and the bracket is 'none'.
+    expect(r).toEqual({ effectBp: 10000, bracket: 'none', n: 4, period: { from: '2026-01', to: '2026-05' } })
+  })
+
+  it('reads negative when the share spent on wants fell as income rose', async () => {
+    await month('2026-01', 200000, 40000, 60000) // 4000 bp
+    await month('2026-02', 200000, 45000, 55000) // 4500 bp
+    await month('2026-03', 300000, 20000, 80000) // 2000 bp
+    await month('2026-04', 300000, 25000, 75000) // 2500 bp
+    // The higher-income months come first, and every one of them is below every lower-income month: r = -1.
+    const r = await salaryLifestyle('2026-01', '2026-04', TODAY, 1000)
+    expect(r).toMatchObject({ effectBp: -10000, n: 4 })
+  })
+
+  it('withholds with only one income level of two months, naming what is short', async () => {
+    await month('2026-01', 200000, 20000, 80000)
+    await month('2026-02', 205000, 25000, 75000) // within 10 % of the first: the same level
+    await month('2026-03', 300000, 30000, 70000) // a second level, but a single month
+    const r = await salaryLifestyle('2026-01', '2026-03', TODAY, 1000)
+    expect(r).toMatchObject([{ have: 1, need: 2 }])
+    expect(JSON.stringify(r)).toContain('income levels')
+  })
+})
+
+describe('moodFrequency', () => {
+  // Weeks start on Mondays: 2026-01-05 + 7w. Twenty weeks of good-mood purchases at two a week = 40 purchases.
+  // The low mood is recorded in only the first eight of those weeks, at 3,4,3,5,4,3,4,5 = 31 purchases.
+  // Raw totals say good-mood buys MORE (40 against 31); per week, every low-mood week (>= 3) beats every good-mood
+  // week (2), so a = low, b = good: wins = 8*20 = 160 of 160 pairs, r = +1 = +10000, uDoubled = 320.
+  // n1 = 8, n2 = 20, V = 8*20*29 = 4640, D = 320 - 160 = 160, C = 159:
+  // 3e8 * 159^2 = 7.584e12 >= 32906^2 * 4640 = 5.024e12, so p<0.001.
+  const LOW = [3, 4, 3, 5, 4, 3, 4, 5]
+  const seedWeeks = async (): Promise<void> => {
+    const monday = (w: number): string => addDays('2026-01-05', 7 * w)
+    for (let w = 0; w < 20; w++) {
+      for (const off of [0, 2]) {
+        const id = `g.${w}.${off}`
+        await tx(id, addDays(monday(w), off), -1500)
+        await ann(id, { moodId: 'mood.happy' })
+      }
+    }
+    for (let w = 0; w < LOW.length; w++) {
+      const count = LOW[w] ?? 0
+      for (let k = 0; k < count; k++) {
+        // Week 0's third purchase is on the SUNDAY (offset 6): it belongs to the week that began the Monday before.
+        const off = w === 0 && k === 2 ? 6 : k
+        const id = `l.${w}.${k}`
+        await tx(id, addDays(monday(w), off), -1500)
+        await ann(id, { moodId: k % 2 === 0 ? 'mood.stressed' : 'mood.sad' })
+      }
+    }
+  }
+
+  it('compares purchase frequency between mood days as a rate over the weeks observed', async () => {
+    await seedWeeks()
+    // The owner re-dates one purchase to December. The bank's week stands, so the week-1 count is still 4.
+    await db.annotations.update('l.1.0', { dateOverride: '2026-12-01' })
+    // Neutral and "Other" moods have no side to be on: they must add neither weeks nor purchases.
+    await tx('n.1', '2026-08-03', -1500); await ann('n.1', { moodId: 'mood.neutral' })
+    await tx('o.1', '2026-08-10', -1500); await ann('o.1', { moodId: 'mood.other' })
+    const r = await moodFrequency(1000)
+    expect(r).toEqual({
+      effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-05', to: '2026-05-24' },
+      lowMood: { weeks: 8, purchases: 31 }, goodMood: { weeks: 20, purchases: 40 },
+    })
+  })
+
+  it('withholds below eight weeks with a mood recorded, naming what is short', async () => {
+    await tx('a', '2026-01-05', -1500); await ann('a', { moodId: 'mood.happy' })
+    const r = await moodFrequency(1000)
+    expect(r).toMatchObject([{ have: 1, need: 8 }])
+    expect(JSON.stringify(r)).toContain('7 more weeks are needed')
+  })
+})
+
+describe('categorySavings', () => {
+  // Five months with data, each with one discretionary spend and one round-up saving (a roundup outflow is savings).
+  // Spend ranks 1..5 (100.00 .. 500.00), saved 300, 500, 100, 400, 200 => saved ranks 3, 5, 1, 4, 2.
+  // d = x - y = -2, -3, 2, 0, 3; sum d^2 = 4 + 9 + 4 + 0 + 9 = 26; no ties, so rho = 1 - 6*26 / (5*24) = -0.3 = -3000 bp.
+  const SPENT = [10000, 20000, 30000, 40000, 50000]
+  const SAVED = [30000, 50000, 10000, 40000, 20000]
+  const seedFive = async (): Promise<void> => {
+    for (let i = 0; i < 5; i++) {
+      const m = `2026-0${i + 2}`
+      await tx(`shop.${m}`, `${m}-10`, -(SPENT[i] ?? 0), {}, SHOP)
+      await tx(`save.${m}`, `${m}-12`, -(SAVED[i] ?? 0), { kind: 'roundup' })
+    }
+  }
+
+  it('correlates category spending against savings across at least four months', async () => {
+    await seedFive()
+    const r = await categorySavings('2026-02', '2026-06', TODAY, 1000)
+    // Five months: past the gate of four, under the bracket floor of ten. A real effect, bracket 'none', not an error.
+    expect(r).toMatchObject({ months: 5, period: { from: '2026-02', to: '2026-06' } })
+    expect((r as { categories: unknown[] }).categories).toEqual([
+      { categoryId: 'cat.shopping', label: expect.any(String), effectBp: -3000, bracket: 'none' },
+    ])
+  })
+
+  it('leaves a month with no records out of every correlation rather than treating it as zero', async () => {
+    await seedFive()
+    // January has NO records. Read as (spent 0, saved 0) it would be the lowest on both axes: the six pairs would have
+    // x ranks 1..6 and y ranks 1,4,6,2,5,3 with the same d^2 sum of 26, so rho = 1 - 6*26 / (6*35) = +0.2571 = +2571 bp.
+    // Left out, as it must be, it is the -3000 above: the gap month would flip the sign.
+    const r = await categorySavings('2026-01', '2026-06', TODAY, 1000)
+    expect(r).toMatchObject({ months: 5, period: { from: '2026-02', to: '2026-06' } })
+    expect((r as { categories: { effectBp: number }[] }).categories[0]?.effectBp).toBe(-3000)
+  })
+
+  it('withholds below four months, naming what is short', async () => {
+    for (let i = 0; i < 3; i++) await tx(`s${i}`, `2026-0${i + 1}-10`, -1000, {}, SHOP)
+    const r = await categorySavings('2026-01', '2026-03', TODAY, 1000)
+    expect(r).toMatchObject([{ have: 3, need: 4 }])
+    expect(JSON.stringify(r)).toContain('1 more month is needed')
+  })
+})
+
+describe('every relationship, with nothing recorded', () => {
+  it('withholds each one below its own minimum, naming what is short', async () => {
+    const results = [
+      [await paydayTrend('2026-01', '2026-03', TODAY, 1), 3, 'payments received'],
+      [await salaryLifestyle('2026-01', '2026-03', TODAY, 1), 2, 'income levels'],
+      [await moodFrequency(1), 8, 'weeks with a mood recorded'],
+      [await categorySavings('2026-01', '2026-03', TODAY, 1), 4, 'months of spending'],
+    ] as const
+    for (const [r, need, what] of results) {
+      expect(Array.isArray(r)).toBe(true)
+      expect(r).toMatchObject([{ have: 0, need }])
+      expect(JSON.stringify(r)).toContain(what)
+    }
+  })
+})
