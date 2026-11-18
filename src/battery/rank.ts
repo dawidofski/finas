@@ -40,6 +40,10 @@ const STRESSED_MOOD = 'mood.stressed'
 
 /** One spend, as the statistics see it: bank figures plus the owner's classifications. */
 export interface Spend {
+  /** The transaction this spend is. */
+  id: string
+  /** The resolved merchant (the owner's, else none); null when the row has no merchant. Recurring detection leaves such spends out: it clusters by merchant. */
+  merchantId: string | null
   centsOut: number            // the BANK amount, negated: money out, positive
   date: string                // the BANK value date
   moodId: string | null
@@ -80,6 +84,8 @@ export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
     const categoryKind = r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null
     if (!t || t.amountCents >= 0 || treatmentOf(r.kind, categoryKind) !== 'spending') continue
     out.push({
+      id: t.id,
+      merchantId: r.merchantId,
       centsOut: -t.amountCents,
       date: t.valueDate,
       moodId: r.moodId,

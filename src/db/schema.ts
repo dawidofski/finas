@@ -184,6 +184,12 @@ export interface RecurringRow {
   matchScore: number
   confirmedByUser: boolean
   cancelled: boolean
+  /**
+   * The owner said "this is not recurring": detection must not show it again. Undefined means false (a row written before
+   * this field existed, or by a backup that predates it). Deliberately separate from `cancelled`: "I stopped paying" is a
+   * payment that did recur; this is a pattern that never was one. Not indexed, so no Dexie version.
+   */
+  dismissed?: boolean
 }
 
 /**

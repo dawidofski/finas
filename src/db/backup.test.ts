@@ -432,3 +432,31 @@ describe('export/restore', () => {
     })
   })
 })
+
+describe('recurring.dismissed in a backup', () => {
+  const recurringRow = (over: Record<string, unknown> = {}) => ({
+    id: 'm.gym|monthly|0', merchantId: 'm.gym', amountCents: 3000, toleranceCents: 150, frequency: 'monthly',
+    lastSeenDate: '2026-08-05', expectedNextDate: '2026-09-04', matchScore: 6000, confirmedByUser: false, cancelled: false, ...over,
+  })
+
+  it('round-trips a dismissed recurring payment', async () => {
+    await seedDatabase()
+    await db.table('recurring').add(recurringRow({ dismissed: true }))
+    const bundle = JSON.parse(JSON.stringify(await exportBundle())) as unknown
+    await db.delete(); await db.open()
+    expect((await restoreBundle(bundle, 'replace')).ok).toBe(true)
+    expect((await db.table('recurring').get('m.gym|monthly|0'))?.dismissed).toBe(true)
+  })
+
+  it('restores a backup whose recurring rows predate the field, and reads them as not dismissed', async () => {
+    await seedDatabase()
+    await db.table('recurring').add(recurringRow())
+    const bundle = JSON.parse(JSON.stringify(await exportBundle())) as unknown
+    await db.delete(); await db.open()
+    expect((await inspectBundle(bundle, 'replace')).ok).toBe(true)
+    expect((await restoreBundle(bundle, 'replace')).ok).toBe(true)
+    const row = await db.table('recurring').get('m.gym|monthly|0')
+    expect(row).toBeTruthy()
+    expect(row.dismissed).toBeUndefined()
+  })
+})
