@@ -6,14 +6,6 @@ export interface GoalMonth { month: string; goalId: string; contributedCents: nu
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-function nextMonth(month: string): string {
-  const m = MONTH_RE.exec(month)
-  if (!m) throw new Error(`Invalid month, expected YYYY-MM: ${month}`)
-  const year = Number(m[1])
-  const mm = Number(m[2])
-  return mm === 12 ? `${String(year + 1).padStart(4, '0')}-01` : `${m[1]}-${String(mm + 1).padStart(2, '0')}`
-}
-
 /**
  * Shares `savedCents` between goals in proportion to their allocations, each goal capped at its own allocation, and the
  * parts sum to EXACTLY min(savedCents, sum of allocations). Whole cents come from the floor of each exact share; the
@@ -58,13 +50,12 @@ export function attribute(
  * Completed months only, oldest first. The month `today` falls in is never included (a part-month is not a small whole
  * month), nor is a month with no records. Within a month, goals are in goal-id order.
  */
-export async function goalContributions(firstMonth: string, lastMonth: string, today: string): Promise<GoalMonth[]> {
+export async function goalContributions(firstMonth: string, lastMonth: string, today: string, computedAt: number): Promise<GoalMonth[]> {
   if (!MONTH_RE.test(firstMonth)) throw new Error(`Invalid month, expected YYYY-MM: ${firstMonth}`)
   if (!MONTH_RE.test(lastMonth)) throw new Error(`Invalid month, expected YYYY-MM: ${lastMonth}`)
   if (!DATE_RE.test(today)) throw new Error(`Invalid date, expected YYYY-MM-DD: ${today}`)
   const running = today.slice(0, 7)
-  // The cache stamp is the only use of this argument; it is not read as a time here, and no clock is read in this module.
-  const points = await monthSeries(firstMonth, lastMonth, today, 0)
+  const points = await monthSeries(firstMonth, lastMonth, today, computedAt)
   const out: GoalMonth[] = []
   for (const p of points) {
     if (!p.hasData || p.month === running) continue

@@ -79,7 +79,7 @@ describe('goalContributions', () => {
     await goal('g.a'); await goal('g.b')
     await allocate('g.a', 30000); await allocate('g.b', 10000)
     await saved('s1', '2026-09-10', 20000)
-    expect(await goalContributions('2026-09', '2026-09', TODAY)).toEqual([
+    expect(await goalContributions('2026-09', '2026-09', TODAY, 1)).toEqual([
       { month: '2026-09', goalId: 'g.a', contributedCents: 15000, allocatedCents: 30000 },
       { month: '2026-09', goalId: 'g.b', contributedCents: 5000, allocatedCents: 10000 },
     ])
@@ -92,7 +92,7 @@ describe('goalContributions', () => {
       id: 'sp', accountId: 'acc.1', valueDate: '2026-09-10', amountCents: -1000, balanceCents: 0, description: 'Movimiento inventado', comment: null,
       ingCategory: null, ingSubcategory: null, kind: 'spend', dedupKey: 'k.sp', importId: 'imp.1', fileSeq: 99, roundupParentId: null, createdAt: 1, deletedAt: null,
     })
-    expect(await goalContributions('2026-09', '2026-09', TODAY)).toEqual([
+    expect(await goalContributions('2026-09', '2026-09', TODAY, 1)).toEqual([
       { month: '2026-09', goalId: 'g.a', contributedCents: 0, allocatedCents: 30000 },
     ])
   })
@@ -103,7 +103,7 @@ describe('goalContributions', () => {
     // 2026-09 has no records at all; 2026-11 is the running month and does.
     await saved('s3', '2026-10-10', 2000)
     await saved('s4', '2026-11-02', 4000)
-    const out = await goalContributions('2026-08', '2026-11', TODAY)
+    const out = await goalContributions('2026-08', '2026-11', TODAY, 1)
     expect(out.map((r) => [r.month, r.contributedCents])).toEqual([['2026-08', 1000], ['2026-10', 2000]])
   })
 
@@ -111,7 +111,7 @@ describe('goalContributions', () => {
     await goal('g.b'); await goal('g.a')
     await allocate('g.b', 100); await allocate('g.a', 100)
     await saved('s1', '2026-10-10', 100); await saved('s2', '2026-09-10', 100)
-    const out = await goalContributions('2026-09', '2026-10', TODAY)
+    const out = await goalContributions('2026-09', '2026-10', TODAY, 1)
     expect(out.map((r) => `${r.month}/${r.goalId}`)).toEqual(['2026-09/g.a', '2026-09/g.b', '2026-10/g.a', '2026-10/g.b'])
   })
 })
