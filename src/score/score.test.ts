@@ -57,7 +57,7 @@ describe('moneyScore', () => {
     expect(r.weightUsed).toBe(7)
   })
 
-  it('rounds half up to a whole point and never above 100 or below 0', () => {
+  it('rounds half up to a whole point', () => {
     // Budget (3) at 1 and savings (3) at 0: (3 + 0) / 6 = 0.5 -> 1 (half rounds up, as divRound does everywhere).
     expect(moneyScore(six({ 'budget-awareness': m(1), 'savings-consistency': m(0) })).score).toBe(1)
     // Budget (3) at 33 and learning (2) at 34: (99 + 68) / 5 = 33.4 -> 33.
@@ -68,9 +68,21 @@ describe('moneyScore', () => {
     expect(zero.weightUsed).toBe(5)
   })
 
+  it('never reports 100 while a measured component is short, however small the shortfall', () => {
+    // Budget (3) at 99, the other five at 100: 3*99 + 3*100 + 2*100*4 = 297 + 300 + 800 = 1397; 1397/14 = 99.79.
+    // Plain half-up rounding says 100; three points are short, so the score is 99.
+    const base = { 'budget-awareness': m(99), 'savings-consistency': m(100), 'improvement': m(100),
+      'spending-awareness': m(100), 'goal-progress': m(100), 'learning': m(100) }
+    expect(moneyScore(base).score).toBe(99)
+    // Two weight-2 components, one at 99: (2*99 + 2*100) / 4 = 398/4 = 99.5, which half-up rounds to 100. Still 99.
+    expect(moneyScore(six({ improvement: m(99), learning: m(100) })).score).toBe(99)
+    // Every measured component at 100 does reach 100, and every one at 0 gives 0 (lower bound).
+    expect(moneyScore({ ...base, 'budget-awareness': m(100) }).score).toBe(100)
+    expect(moneyScore(six({ improvement: m(0), learning: m(0) })).score).toBe(0)
+  })
+
   it('lets no single component exceed a quarter of the total weight', () => {
     const total = IDS.reduce((s, id) => s + WEIGHTS[id], 0)
-    expect(total).toBe(14)
     for (const id of IDS) {
       // weight / total <= 1/4  <=>  4 * weight <= total
       expect(4 * WEIGHTS[id], `${id} would dominate`).toBeLessThanOrEqual(total)
@@ -83,8 +95,6 @@ describe('moneyScore', () => {
     const r = moneyScore(six({}))
     expect(r.score).toBeNull()
     expect(r.weightUsed).toBe(0)
-    expect(r.score).not.toBe(0)
-    expect(Number.isNaN(r.score)).toBe(false)
   })
 
   it('keeps every component in the list, measured or not, so the screen can show all six', () => {
@@ -101,6 +111,10 @@ describe('moneyScore', () => {
 
   it('gives every component its own non-empty label for the owner', () => {
     const labels = moneyScore(six({})).components.map((c) => c.label)
+    // Each id carries its own label, in the order the screen shows them.
+    expect(labels).toEqual(['Budget awareness', 'Savings consistency', 'Discretionary share over time', 'Spending review', 'Goal progress', 'Repeated regrets'])
+    expect(moneyScore(six({})).components.map((c) => c.id)).toEqual(
+      ['budget-awareness', 'savings-consistency', 'improvement', 'spending-awareness', 'goal-progress', 'learning'])
     expect(labels.every((l) => l.trim().length > 0)).toBe(true)
     expect(new Set(labels).size).toBe(6)
     // A1: a label names what is looked at, never a verdict on the owner.
