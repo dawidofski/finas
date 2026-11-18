@@ -159,8 +159,12 @@ describe('the ladder against the battery', () => {
     // FDR_BP / BATTERY.length (500 / 10 = 50 bp today). A lone finding can survive only if the finest bracket's upper
     // bound is at or under that, or the battery goes permanently silent exactly when all its gates open. critical.ts
     // asserts the same thing against literals because it cannot import this module; this one reads the live values, so
-    // raising the FDR level or adding an eleventh relationship to the battery fails HERE, telling the next person the
-    // ladder may need another rung. Written as bound * count <= FDR_BP, which is the same inequality without a division.
+    // what trips it: LOWERING the FDR level below bound * BATTERY.length (10 * 10 = 100 bp today), or growing the
+    // battery past FDR_BP / bound = 500 / 10 = 50 relationships, or raising the finest bound. Either way the ladder may
+    // need another rung. What does NOT trip it, though a reader will expect it to: RAISING the FDR level (a looser
+    // correction only makes the finest rung more than sufficient) and adding an eleventh relationship (10 * 11 = 110 <=
+    // 500). The direction is counter-intuitive, so do not rewrite this as "raising the level fails here".
+    // Written as bound * count <= FDR_BP, the same inequality without a division.
     expect(ALPHA_BP['p<0.001'] * BATTERY.length).toBeLessThanOrEqual(FDR_BP)
   })
 })
