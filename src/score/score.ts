@@ -31,7 +31,7 @@ const LABELS: Readonly<Record<ComponentId, string>> = {
   'improvement': 'Discretionary share over time',
   'spending-awareness': 'Spending review',
   'goal-progress': 'Goal progress',
-  'learning': 'Repeat purchases marked not worth it',
+  'learning': 'Fewer repeats of purchases marked not worth it',
 }
 
 const ORDER: readonly ComponentId[] = [

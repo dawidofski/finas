@@ -1,7 +1,7 @@
 import type { MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
 import type { SavingsGoalRow } from '../db/schema'
-import { annotatedTransactions, type RegretCluster } from '../learning/regret'
+import { type RegretCluster } from '../learning/regret'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { loadCategoryKinds, worthAnnotating } from '../analysis/queues'
 import { resolveMany } from '../db/annotations'
@@ -69,7 +69,7 @@ export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasDat
   }
 }
 
-/** Proportion of months with data in which net savings were positive. A month with no records is not a month of no saving. */
+/** Proportion of months with data in which the savings movements (`savedCents`, the amount moved into savings) were above zero. A month with no records is not a month of no saving. */
 export function savingsConsistency(points: readonly MonthPoint[]): Component {
   const observed = points.filter((p) => p.hasData)
   if (observed.length < MIN_SAVINGS_MONTHS) {
@@ -129,10 +129,9 @@ const MIN_ANSWERED_SPENDS = 3
  * bank transactions that `worthAnnotating` accepts, the same test the review queue applies: income, internal movements,
  * round-ups and essentials are never offered, so counting them would cap the score below 100 by rows the owner cannot act
  * on. Reviewed means the owner's own `reviewed` flag; an annotation row alone (a note) is not a review. Not measured when no
- * such transaction is in the window, or when none has been touched at all (an untouched window would score 0, which says
- * the owner did nothing rather than that this has not started). Touched rows come through `annotatedTransactions`,
- * bounded by the owner's own activity (§39.4); the window is a date-bounded read, never the whole ledger. The window is by
- * the bank's date, as the regret clusters are. `from` and `to` are inclusive 'YYYY-MM-DD'.
+ * such transaction is in the window, or when none of them has been reviewed (a window with nothing reviewed would score 0,
+ * which says the owner did nothing rather than that this has not started, and would make a note lower the score). The
+ * window is a date-bounded read, never the whole ledger, and is by the bank's date, as the regret clusters are. `from` and `to` are inclusive 'YYYY-MM-DD'.
  */
 export async function spendingAwareness(from: string, to: string): Promise<Component> {
   const live = (await liveTransactionsBetween(from.slice(0, 7), to.slice(0, 7))).filter((t) => t.valueDate >= from && t.valueDate <= to)
@@ -141,11 +140,13 @@ export async function spendingAwareness(from: string, to: string): Promise<Compo
   if (eligible.length === 0) {
     return { kind: 'not-measured', why: 'No transactions in this period are ones the app asks you to review, so there is nothing to have reviewed.' }
   }
-  const touchedIds = new Set((await annotatedTransactions(() => true)).map((t) => t.id))
-  if (!eligible.some((t) => touchedIds.has(t.id))) {
-    return { kind: 'not-measured', why: 'None of the transactions in this period has been reviewed or annotated yet, so there is nothing to measure.' }
-  }
   const reviewed = eligible.filter((t) => t.reviewed).length
+  // Measured only once something in the window has actually been reviewed. A note, or an annotation row left at its
+  // defaults, is engagement and not a review: counting it would turn "not measured" into 0 out of 100 the moment the owner
+  // touched anything, so using the app would lower the score.
+  if (reviewed === 0) {
+    return { kind: 'not-measured', why: 'Nothing in this period has been reviewed yet, so there is nothing to measure.' }
+  }
   return {
     kind: 'measured',
     score: wholePoints(reviewed, eligible.length),

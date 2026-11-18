@@ -5,6 +5,7 @@ import type { AnnotationRow, SavingsGoalRow, TransactionRow } from '../db/schema
 import type { RegretCluster } from '../learning/regret'
 import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
+import { violations } from '../test/bannedWords'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, wholePoints } from './components'
 
 function line(allocatedCents: number, spentCents: number, targetKind: 'category' | 'goal' = 'category'): BudgetLine {
@@ -294,7 +295,7 @@ describe('spendingAwareness', () => {
     const c = await spendingAwareness(...NOV)
     expect(c.kind).toBe('not-measured')
     if (c.kind !== 'not-measured') throw new Error('expected not-measured')
-    expect(c.why).toMatch(/None of the transactions in this period has been reviewed or annotated/)
+    expect(c.why).toMatch(/Nothing in this period has been reviewed yet/)
   })
 
   it('does not take a review made outside the window, or on a deleted row, for work done inside it', async () => {
@@ -305,7 +306,7 @@ describe('spendingAwareness', () => {
     const c = await spendingAwareness(...NOV)
     expect(c.kind).toBe('not-measured')
     if (c.kind !== 'not-measured') throw new Error('expected not-measured')
-    expect(c.why).toMatch(/None of the transactions in this period has been reviewed or annotated/)
+    expect(c.why).toMatch(/Nothing in this period has been reviewed yet/)
   })
 
   it('does not score a window with nothing live in it', async () => {
@@ -325,10 +326,16 @@ describe('spendingAwareness', () => {
     expect(await spendingAwareness('2026-11-10', '2026-11-20')).toMatchObject({ kind: 'measured', score: 33 })
   })
 
-  it('scores 0 when the owner has touched transactions but reviewed none', async () => {
+  it('does not score 0 for an owner who has touched transactions but reviewed none: engaging must not lower the score', async () => {
+    // A note, and an annotation row left at its defaults, are not reviews. Neither turns "not measured" into 0 out of 100.
     await db.transactions.bulkAdd([tx('a', '2026-11-03'), tx('b', '2026-11-04')])
-    await db.annotations.bulkAdd([ann('a', { note: 'n' })])
-    expect(await spendingAwareness(...NOV)).toMatchObject({ kind: 'measured', score: 0 })
+    await db.annotations.bulkAdd([ann('a', { note: 'n' }), ann('b')])
+    const c = await spendingAwareness(...NOV)
+    expect(c.kind).toBe('not-measured')
+    if (c.kind !== 'not-measured') throw new Error('expected not-measured')
+    expect(c.why).toMatch(/Nothing in this period has been reviewed yet/)
+    expect(violations(c.why)).toEqual([])
+    expect(c.why).not.toMatch(/behind|overdue|missed|should/i)
   })
 
   it('does not award 100 while a transaction is unreviewed', async () => {
