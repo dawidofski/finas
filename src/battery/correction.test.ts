@@ -53,8 +53,8 @@ describe('benjaminiHochberg', () => {
 
   it('is conservative: using each brackets upper bound can only withhold, never admit', () => {
     // Independent oracle in real arithmetic, with p set to the bracket's upper bound, over every assignment of m = 1..6.
-    const P: Record<Bracket, number> = { 'p<0.01': 0.01, 'p<0.05': 0.05, none: 1 }
-    const all: Bracket[] = ['p<0.01', 'p<0.05', 'none']
+    const P: Record<Bracket, number> = { 'p<0.001': 0.001, 'p<0.01': 0.01, 'p<0.05': 0.05, none: 1 }
+    const all: Bracket[] = ['p<0.001', 'p<0.01', 'p<0.05', 'none']
     const oracle = (bs: Bracket[]): boolean[] => {
       const m = bs.length
       const sorted = bs.map((b) => P[b]).sort((a, b) => a - b)
@@ -72,7 +72,8 @@ describe('benjaminiHochberg', () => {
         expect(got, bs.join(',')).toEqual(oracle(bs))
         // Weakening any one bracket never makes ANOTHER item newly survive.
         bs.forEach((b, i) => {
-          const weaker: Bracket | null = b === 'p<0.01' ? 'p<0.05' : b === 'p<0.05' ? 'none' : null
+          const weaker: Bracket | null =
+            b === 'p<0.001' ? 'p<0.01' : b === 'p<0.01' ? 'p<0.05' : b === 'p<0.05' ? 'none' : null
           if (weaker === null) return
           const w = [...bs]
           w[i] = weaker
@@ -83,6 +84,20 @@ describe('benjaminiHochberg', () => {
         })
       }
     }
+  })
+
+  it('needs a rung stronger than p<0.01: a lone p<0.01 among ten can never survive, a lone p<0.001 can', () => {
+    // All ten relationships tested, one finding, nine none. Rank 1 needs p <= 1 * 0.05 / 10 = 0.005 (50 bp).
+    // p<0.001 stands in as 0.001 (10 bp): 10 <= 50, so k = 1 and the strong one survives.
+    // p<0.01 stands in as 0.01 (100 bp): 100 > 50, and no larger k helps because every other item sits at p = 1
+    // (10000 > k * 50 for all k <= 10). So it is withheld at ANY effect size. Without the finer rung the battery
+    // would go permanently silent exactly when all ten gates open.
+    const strong = benjaminiHochberg(mk(['p<0.001', ...nones(9)]))
+    expect(survivors(strong)).toEqual(['r0'])
+    expect(strong.thresholdBp).toBe(50)
+    const weak = benjaminiHochberg(mk(['p<0.01', ...nones(9)]))
+    expect(survivors(weak)).toEqual([])
+    expect(weak.thresholdBp).toBeNull()
   })
 
   it('counts an unbracketed item in the number tested, so adding a hopeless relationship cannot buy significance', () => {
