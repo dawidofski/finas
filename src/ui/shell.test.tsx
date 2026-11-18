@@ -89,15 +89,15 @@ describe('shell', () => {
     expect(ROUTES.filter(r => r.primary).map(r => r.path)).toEqual(['/', '/import', '/transactions', '/budget', '/intelligence'])
   })
   it('stub screens say they are not built yet', async () => {
-    window.location.hash = '#/learning'
+    window.location.hash = '#/coach'
     render(<App />)
-    expect(await screen.findByRole('heading', { level: 1, name: 'Learning' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'AI coach' })).toBeInTheDocument()
     expect(screen.getByText('Not built yet')).toBeInTheDocument()
   })
   // A stub renders a level-1 heading with its title, exactly as a real screen does, so a heading assertion alone cannot tell
   // them apart: on a previous plan a headline screen was unreachable while every test passed. "Not built yet" is what tells them apart.
-  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/settings']
-  const STUBS = ['/learning', '/coach', '/goals', '/recurring']
+  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/settings']
+  const STUBS = ['/coach', '/goals', '/recurring']
   it('has pinned every route as either a real screen or a stub', () => {
     expect([...REAL, ...STUBS].sort()).toEqual(ROUTES.map(r => r.path).sort())
   })

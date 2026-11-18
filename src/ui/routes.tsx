@@ -4,6 +4,7 @@ import Budget from './screens/Budget'
 import Dashboard from './screens/Dashboard'
 import Reports from './screens/Reports'
 import Score from './screens/Score'
+import Learning from './screens/Learning'
 import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
@@ -62,6 +63,12 @@ function ScoreRoute() {
   return <Score today={epochMsToIso(now)} computedAt={now} />
 }
 
+/** The advice shows when it was shown and snoozes from `computedAt`, so the instant is read here with the day and handed down. */
+function LearningRoute() {
+  const now = Date.now()
+  return <Learning today={epochMsToIso(now)} computedAt={now} />
+}
+
 function WorthItRoute() {
   return <WorthIt today={epochMsToIso(Date.now())} />
 }
@@ -78,7 +85,7 @@ export const ROUTES: ReadonlyArray<RouteDef> = [
   { path: '/intelligence', title: 'Intelligence', element: <IntelligenceRoute />, primary: true },
   { path: '/mood', title: 'Mood', element: <Mood />, primary: false },
   { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false },
-  screen('/learning', 'Learning'),
+  { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false },
   screen('/coach', 'AI coach'),
   screen('/goals', 'Goals'),
   screen('/recurring', 'Recurring'),
