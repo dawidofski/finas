@@ -51,7 +51,7 @@ describe('paydayTrend', () => {
     // The owner "corrects" the last day of October to look like payday itself. The bank's date stands, so nothing moves.
     await ann('sp.2026-10-28.3', { dateOverride: '2026-10-28' })
     const r = await paydayTrend('2026-10', '2026-12', TODAY, 1000)
-    expect(r).toEqual({ effectBp: -10000, bracket: 'p<0.001', n: 12, period: { from: '2026-10', to: '2026-12' } })
+    expect(r).toEqual({ effectBp: -10000, bracket: 'p<0.001', n: 12, period: { from: '2026-10-01', to: '2026-12-31' } })
   })
 
   it('withholds below three payments received, naming what is short', async () => {
@@ -84,7 +84,7 @@ describe('salaryLifestyle', () => {
     await month('2026-05', 200000, 25000, 75000)
     const r = await salaryLifestyle('2026-01', '2026-05', TODAY, 1000)
     // Four months a side is under the floor of eight, so the effect is real and the bracket is 'none'.
-    expect(r).toEqual({ effectBp: 10000, bracket: 'none', n: 4, period: { from: '2026-01', to: '2026-05' } })
+    expect(r).toEqual({ effectBp: 10000, bracket: 'none', n: 4, period: { from: '2026-01-01', to: '2026-05-31' } })
   })
 
   it('reads negative when the share spent on wants fell as income rose', async () => {
@@ -108,22 +108,20 @@ describe('salaryLifestyle', () => {
 })
 
 describe('moodFrequency', () => {
-  // Weeks start on Mondays: 2026-01-05 + 7w. Twenty weeks of good-mood purchases at two a week = 40 purchases.
-  // The low mood is recorded in only the first eight of those weeks, at 3,4,3,5,4,3,4,5 = 31 purchases.
-  // Raw totals say good-mood buys MORE (40 against 31); per week, every low-mood week (>= 3) beats every good-mood
-  // week (2), so a = low, b = good: wins = 8*20 = 160 of 160 pairs, r = +1 = +10000, uDoubled = 320.
+  // Each week goes to ONE side, by the majority of its mood-tagged purchases; a tie is left out. Weeks start on Mondays.
+  // Weeks 0..7 are LOW-majority: 3,4,3,5,4,3,4,5 low purchases plus one good one each, so weekly totals 4,5,4,6,5,4,5,6
+  // = 39 purchases. Weeks 8..27 are GOOD-majority: two good purchases each, totals all 2 = 40 purchases.
+  // Raw totals say the good weeks bought as much or more (40 against 39); per week every low week (>= 4) beats every
+  // good week (2), so a = low, b = good: wins = 8*20 = 160 of 160 pairs, r = +1 = +10000, uDoubled = 320.
   // n1 = 8, n2 = 20, V = 8*20*29 = 4640, D = 320 - 160 = 160, C = 159:
   // 3e8 * 159^2 = 7.584e12 >= 32906^2 * 4640 = 5.024e12, so p<0.001.
+  // Weeks 28..32 are TIED: four low and four good purchases, total 8. Left out of both sides. Had they gone to the good
+  // side its values would be twenty 2s and five 8s: wins = 160 of 200 pairs, losses 40, r = +6000; D = 320 - 200 = 120,
+  // C = 119, 3e8 * 119^2 = 4.248e12 against V = 8*25*34 = 6800: 25759^2 * 6800 = 4.512e12 is above it and
+  // 19600^2 * 6800 = 2.612e12 below, so only p<0.05 - a different bracket and a different effect.
   const LOW = [3, 4, 3, 5, 4, 3, 4, 5]
+  const monday = (w: number): string => addDays('2026-01-05', 7 * w)
   const seedWeeks = async (): Promise<void> => {
-    const monday = (w: number): string => addDays('2026-01-05', 7 * w)
-    for (let w = 0; w < 20; w++) {
-      for (const off of [0, 2]) {
-        const id = `g.${w}.${off}`
-        await tx(id, addDays(monday(w), off), -1500)
-        await ann(id, { moodId: 'mood.happy' })
-      }
-    }
     for (let w = 0; w < LOW.length; w++) {
       const count = LOW[w] ?? 0
       for (let k = 0; k < count; k++) {
@@ -133,20 +131,34 @@ describe('moodFrequency', () => {
         await tx(id, addDays(monday(w), off), -1500)
         await ann(id, { moodId: k % 2 === 0 ? 'mood.stressed' : 'mood.sad' })
       }
+      await tx(`lg.${w}`, addDays(monday(w), 5), -1500); await ann(`lg.${w}`, { moodId: 'mood.happy' })
+    }
+    for (let w = 8; w < 28; w++) {
+      for (const off of [0, 2]) {
+        const id = `g.${w}.${off}`
+        await tx(id, addDays(monday(w), off), -1500)
+        await ann(id, { moodId: 'mood.happy' })
+      }
+    }
+    for (let w = 28; w < 33; w++) {
+      for (let k = 0; k < 4; k++) {
+        await tx(`tl.${w}.${k}`, addDays(monday(w), k), -1500); await ann(`tl.${w}.${k}`, { moodId: 'mood.sad' })
+        await tx(`tg.${w}.${k}`, addDays(monday(w), k), -1500); await ann(`tg.${w}.${k}`, { moodId: 'mood.happy' })
+      }
     }
   }
 
   it('compares purchase frequency between mood days as a rate over the weeks observed', async () => {
     await seedWeeks()
-    // The owner re-dates one purchase to December. The bank's week stands, so the week-1 count is still 4.
+    // The owner re-dates one purchase to December. The bank's week stands, so week 1 still counts it.
     await db.annotations.update('l.1.0', { dateOverride: '2026-12-01' })
     // Neutral and "Other" moods have no side to be on: they must add neither weeks nor purchases.
-    await tx('n.1', '2026-08-03', -1500); await ann('n.1', { moodId: 'mood.neutral' })
-    await tx('o.1', '2026-08-10', -1500); await ann('o.1', { moodId: 'mood.other' })
+    await tx('n.1', '2026-10-05', -1500); await ann('n.1', { moodId: 'mood.neutral' })
+    await tx('o.1', '2026-10-12', -1500); await ann('o.1', { moodId: 'mood.other' })
     const r = await moodFrequency(1000)
     expect(r).toEqual({
-      effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-05', to: '2026-05-24' },
-      lowMood: { weeks: 8, purchases: 31 }, goodMood: { weeks: 20, purchases: 40 },
+      effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-05', to: '2026-07-19' },
+      lowMood: { weeks: 8, purchases: 39 }, goodMood: { weeks: 20, purchases: 40 }, tiedWeeks: 5,
     })
   })
 
@@ -176,7 +188,7 @@ describe('categorySavings', () => {
     await seedFive()
     const r = await categorySavings('2026-02', '2026-06', TODAY, 1000)
     // Five months: past the gate of four, under the bracket floor of ten. A real effect, bracket 'none', not an error.
-    expect(r).toMatchObject({ months: 5, period: { from: '2026-02', to: '2026-06' } })
+    expect(r).toMatchObject({ months: 5, period: { from: '2026-02-01', to: '2026-06-30' } })
     expect((r as { categories: unknown[] }).categories).toEqual([
       { categoryId: 'cat.shopping', label: expect.any(String), effectBp: -3000, bracket: 'none' },
     ])
@@ -188,7 +200,7 @@ describe('categorySavings', () => {
     // x ranks 1..6 and y ranks 1,4,6,2,5,3 with the same d^2 sum of 26, so rho = 1 - 6*26 / (6*35) = +0.2571 = +2571 bp.
     // Left out, as it must be, it is the -3000 above: the gap month would flip the sign.
     const r = await categorySavings('2026-01', '2026-06', TODAY, 1000)
-    expect(r).toMatchObject({ months: 5, period: { from: '2026-02', to: '2026-06' } })
+    expect(r).toMatchObject({ months: 5, period: { from: '2026-02-01', to: '2026-06-30' } })
     expect((r as { categories: { effectBp: number }[] }).categories[0]?.effectBp).toBe(-3000)
   })
 

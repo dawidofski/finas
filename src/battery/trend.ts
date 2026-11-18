@@ -1,5 +1,3 @@
-import { db } from '../db/db'
-import { resolveMany } from '../db/annotations'
 import { annotatedTransactions } from '../learning/regret'
 import { afterPayday } from '../analytics/habits'
 import { monthSeries, type MonthPoint } from '../analytics/series'
@@ -7,6 +5,8 @@ import { cached } from '../analytics/cache'
 import { monthlyBudget } from '../budget/month'
 import { addDays, isoWeekday } from '../lib/dates'
 import { divRound } from '../lib/money'
+import { nextMonthStart } from '../analysis/transactionsInRange'
+import { spendsOf } from './rank'
 import { mannWhitneyU, spearmanRhoBp } from './stats'
 import { mannWhitneyBracket, spearmanBracket, type Bracket } from './critical'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from './battery'
@@ -34,7 +34,7 @@ export interface TrendFinding {
   bracket: Bracket
   /** Observations used in the statistic. */
   n: number
-  /** First and last month ('YYYY-MM') or bank date ('YYYY-MM-DD') among the rows used: the key says which. */
+  /** First and last BANK date covered by the rows used, 'YYYY-MM-DD': for months, the first day of the first and the last day of the last. */
   period: { from: string; to: string }
 }
 export type TrendResult = TrendFinding | Gate[]
@@ -43,6 +43,8 @@ export interface MoodFrequencyFinding extends TrendFinding {
   /** How many weeks each side was observed for, and how many purchases it made in them: the lengths the rate is over. */
   lowMood: { weeks: number; purchases: number }
   goodMood: { weeks: number; purchases: number }
+  /** Weeks with as many low-mood as good-mood purchases: left out of both sides. */
+  tiedWeeks: number
 }
 export type MoodFrequencyResult = MoodFrequencyFinding | Gate[]
 
@@ -77,6 +79,14 @@ function unmet(id: RelationshipId, data: Partial<BatteryData>): Gate[] {
 /** A shortfall the gates do not describe: the data passed the count but cannot carry the statistic. */
 const unusable = (have: number, need: number, what: string): Gate[] => [{ have, need, what }]
 
+/** The period covered by whole months: the first day of the first and the last day of the last, derived from the months USED. */
+const monthsPeriod = (months: readonly string[]): { from: string; to: string } => {
+  const sorted = [...months].sort()
+  const first = sorted[0]
+  const last = sorted[sorted.length - 1]
+  return { from: first === undefined ? '' : `${first}-01`, to: last === undefined ? '' : addDays(nextMonthStart(last), -1) }
+}
+
 /** The months that were actually observed. A gap month (hasData false) is NOT zero, so it is not here. */
 async function observedMonths(from: string, to: string, today: string, computedAt: number): Promise<MonthPoint[]> {
   return (await monthSeries(from, to, today, computedAt)).filter(p => p.hasData)
@@ -104,12 +114,16 @@ export function paydayTrend(from: string, to: string, today: string, computedAt:
     if (rho === null) return unusable(0, 2, 'Your spending is the same on every day after payday, or the days observed are too few, so there is no pattern to measure yet.')
     return {
       effectBp: rho, bracket: spearmanBracket(rho, xs.length), n: xs.length,
-      period: { from: paydayMonths[0] ?? '', to: paydayMonths[paydayMonths.length - 1] ?? '' },
+      period: monthsPeriod(paydayMonths),
     }
   }, computedAt)
 }
 
-/** Two incomes belong to one level when the higher is within this many basis points of the level's lowest (10 %). */
+/**
+ * Two incomes belong to one level when the higher is within this many basis points of the level's lowest (10 %): a salary
+ * moves a little from month to month (overtime, a bonus) without the owner having moved to a different standard of living.
+ * It is a judgement, named here so it can be changed in one place.
+ */
 const LEVEL_TOLERANCE_BP = 1000
 
 interface ShareMonth { month: string; incomeCents: number; shareBp: number }
@@ -153,7 +167,7 @@ export function salaryLifestyle(from: string, to: string, today: string, compute
     const used = [...higher, ...lower].map(m => m.month).sort()
     return {
       effectBp: mw.rBp, bracket: mannWhitneyBracket(mw.uDoubled, higher.length, lower.length), n: used.length,
-      period: { from: used[0] ?? '', to: used[used.length - 1] ?? '' },
+      period: monthsPeriod(used),
     }
   }, computedAt)
 }
@@ -162,53 +176,58 @@ export function salaryLifestyle(from: string, to: string, today: string, compute
 const weekOf = (date: string): string => addDays(date, -(isoWeekday(date) - 1))
 
 /**
- * Whether purchases come more often in a low mood than in a good one.
+ * Whether purchases come more often in weeks of low mood than in weeks of good mood.
  *
  * THIS IS A RANK COMPARISON OF WEEKLY COUNTS, NOT A POISSON RATE TEST. Purchases cluster (one shopping trip is several
- * transactions), so the Poisson shape does not hold and no claim that it does is made here. For each side the unit is
- * the WEEK: the side's purchases are counted per week in which that side was observed, and the two sets of weekly
- * counts go to Mann-Whitney. Comparing raw totals would report only which mood was recorded for longer.
+ * transactions), so the Poisson shape does not hold and no claim that it does is made here.
  *
- * A week is observed for a side when at least one purchase carried a mood on that side; the app has no other record of
- * a mood, so a week of buying nothing in a low mood is not visible and counts for neither side. The weekly counts are
- * therefore all at least one and the comparison is of how heavily a side buys when it buys at all: a floor, and said so.
- * Low mood is valence below zero and good mood is above zero; neutral and valence-less moods are left out.
+ * Each week goes to EXACTLY ONE side, so the two samples are disjoint and Mann-Whitney's independence assumption holds
+ * (a week counted on both sides would correlate them). A week belongs to the side holding the MAJORITY of its mood-tagged
+ * purchases: low mood is valence below zero, good mood above zero; neutral and valence-less moods are not counted at all.
+ * A week where the two sides tie is EXCLUDED and counted for neither, since assigning it either way would be a coin
+ * toss that moves the bracket. The week's value is its total mood-tagged (valenced) purchases.
  *
- * a = the LOW-mood weeks, b = the good-mood weeks: a POSITIVE r means more purchases per week in a low mood.
+ * Mood exists in this app only as an annotation on a purchase, so a week with no purchases has no mood and cannot be
+ * placed on either side: every weekly value is at least one, and the measure is conditioned on having bought. The
+ * finding must be worded "in weeks when you recorded feeling low", never "when you are low".
+ *
+ * a = the LOW-mood weeks, b = the good-mood weeks: a POSITIVE r means more purchases in weeks of low mood.
  */
 export function moodFrequency(computedAt: number): Promise<MoodFrequencyResult> {
   return cached('battery.trend.mood-frequency', async (): Promise<MoodFrequencyResult> => {
-    const bank = await annotatedTransactions(a => a.moodId !== null)
-    const byId = new Map(bank.map(t => [t.id, t]))
-    const [resolved, moods] = await Promise.all([resolveMany(bank), db.moods.toArray()])
-    const valence = new Map(moods.map(m => [m.id, m.valence]))
-    const low = new Map<string, number>()
-    const good = new Map<string, number>()
-    for (const r of resolved) {
-      const t = byId.get(r.id)
-      // The kind is the owner's (§43); the sign and the date are the bank's (§41).
-      if (!t || r.kind !== 'spend' || t.amountCents >= 0 || r.moodId === null) continue
-      const v = valence.get(r.moodId) ?? null
-      const side = v === null || v === 0 ? null : v < 0 ? low : good
-      if (side === null) continue
-      const week = weekOf(t.valueDate)
-      side.set(week, (side.get(week) ?? 0) + 1)
+    // The shared spend loader of rank.ts: one definition of what counts as a spend, bank sign, amount and date.
+    const spends = await spendsOf(await annotatedTransactions(a => a.moodId !== null))
+    const perWeek = new Map<string, { low: number; good: number }>()
+    for (const s of spends) {
+      if (s.valence === null || s.valence === 0) continue
+      const week = weekOf(s.date)
+      const w = perWeek.get(week) ?? { low: 0, good: 0 }
+      if (s.valence < 0) w.low++
+      else w.good++
+      perWeek.set(week, w)
     }
-    const covered = [...new Set([...low.keys(), ...good.keys()])].sort()
-    const short = unmet('mood-frequency', { weeksOfMoodCoverage: covered.length })
+    const short = unmet('mood-frequency', { weeksOfMoodCoverage: perWeek.size })
     if (short.length > 0) return short
-    const lowCounts = [...low.values()]
-    const goodCounts = [...good.values()]
+    const lowWeeks: string[] = []
+    const goodWeeks: string[] = []
+    const lowCounts: number[] = []
+    const goodCounts: number[] = []
+    for (const [week, w] of [...perWeek].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+      if (w.low === w.good) continue // tied: counted nowhere
+      if (w.low > w.good) { lowWeeks.push(week); lowCounts.push(w.low + w.good) } else { goodWeeks.push(week); goodCounts.push(w.low + w.good) }
+    }
     const mw = mannWhitneyU(lowCounts, goodCounts)
-    if (mw === null) return unusable(0, 1, 'Only one kind of mood has been recorded so far, so there is nothing to compare it with.')
-    const sum = (xs: number[]): number => xs.reduce((s, x) => s + x, 0)
+    if (mw === null) return unusable(0, 1, 'Only one kind of mood week has been recorded so far, so there is nothing to compare it with.')
+    const sum = (xs: number[]): number => xs.reduce((t, x) => t + x, 0)
+    const used = [...lowWeeks, ...goodWeeks].sort()
     return {
       effectBp: mw.rBp,
       bracket: mannWhitneyBracket(mw.uDoubled, lowCounts.length, goodCounts.length),
       n: lowCounts.length + goodCounts.length,
-      period: { from: covered[0] ?? '', to: addDays(covered[covered.length - 1] ?? '', 6) },
+      period: { from: used[0] ?? '', to: addDays(used[used.length - 1] ?? '', 6) },
       lowMood: { weeks: lowCounts.length, purchases: sum(lowCounts) },
       goodMood: { weeks: goodCounts.length, purchases: sum(goodCounts) },
+      tiedWeeks: perWeek.size - lowCounts.length - goodCounts.length,
     }
   }, computedAt)
 }
@@ -244,6 +263,6 @@ export function categorySavings(from: string, to: string, today: string, compute
     }
     if (categories.length === 0) return unusable(0, 2, 'No category was spent in differently from month to month, or your savings never changed, so there is nothing to compare yet.')
     categories.sort((a, b) => Math.abs(b.effectBp) - Math.abs(a.effectBp) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
-    return { months: months.length, period: { from: months[0]?.month ?? '', to: months[months.length - 1]?.month ?? '' }, categories }
+    return { months: months.length, period: monthsPeriod(months.map(m => m.month)), categories }
   }, computedAt)
 }

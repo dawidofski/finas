@@ -38,7 +38,7 @@ export type RankResult = RankFinding | Gate[]
 const STRESSED_MOOD = 'mood.stressed'
 
 /** One spend, as the statistics see it: bank figures plus the owner's classifications. */
-interface Spend {
+export interface Spend {
   centsOut: number            // the BANK amount, negated: money out, positive
   date: string                // the BANK value date
   moodId: string | null
@@ -49,7 +49,7 @@ interface Spend {
 }
 
 /** Spends among `bank` rows: the kind is the owner's (§43), the sign, amount and date the bank's. */
-async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
+export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const byId = new Map(bank.map(t => [t.id, t]))
   const resolved = await resolveMany(bank)
   const [moods, categories] = await Promise.all([db.moods.toArray(), db.categories.toArray()])
