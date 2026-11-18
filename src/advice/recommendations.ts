@@ -33,9 +33,12 @@ import { withheldKeys } from './state'
  * and never from a date. A key holding an amount would change every month, so a dismissal the owner already made would
  * silently never take effect.
  *
- * THE FINGERPRINT is a digest of the evidence transaction ids and nothing else. The state module compares it to decide
- * whether advice the owner already accepted is a genuinely fresh occurrence. It is consumed here (handed to
- * `withheldKeys`), so it is not decoration.
+ * THE FINGERPRINT IS THE PERIOD THE ADVICE IS ABOUT: the month ('YYYY-MM'), and for the savings rhythm the last month of
+ * the window it looks over. It is deliberately NOT a digest of the evidence rows: one new purchase after an import would
+ * make the same situation look like "a fresh occurrence", and the owner would see an Accept or a Reject ignored the next
+ * day. The state module compares it to decide whether advice the owner accepted or rejected is the occurrence they already
+ * answered (same period: stay away) or a later one (a new month: offer it again). It is consumed here (handed to
+ * `withheldKeys`), so it is not decoration. The field keeps its name.
  *
  * CONTRACT FOR THE SCREEN (inherited from src/advice/state.ts, and easy to miss): accepted advice stays withheld unless
  * `recordShown(key, evidenceFingerprint, at)` ran FIRST, with the recommendation's own fingerprint. A row accepted
@@ -71,8 +74,13 @@ export interface Recommendation {
   /** Null when it cannot honestly be estimated. */
   impactCents: number | null
   confidence: 'high' | 'medium' | 'low'
-  /** Digest of `evidence.transactionIds`. The state module decides with it whether accepted advice is a fresh occurrence. */
+  /** The period this advice is about ('YYYY-MM'). The state module decides with it whether accepted or rejected advice is the occurrence already answered or a later one. */
   evidenceFingerprint: string
+  /**
+   * What `impactCents` is, in words, with the period it covers; null exactly when `impactCents` is. The bare figure reads as
+   * money the owner would save, and none of the three that carry one is that: say what it is.
+   */
+  impactLabel: string | null
 }
 
 /** A line is "over" when it ran at least 10 % past what the owner set; a few cents past is not advice. */
@@ -96,23 +104,6 @@ function monthsEndingAt(last: string, count: number): string[] {
 }
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
-
-/**
- * A digest of a SET of transaction ids: order and repeats do not matter, and ids that merely join to the same text
- * (`a`,`bc` against `ab`,`c`) do not collide, because each id is written with its length. Two independent 32-bit FNV-1a
- * runs, so a fingerprint is 64 bits wide; it detects "different evidence", it is not a security hash.
- */
-export function fingerprintOf(ids: readonly string[]): string {
-  const canonical = [...new Set(ids)].sort(cmp).map((id) => `${id.length}:${id}`).join('|')
-  let a = 0x811c9dc5
-  let b = 0x9e3779b9
-  for (let i = 0; i < canonical.length; i++) {
-    const c = canonical.charCodeAt(i)
-    a = Math.imul(a ^ c, 0x01000193) >>> 0
-    b = Math.imul(b ^ c, 0x85ebca6b) >>> 0
-  }
-  return `${new Set(ids).size}.${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
-}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Reading the month's rows, once
@@ -173,14 +164,15 @@ const monthOf = (row: Row): string => row.bank.valueDate.slice(0, 7)
 
 function build(
   id: RecommendationId, key: string,
-  fields: { noticed: string; summary: string; why: string; todo: string; impactCents: number | null; confidence: Recommendation['confidence'] },
+  fields: { noticed: string; summary: string; why: string; todo: string; impactCents: number | null; impactLabel: string | null; confidence: Recommendation['confidence'] },
   transactionIds: string[],
+  period: string,
 ): Recommendation {
   return {
     id, key, noticed: fields.noticed,
     evidence: { transactionIds, summary: fields.summary },
-    why: fields.why, todo: fields.todo, impactCents: fields.impactCents, confidence: fields.confidence,
-    evidenceFingerprint: fingerprintOf(transactionIds),
+    why: fields.why, todo: fields.todo, impactCents: fields.impactCents, impactLabel: fields.impactLabel, confidence: fields.confidence,
+    evidenceFingerprint: period,
   }
 }
 
@@ -218,8 +210,9 @@ async function overspent(month: string, today: string, ledger: Ledger): Promise<
         : 'A line that passes its figure month after month may mean the figure no longer fits the way you spend.',
       todo: 'Open the Budget screen and either move this line to match what you really spend, or keep it where it is and look through the purchases listed here for the ones you would do differently.',
       impactCents: line.spentCents - line.allocatedCents,
+      impactLabel: `Over the allocation ${when}`,
       confidence: 'high',
-    }, idsOf(rows)))
+    }, idsOf(rows), month))
   }
   return out
 }
@@ -229,19 +222,22 @@ async function overspent(month: string, today: string, ledger: Ledger): Promise<
  * disagree with the list. They are the rows smallPurchases (src/analytics/habits.ts) counts, by the same classification;
  * the test compares the two figures.
  */
-function smallOnes(month: string, ledger: Ledger): Recommendation[] {
+function smallOnes(month: string, today: string, ledger: Ledger): Recommendation[] {
   const rows = ledger.spending.filter((x) => monthOf(x) === month && centsOut(x) < SMALL_PURCHASE_CEILING_CENTS)
   if (rows.length < MIN_SMALL_PURCHASES) return []
   const small = { count: rows.length, totalCents: sumCents(rows.map(centsOut)) }
   const line = formatEur(SMALL_PURCHASE_CEILING_CENTS)
+  const running = month >= today.slice(0, 7) // the month is not over: what is counted is the month so far
+  const when = running ? `so far in ${formatMonthTitle(month)}` : `in ${formatMonthTitle(month)}`
   return [build('small-purchases-add-up', 'small-purchases-add-up', {
-    noticed: `${small.count} purchases under ${line} came to ${formatEur(small.totalCents)} in ${formatMonthTitle(month)}.`,
-    summary: `${count(rows.length, 'purchase', 'purchases')} under ${line} that month, ${formatEur(small.totalCents)} between them.`,
+    noticed: `${small.count} purchases under ${line} came to ${formatEur(small.totalCents)} ${when}.`,
+    summary: `${count(rows.length, 'purchase', 'purchases')} under ${line} ${running ? 'this month so far' : 'that month'}, ${formatEur(small.totalCents)} between them.`,
     why: 'Small purchases are easy to lose track of one at a time, and together they can come to a sum you would notice if it left your account in one go. Some of them are essentials that happen to be cheap.',
     todo: 'Pick the kind of small purchase you make most often and see whether buying it in a weekly batch would suit you. If they are all things you are glad of, nothing needs to change.',
     impactCents: null, // what the owner would do about them is theirs; their total is not a saving
+    impactLabel: null,
     confidence: 'medium',
-  }, idsOf(rows))]
+  }, idsOf(rows), month)]
 }
 
 async function savingsRhythm(month: string, today: string, computedAt: number): Promise<Recommendation[]> {
@@ -258,10 +254,11 @@ async function savingsRhythm(month: string, today: string, computedAt: number): 
     noticed: `Between ${formatMonthTitle(months[0] ?? last)} and ${formatMonthTitle(last)}, you put money aside in ${saved.length} of the ${count(points.length, 'month', 'months')} that have records, and in the other ${points.length - saved.length} nothing went to savings.`,
     summary: `${count(rows.length, 'movement', 'movements')} into savings across ${count(saved.length, 'month', 'months')}, from ${formatMonthTitle(months[0] ?? last)} to ${formatMonthTitle(last)}.`,
     why: 'Savings that arrive in some months and not in others are harder to plan around when you want a cushion or a larger purchase.',
-    todo: 'If a steadier rhythm would suit you, choose a day shortly after your income arrives and move the same amount then. The amount is yours to choose, and a small one still counts.',
+    todo: 'If a steadier rhythm would suit you, the challenge below sets one up, at an amount you choose.',
     impactCents: null, // no honest figure: what they could set aside depends on what they can afford, which this does not know
+    impactLabel: null,
     confidence: 'medium',
-  }, idsOf(rows))]
+  }, idsOf(rows), last)]
 }
 
 function unusual(month: string, ledger: Ledger): Recommendation[] {
@@ -288,8 +285,9 @@ function unusual(month: string, ledger: Ledger): Recommendation[] {
       why: 'A one-off can be exactly what you meant to spend, and it is also the kind of purchase that can slip out of view in a month.',
       todo: 'Look at the purchase and see whether it was planned. If it was a one-off you chose, there is nothing to change; if it came as a surprise, you may want to leave room for it in next month\'s plan.',
       impactCents: above,
+      impactLabel: `Above your usual for this category in ${formatMonthTitle(month)}`,
       confidence: 'medium',
-    }, group.map((u) => u.transactionId).sort(cmp)))
+    }, group.map((u) => u.transactionId).sort(cmp), month))
   }
   return out
 }
@@ -315,12 +313,19 @@ function matches(c: RegretCluster, row: Row): boolean {
   }
 }
 
+const GROUPING_ORDER: ReadonlyArray<RegretCluster['by']> = ['category', 'merchant', 'reason', 'mood', 'weekday']
+
 async function regrets(month: string, ledger: Ledger): Promise<Recommendation[]> {
   const clusters = (await regretClusters(month)).filter((c) => c.regretted >= MIN_REGRETTED && c.total >= MIN_ANSWERED)
   // The same rows regretClusters counted, in the month it counted: a resolved spend the owner answered "no" on, money out by the bank's sign.
   const answeredNo = ledger.rows.filter((x) => monthOf(x) === month && x.r.kind === 'spend' && x.bank.amountCents <= 0 && x.r.worthwhile === false)
+  // The same purchases show up under every way of grouping them (their category, their merchant, their weekday...), and five
+  // cards over one set of purchases is noise. One: the grouping with the most purchases marked not worth it, then the larger
+  // amount, then a fixed order of groupings, then the key, so the choice never depends on how the clusters came back.
+  const ranked = [...clusters].sort((a, b) =>
+    b.regretted - a.regretted || b.cents - a.cents || GROUPING_ORDER.indexOf(a.by) - GROUPING_ORDER.indexOf(b.by) || cmp(a.key, b.key))
   const out: Recommendation[] = []
-  for (const c of clusters) {
+  for (const c of ranked) {
     const rows = answeredNo.filter((x) => matches(c, x))
     if (rows.length === 0) continue
     out.push(build('regret-cluster', `regret-cluster:${c.by}:${c.key}`, {
@@ -329,8 +334,10 @@ async function regrets(month: string, ledger: Ledger): Promise<Recommendation[]>
       why: 'These are your own answers, so they point at money that went somewhere you were not glad about afterwards.',
       todo: 'Before the next purchase of this kind, ask whether you expect to rate it as worth it a week later. If the answer is usually yes, nothing needs to change.',
       impactCents: null, // what was spent on them is a fact (it is in the summary), not an estimate of what acting differently would save
+      impactLabel: null,
       confidence: c.regretted >= 3 && c.total >= 5 ? 'medium' : 'low',
-    }, idsOf(rows)))
+    }, idsOf(rows), month))
+    break
   }
   return out
 }
@@ -370,8 +377,9 @@ function fromSurvivors(month: string, tested: { result: TrendFinding; verdict: T
     why: 'In your own records, the months with more coming in were also the months with a larger share going to wants. That only matters if it is not where you meant the extra to go.',
     todo: finding.action,
     impactCents: null, // a pattern across months says nothing about how much would change, so no figure is offered
+    impactLabel: null,
     confidence: CONFIDENCE[tested.verdict.bracket],
-  }, idsOf(wants))]
+  }, idsOf(wants), month)]
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -386,7 +394,7 @@ export async function recommendationsFor(month: string, today: string, computedA
   const [over, rhythm, regretful] = await Promise.all([
     overspent(month, today, ledger), savingsRhythm(month, today, computedAt), regrets(month, ledger),
   ])
-  const all = [...over, ...smallOnes(month, ledger), ...rhythm, ...unusual(month, ledger), ...fromSurvivors(month, tested, ledger), ...regretful]
+  const all = [...over, ...smallOnes(month, today, ledger), ...rhythm, ...unusual(month, ledger), ...fromSurvivors(month, tested, ledger), ...regretful]
   const withheld = await withheldKeys(new Map(all.map((r) => [r.key, r.evidenceFingerprint])), computedAt)
   return all.filter((r) => !withheld.has(r.key))
 }

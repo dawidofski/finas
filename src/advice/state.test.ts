@@ -11,11 +11,11 @@ const DAY = 86_400_000
 const T0 = 1_000_000_000_000
 const fp = (key: string, f: string) => new Map([[key, f]])
 
-/** Two rejections on two separate showings: the only way to reach 'suppressed'. */
+/** Two rejections on two separate occasions (two periods, each shown): the only way to reach 'suppressed'. */
 async function rejectTwice(key: string, f: string): Promise<void> {
   await recordShown(key, f, T0)
   await recordRejected(key)
-  await recordShown(key, f, T0 + 1)
+  await recordShown(key, `${f}-later`, T0 + 1)
   await recordRejected(key)
 }
 
@@ -25,20 +25,21 @@ describe('recommendation state', () => {
     await recordShown('k', 'f1', T0)
     await recordRejected('k')
     expect((await db.recommendationState.get('k'))?.status).toBe('rejected')
-    expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(false) // "not now" is not "not this"
-    await recordShown('k', 'f1', T0 + 3)
+    expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(true) // "not now" holds for the occurrence it was said about
+    expect((await withheldKeys(fp('k', 'f2'), T0 + 2)).has('k')).toBe(false) // and is not "not this": a later occurrence is offered
+    await recordShown('k', 'f2', T0 + 3)
     await recordRejected('k')
     const row = await db.recommendationState.get('k')
     expect(row?.status).toBe('suppressed')
     expect(row?.rejectedCount).toBe(2)
-    expect((await withheldKeys(fp('k', 'f1'), T0 + 4)).has('k')).toBe(true)
+    expect((await withheldKeys(fp('k', 'f2'), T0 + 4)).has('k')).toBe(true)
   })
 
   it('keeps a rejection across a reload, because it is stored and not held in memory', async () => {
     await rejectTwice('k', 'f1')
     db.close()
     await db.open()
-    expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(true)
+    expect((await withheldKeys(fp('k', 'f1-later'), T0 + 2)).has('k')).toBe(true)
   })
 
   it('keys on exactly the string it is given and never derives one', async () => {
@@ -55,7 +56,7 @@ describe('recommendation state', () => {
     await recordShown('k', 'f2-new-transactions', T0 + 4)
     const shown = await db.recommendationState.get('k')
     expect(shown?.status).toBe('suppressed') // showing never un-suppresses
-    expect(shown?.evidenceFingerprint).toBe('f1') // nor rewrites the evidence the owner dismissed
+    expect(shown?.evidenceFingerprint).toBe('f1-later') // nor rewrites the evidence the owner dismissed
     expect([shown?.shownCount, shown?.lastShownAt]).toEqual([2, T0 + 1]) // nor counts a showing that was withheld
     expect((await withheldKeys(fp('k', 'f2-new-transactions'), T0 + 5)).has('k')).toBe(true)
   })
@@ -66,6 +67,12 @@ describe('recommendation state', () => {
     expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(true)
     expect((await withheldKeys(fp('k', 'f2'), T0 + 2)).has('k')).toBe(false)
     expect((await withheldKeys(new Map(), T0 + 2)).has('k')).toBe(false) // only keys asked about are judged
+  })
+
+  it('offers rejected advice whose stored fingerprint is null, since it cannot show it is the same occasion', async () => {
+    await recordRejected('k') // rejected before any showing was recorded
+    expect((await db.recommendationState.get('k'))?.evidenceFingerprint).toBeNull()
+    expect((await withheldKeys(fp('k', 'f1'), T0)).has('k')).toBe(false)
   })
 
   it('withholds accepted advice whose stored fingerprint is null', async () => {
@@ -119,13 +126,17 @@ describe('recommendation state', () => {
     await recordRejected('k') // double-click
     const row = await db.recommendationState.get('k')
     expect([row?.rejectedCount, row?.status]).toEqual([1, 'rejected'])
-    expect((await withheldKeys(fp('k', 'same'), T0 + 1)).has('k')).toBe(false)
+    expect((await withheldKeys(fp('k', 'same'), T0 + 1)).has('k')).toBe(true)
   })
 
-  it('counts one rejection on each of two showings, even with unchanged evidence', async () => {
+  it('counts one rejection on each of two occasions, and not a second one on the same occasion', async () => {
     await recordShown('k', 'same', T0)
     await recordRejected('k')
-    await recordShown('k', 'same', T0 + 1)
+    await recordShown('k', 'same', T0 + 1) // the same period shown again (a stale tab): not a new occasion
+    expect((await db.recommendationState.get('k'))?.status).toBe('rejected')
+    await recordRejected('k')
+    expect((await db.recommendationState.get('k'))?.rejectedCount).toBe(1)
+    await recordShown('k', 'other', T0 + 2)
     expect((await db.recommendationState.get('k'))?.status).toBe('active')
     await recordRejected('k')
     const row = await db.recommendationState.get('k')

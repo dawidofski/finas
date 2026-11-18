@@ -9,7 +9,7 @@ import type { RecommendationId } from './recommendations'
  *   overspent-category     -> opportunity-cost          (a line ran over: what the money would otherwise have done)
  *   small-purchases-add-up -> small-purchase-accumulation
  *   savings-inconsistent   -> savings-consistency
- *   discretionary-rising   -> lifestyle-inflation       (wants rising over months)
+ *   discretionary-rising   -> lifestyle-inflation       (wants taking a larger share in the months of higher income)
  *   regret-cluster         -> impulse-spending          (purchases the owner themselves marked regretted)
  *   unusual-spend          -> value-of-money            (one unusual amount: what it was worth to the owner)
  *
@@ -40,12 +40,12 @@ const NOTES: Readonly<Record<RecommendationId, Note>> = {
   'savings-inconsistent': {
     topic: 'savings-consistency',
     title: 'Saving on a schedule',
-    body: 'Saving regularly means setting aside an amount on a repeating schedule, whatever its size. Months with nothing set aside are not a verdict. In your records they mark where a routine could start, at an amount that suits your situation.',
+    body: 'Saving regularly means setting something aside on a repeating schedule, whatever its size. Months with nothing set aside are not a verdict; in your records they show where a routine could start.',
   },
   'discretionary-rising': {
     topic: 'lifestyle-inflation',
-    title: 'Spending on wants over time',
-    body: 'Lifestyle inflation is the name for spending on wants rising over time. In your records this spending has gone up over recent months. Whether that matches what you want from your money is yours to judge.',
+    title: 'Wants and income level',
+    body: 'Lifestyle inflation is the name for a larger share of spending going on wants when income is higher. In your records, the months when more came in were months when a larger share of your spending went on wants. That sets different months beside one another; it does not show spending changing from one month to the next. Whether that matches what you want from your money is yours to judge.',
   },
   'regret-cluster': {
     topic: 'impulse-spending',

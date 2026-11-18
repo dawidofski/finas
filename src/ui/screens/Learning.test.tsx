@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Learning from './Learning'
 import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { saveAllocation } from '../../budget/allocations'
 import * as advice from '../../advice/recommendations'
-import { recommendationsFor } from '../../advice/recommendations'
+import * as state from '../../advice/state'
+import { recommendationsFor, type Recommendation, type RecommendationId } from '../../advice/recommendations'
 import { challengesFor, noteFor } from '../../advice/education'
 import { SNOOZE_DAYS, SUPPRESS_AFTER_REJECTIONS } from '../../advice/state'
 import { formatEur } from '../../lib/money'
-import { BANNED_LISTS, WORDING_LISTS } from '../../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, violations } from '../../test/bannedWords'
 import { appSpoken, spoken } from '../../test/spoken'
 import type { TransactionRow } from '../../db/schema'
 import { ROUTES } from '../routes'
@@ -38,6 +39,10 @@ const tx = async (id: string, valueDate: string, amountCents: number, ing: [stri
 async function smallOnly(): Promise<void> {
   for (let i = 1; i <= 10; i++) await tx(`s${i}`, `2026-11-0${i === 10 ? 9 : i}`, -500, GROCERIES, `Compra pequena ${i}`)
 }
+/** The same situation in another month: ten small purchases dated in it. */
+async function smallIn(month: string): Promise<void> {
+  for (let i = 1; i <= 10; i++) await tx(`${month}.s${i}`, `${month}-0${i === 10 ? 9 : i}`, -500, GROCERIES, `Compra pequena ${i}`)
+}
 /** Those, plus one restaurant line 100 % over what the owner set (the overspend advice, which comes first). */
 async function twoAdvices(): Promise<void> {
   await smallOnly()
@@ -45,14 +50,17 @@ async function twoAdvices(): Promise<void> {
   await saveAllocation({ categoryId: 'cat.restaurants', savingsGoalId: null, percentBp: null, fixedCents: 10000, effectiveFrom: '2026-01-01', note: null })
 }
 
+// Every load reads the battery, and the full suite runs seventy files at once: the defaults (1 s to find, 5 s a test) are too tight.
+configure({ asyncUtilTimeout: 8000 })
+vi.setConfig({ testTimeout: 30_000 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 beforeEach(async () => {
   uid = 0
   await db.delete(); await db.open(); await seedDatabase()
 })
 
-const mount = async (computedAt = AT) => {
-  const view = render(<Learning today={TODAY} computedAt={computedAt} />)
+const mount = async (computedAt = AT, today = TODAY) => {
+  const view = render(<Learning today={today} computedAt={computedAt} />)
   await screen.findByRole('heading', { level: 1, name: 'Learning' })
   // The first load of a cold run reads the whole battery, and the full suite runs seventy files at once: a second is not enough.
   await waitFor(() => expect(screen.queryByText(/Loading your advice/)).toBeNull(), { timeout: 8000 })
@@ -109,7 +117,7 @@ describe('Learning screen', () => {
     await mount()
     expect((await recommendationsFor('2026-11', TODAY, AT))[0]?.impactCents).toBeNull()
     const card = cardOf(SMALL_TITLE)
-    expect(within(card).queryByText('Estimated impact')).toBeNull()
+    expect(card.querySelector('dt')?.parentElement?.textContent).not.toMatch(/Over the allocation|Above your usual/)
     expect(card.textContent).not.toMatch(/\b0,00/)
     cleanup()
     await db.transactions.clear()
@@ -117,7 +125,11 @@ describe('Learning screen', () => {
     await mount()
     // The overspend carries one: 100 EUR above the line the owner set.
     const over = cardOf(OVER_TITLE)
-    expect(within(over).getByText('Estimated impact', { selector: 'dt' }).nextElementSibling?.textContent).toContain(formatEur(10000))
+    // Said as what it is, with the period it covers, and never as a saving.
+    const label = within(over).getByText('Over the allocation so far in November 2026', { selector: 'dt' })
+    expect(label.nextElementSibling?.textContent).toContain(formatEur(10000))
+    expect(within(over).queryByText('Estimated impact')).toBeNull()
+    expect(over.textContent).not.toMatch(/sav(e|ing)s?\b.*100,00|100,00.*sav/i)
   })
 
   it('says some purchases are gone from the records, instead of a blank row, when evidence was deleted since', async () => {
@@ -159,28 +171,131 @@ describe('Learning screen', () => {
     fireEvent.click(within(cardOf(SMALL_TITLE)).getByRole('button', REJECT))
     await waitFor(() => expect(cards()).toHaveLength(0))
     expect((await states())[SMALL]).toMatchObject({ status: 'rejected', rejectedCount: 1 })
-    // The first rejection is "not now": a fresh screen (nothing carried in component state) shows it again.
+    // Rejected for November: a fresh screen (nothing carried in component state) does not bring it back, even after more purchases.
     cleanup()
+    await tx('s11', '2026-11-09', -400, GROCERIES, 'Otra compra')
     await mount()
+    expect(cards()).toHaveLength(0)
+    // The same situation in a later month is a second occasion: shown, which is what makes its rejection count.
+    cleanup()
+    await smallIn('2026-12')
+    await mount(AT, '2026-12-10')
     expect(cards()).toHaveLength(1)
-    expect((await states())[SMALL]?.shownCount).toBe(2) // shown again, which is what makes the second rejection count
+    expect((await states())[SMALL]?.shownCount).toBe(2)
     fireEvent.click(within(cardOf(SMALL_TITLE)).getByRole('button', REJECT))
     await waitFor(() => expect(cards()).toHaveLength(0))
     expect((await states())[SMALL]).toMatchObject({ status: 'suppressed', rejectedCount: 2 })
-    // Reload, a long time later, same evidence: gone for good.
+    // Reload, a month on, the same situation again: gone for good.
     cleanup()
-    await mount(AT + 400 * DAY)
+    await smallIn('2027-01')
+    await mount(AT + 400 * DAY, '2027-01-10')
     expect(cards()).toHaveLength(0)
-    expect(screen.getByText(/There is nothing to act on yet/)).toBeInTheDocument()
+    expect(screen.getByText(/There is nothing left to act on for now/)).toBeInTheDocument()
   })
 
-  it('says plainly what each choice does, including that a second rejection removes it for good and how long a snooze lasts', async () => {
+  it('says plainly what each choice does, including that a rejection lasts the month and a second one in a later month removes it for good', async () => {
     await smallOnly()
     await mount()
     expect(SUPPRESS_AFTER_REJECTIONS).toBe(2)
-    expect(text()).toContain('Rejecting the same advice a second time removes it for good')
+    expect(text()).toContain('Reject hides it for November 2026; if it comes back in a later month and you reject it again, it is gone for good.')
+    expect(text()).toContain('Advice rejected on two separate occasions is not shown again.')
     expect(text()).toContain(`Snooze hides it for ${SNOOZE_DAYS} days`)
     expect(screen.getByRole('button', SNOOZE)).toBeInTheDocument()
+  })
+
+  it('gives its own sentence, not the beginner one, once every piece of advice has been answered', async () => {
+    await smallOnly()
+    await mount()
+    fireEvent.click(within(cardOf(SMALL_TITLE)).getByRole('button', { name: 'Accept' }))
+    await waitFor(() => expect(cards()).toHaveLength(0))
+    for (const visit of ['same visit', 'next visit']) {
+      expect(text(), visit).toMatch(/There is nothing left to act on for now/)
+      expect(text(), visit).not.toMatch(/normal starting point/)
+      expect(screen.queryByRole('link', { name: /import/ }), visit).toBeNull()
+      cleanup()
+      await mount()
+    }
+  })
+
+  it('records each showing before the owner can act on it, not after', async () => {
+    await smallOnly()
+    const real = state.recordShown
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const spy = vi.spyOn(state, 'recordShown').mockImplementation(async (...args) => { await gate; return real(...args) })
+    render(<Learning today={TODAY} computedAt={AT} />)
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+    // The showing is on its way and not yet stored: there is no advice on the page to press anything on.
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(cards()).toHaveLength(0)
+    expect(await db.recommendationState.count()).toBe(0)
+    release()
+    await waitFor(() => expect(cards()).toHaveLength(1))
+    // By the time the buttons exist the showing is stored.
+    expect((await states())[SMALL]).toMatchObject({ shownCount: 1, status: 'active' })
+  })
+
+  it('records nothing for a load that was replaced before it began writing', async () => {
+    await smallOnly()
+    const real = advice.liveEvidence
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    const spy = vi.spyOn(advice, 'liveEvidence').mockImplementation(async (...args) => {
+      if (!first) return real(...args)
+      first = false
+      await gate // the first load has read its advice and is held up in reading the evidence, before any write
+      return real(...args)
+    })
+    const view = render(<Learning today={TODAY} computedAt={AT} />)
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1), { timeout: 8000 })
+    view.rerender(<Learning today={TODAY} computedAt={AT + 1} />) // replaced: the second load runs to the end
+    await waitFor(() => expect(cards()).toHaveLength(1), { timeout: 8000 })
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect((await states())[SMALL]).toMatchObject({ shownCount: 1, lastShownAt: AT + 1 }) // the first load never wrote its showing
+    expect(cards()).toHaveLength(1)
+  })
+
+  it('does not claim nothing was changed when showings may already have been stored', async () => {
+    await smallOnly()
+    vi.spyOn(db.recommendationState, 'put').mockRejectedValue(new Error('disk full'))
+    render(<Learning today={TODAY} computedAt={AT} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Your advice could not be shown (disk full).')
+    expect(alert.textContent).not.toMatch(/Nothing was changed/)
+    cleanup()
+    vi.restoreAllMocks()
+    // The evidence is read before anything is written, so a failure there leaves the store untouched, and may say so.
+    vi.spyOn(db.transactions, 'bulkGet').mockRejectedValue(new Error('evidence gone'))
+    render(<Learning today={TODAY} computedAt={AT} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your advice could not be worked out (evidence gone). Nothing was changed.')
+    expect(await db.recommendationState.count()).toBe(0)
+  })
+
+  it('renders all six kinds of advice, and every word the screen adds to them passes the wording lists', async () => {
+    const ids: RecommendationId[] = ['overspent-category', 'small-purchases-add-up', 'savings-inconsistent', 'unusual-spend', 'discretionary-rising', 'regret-cluster']
+    // The fields a recommendation carries are scanned in recommendations.test.ts; here the plain stand-ins leave the screen's own
+    // words (titles, labels, notes, challenges, the explanation of each choice) to be scanned, for every kind.
+    const six: Recommendation[] = ids.map((id, i) => ({
+      id, key: `k${i}`, noticed: 'A plain sentence about your own money.', evidence: { transactionIds: ['gone'], summary: 'Some purchases between them.' },
+      why: 'A plain sentence about your own money.', todo: 'A plain sentence about your own money.',
+      impactCents: i < 2 ? 1000 : null, impactLabel: i < 2 ? 'Over the allocation in November 2026' : null, confidence: 'low', evidenceFingerprint: '2026-11',
+    }))
+    vi.spyOn(advice, 'recommendationsFor').mockResolvedValue(six)
+    await mount()
+    expect(cards()).toHaveLength(6)
+    const page = appSpoken()
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toHaveLength(6)
+    expect(screen.getAllByRole('complementary')).toHaveLength(6) // a note beside each
+    expect(page).toContain('Not available yet')               // a challenge that cannot run, said
+    expect(page).toContain('no longer in your records')       // and the stale-evidence sentence
+    expect(violations(page)).toEqual([])
+    // The wants advice compares higher-income months with lower-income ones: nothing on its card speaks of change over time.
+    const wants = cardOf('A larger share on wants in higher-income months')
+    expect(wants.textContent).toContain('higher-income')
+    expect(spoken(wants)).not.toMatch(/\b(recent\w*|gone up|going up|rising|rises?|rose|growing|grew|over time|increas\w*|more and more)\b/i)
+    expect(cards().map((c) => c.querySelector('h3')?.textContent)).not.toContain('Spending on wants has gone up')
   })
 
   it('offers accept, snooze and reject, and each writes the state it claims to', async () => {

@@ -12,11 +12,11 @@ const TITLE: Record<RecommendationId, string> = {
   'small-purchases-add-up': 'Small purchases add up',
   'savings-inconsistent': 'Saving comes in some months and not in others',
   'unusual-spend': 'A purchase above your usual',
-  'discretionary-rising': 'Spending on wants has gone up',
+  'discretionary-rising': 'A larger share on wants in higher-income months',
   'regret-cluster': 'Purchases you marked as not worth it',
 }
 const CONFIDENCE = { high: 'High', medium: 'Medium', low: 'Low' } as const
-const ORDINAL = ['', 'first', 'second', 'third', 'fourth', 'fifth']
+const COUNT_WORD = ['no', 'one', 'two', 'three', 'four', 'five']
 
 interface Shown {
   rec: Recommendation
@@ -26,20 +26,28 @@ interface Shown {
   challenges: Challenge[]
 }
 
+/** What the loader has done so far: once `wrote` is set, showings are being stored, so a failure after it cannot claim that nothing changed. */
+interface Progress { wrote: boolean }
+
 /**
  * Works out the advice and records each showing BEFORE it is put on screen, so the owner cannot act on advice whose
  * showing is not yet stored (src/advice/recommendations.ts: accepted advice stays withheld forever without it, and a
- * rejection only counts once per showing). `isCurrent` is asked after the advice is read and before anything is written,
- * so a load that was replaced (a prop change, or React running the effect twice in development) records nothing.
+ * rejection only counts once per showing). Everything is read first. `isCurrent` is asked after the reads and before the
+ * first write: a load superseded by then (a prop change, or React running the effect twice in development) records
+ * nothing. Once the writes begin they run to the end, each of them the showing of advice that was really read.
  */
-async function load(month: string, today: string, computedAt: number, isCurrent: () => boolean): Promise<Shown[] | null> {
+async function load(month: string, today: string, computedAt: number, isCurrent: () => boolean, progress: Progress): Promise<{ items: Shown[]; decided: boolean } | null> {
   const [recs, hasRecurring] = await Promise.all([recommendationsFor(month, today, computedAt), db.recurring.count().then((n) => n > 0)])
   if (!isCurrent()) return null
-  await Promise.all(recs.map((r) => recordShown(r.key, r.evidenceFingerprint, computedAt)))
-  return Promise.all(recs.map(async (rec): Promise<Shown> => {
+  const items = await Promise.all(recs.map(async (rec): Promise<Shown> => {
     const { rows, dropped } = await liveEvidence(rec.evidence)
     return { rec, rows, dropped, note: noteFor(rec.id), challenges: challengesFor(rec.id, hasRecurring) }
   }))
+  if (!isCurrent()) return null
+  progress.wrote = true
+  await Promise.all(recs.map((r) => recordShown(r.key, r.evidenceFingerprint, computedAt)))
+  // Any stored decision means the owner has already answered advice here: an empty list then is not the empty beginning.
+  return { items, decided: (await db.recommendationState.count()) > 0 }
 }
 
 type Choice = 'accept' | 'snooze' | 'reject'
@@ -71,9 +79,9 @@ function Card({ item, onChoose, headingRef }: { item: Shown; onChoose: (c: Choic
         <dd>{rec.why}</dd>
         <dt>What to do differently</dt>
         <dd>{rec.todo}</dd>
-        {rec.impactCents !== null && (
+        {rec.impactCents !== null && rec.impactLabel !== null && (
           <>
-            <dt>Estimated impact</dt>
+            <dt>{rec.impactLabel}</dt>
             <dd>{formatEur(rec.impactCents)}</dd>
           </>
         )}
@@ -113,6 +121,7 @@ function Card({ item, onChoose, headingRef }: { item: Shown; onChoose: (c: Choic
 export default function Learning({ today, computedAt }: { today: string; computedAt: number }): ReactNode {
   const month = today.slice(0, 7)
   const [items, setItems] = useState<Shown[] | null>(null)
+  const [decided, setDecided] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const latest = useRef(0)
@@ -125,10 +134,14 @@ export default function Learning({ today, computedAt }: { today: string; compute
   useEffect(() => {
     const mine = ++latest.current
     setItems(null); setError(null); setActionError(null)
-    load(month, today, computedAt, () => mine === latest.current).then(
-      (shown) => { if (shown !== null && mine === latest.current) setItems(shown) },
+    const progress: Progress = { wrote: false }
+    load(month, today, computedAt, () => mine === latest.current, progress).then(
+      (loaded) => { if (loaded !== null && mine === latest.current) { setDecided(loaded.decided); setItems(loaded.items) } },
       (e: unknown) => {
-        if (mine === latest.current) setError(`Your advice could not be worked out${e instanceof Error && e.message ? ` (${e.message})` : ''}. Nothing was changed.`)
+        if (mine !== latest.current) return
+        const detail = e instanceof Error && e.message ? ` (${e.message})` : ''
+        // Before the first write nothing was stored; after it, some showings may have been, and "nothing was changed" would not be true.
+        setError(progress.wrote ? `Your advice could not be shown${detail}.` : `Your advice could not be worked out${detail}. Nothing was changed.`)
       },
     )
   }, [month, today, computedAt])
@@ -152,6 +165,7 @@ export default function Learning({ today, computedAt }: { today: string; compute
       const rest = items.filter((i) => i.rec.key !== key)
       // The advice that took its place in the list, else the one before, else the heading: focus is never left on a removed button.
       focusNext.current = rest[at]?.rec.key ?? rest[at - 1]?.rec.key ?? 'region'
+      setDecided(true)
       setItems(rest)
     } catch (e) {
       setActionError(`Your choice could not be saved${e instanceof Error && e.message ? ` (${e.message})` : ''}. Nothing was changed.`)
@@ -175,18 +189,33 @@ export default function Learning({ today, computedAt }: { today: string; compute
       {items.length === 0
         ? (
           <>
-            <p>There is nothing to act on yet. This is the normal starting point, not a problem with your records.</p>
-            <p>
-              Advice appears when your records show something worth a look: a budget line that has passed the figure you set, a run of small purchases, savings that come in some months and not others,
-              a purchase well above your usual, or purchases you marked as not worth it. If you have not yet, <a href="#/import">import your bank statements</a>.
-            </p>
+            {decided
+              ? (
+                <>
+                  <p>There is nothing left to act on for now. You have answered the advice there was.</p>
+                  <p>
+                    Advice you accepted or rejected can come back if it appears again in a later month, advice you snoozed comes back after {SNOOZE_DAYS} days,
+                    and new advice can appear as more of your records come in.
+                  </p>
+                </>
+              )
+              : (
+                <>
+                  <p>There is nothing to act on yet. This is the normal starting point, not a problem with your records.</p>
+                  <p>
+                    Advice appears when your records show something worth a look: a budget line that has passed the figure you set, a run of small purchases, savings that come in some months and not others,
+                    a purchase well above your usual, or purchases you marked as not worth it. If you have not yet, <a href="#/import">import your bank statements</a>.
+                  </p>
+                </>
+              )}
           </>
         )
         : (
           <>
             <p>
-              Accept means you have taken it on; it stays out of the way until the same kind of advice comes back on different purchases.
-              Snooze hides it for {SNOOZE_DAYS} days. Reject hides it, and it can come back once. Rejecting the same advice a {ORDINAL[SUPPRESS_AFTER_REJECTIONS]} time removes it for good.
+              Accept means you have taken it on; it stays out of the way for {formatMonthTitle(month)} and comes back only if the same kind of advice appears in a later month.
+              Snooze hides it for {SNOOZE_DAYS} days. Reject hides it for {formatMonthTitle(month)}; if it comes back in a later month and you reject it again, it is gone for good.
+              Advice rejected on {COUNT_WORD[SUPPRESS_AFTER_REJECTIONS]} separate occasions is not shown again.
             </p>
             <div role="list" aria-label="Advice" className="advice-list">
               {items.map((item) => (

@@ -10,6 +10,11 @@ const DAY_MS = 86_400_000
  * Stored decisions about advice, keyed by a string the caller supplies. This module never derives, normalises or
  * inspects a key (a key holding a changing figure would let a dismissal silently never take), and never reads the
  * clock: every function that needs "now" is given it.
+ *
+ * THE FINGERPRINT is a string the caller supplies too, and what the caller supplies is the PERIOD the advice is about (its
+ * month; see recommendations.ts), not a digest of the evidence rows. Here it only has to say "the same occurrence" or "a
+ * later one": accepted and once-rejected advice stay away while it is unchanged and are offered again when it differs.
+ * A rejection on two separate occasions (two different fingerprints, each shown) is what suppresses for good.
  */
 
 function fresh(key: string): RecommendationStateRow {
@@ -33,13 +38,13 @@ export async function recordShown(key: string, fingerprint: string, at: number):
     if (row.status === 'suppressed') return // untouched: counts, time and the evidence the owner dismissed all stay as they were
     row.shownCount += 1
     row.lastShownAt = at
-    if (row.status === 'accepted' && row.evidenceFingerprint === fingerprint) return // the occurrence they already acted on
+    if ((row.status === 'accepted' || row.status === 'rejected') && row.evidenceFingerprint === fingerprint) return // the occurrence they already answered
     if (row.status === 'snoozed') {
       if (row.suppressedUntil !== null && row.suppressedUntil > at) return // still asleep
       row.suppressedUntil = null
     }
-    // Back to 'active' (from rejected, a fresh accepted occurrence, an expired snooze): this is what makes a later
-    // rejection count as a separate showing rather than a double-fire.
+    // Back to 'active' (from a later occurrence of rejected or accepted advice, or an expired snooze): this is what makes a
+    // later rejection count as a separate showing rather than a double-fire.
     row.status = 'active'
     row.evidenceFingerprint = fingerprint
   })
@@ -94,7 +99,12 @@ export async function withheldKeys(fingerprints: ReadonlyMap<string, string>, no
         // Exactly at suppressedUntil it returns. A null date (recordSnoozed never writes one) counts as expired, as in recordShown.
         if (row.suppressedUntil !== null && row.suppressedUntil > now) out.add(key)
         break
-      default: break // active, rejected once: offered
+      case 'rejected':
+        // "Not now" holds for the occurrence that was rejected. A stored null (rejected with no showing recorded) cannot show it
+        // is the same one, and being offered again is the lesser error here, so it is offered.
+        if (row.evidenceFingerprint !== null && fingerprints.get(key) === row.evidenceFingerprint) out.add(key)
+        break
+      default: break // active: offered
     }
   })
   return out

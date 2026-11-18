@@ -172,3 +172,12 @@ describe('education', () => {
     }
   })
 })
+
+describe('the note for the wants advice', () => {
+  it('describes a comparison of higher-income and lower-income months, and says nothing of change over time', () => {
+    const note = noteFor('discretionary-rising')
+    const said = `${note?.title} ${note?.body}`
+    expect(said).toMatch(/higher/)
+    expect(said).not.toMatch(/\b(recent\w*|gone up|going up|rising|rises?|rose|growing|grew|over time|increas\w*|more and more)\b/i)
+  })
+})

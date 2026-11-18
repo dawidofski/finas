@@ -10,7 +10,8 @@ import { formatEur } from '../lib/money'
 import { moodAmount, stressDiscretionary, weekend } from '../battery/rank'
 import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle } from '../battery/trend'
 import { boredomImpulse, reasonWorthwhile } from '../battery/contingency'
-import { fingerprintOf, liveEvidence, recommendationsFor, type Recommendation, type RecommendationId } from './recommendations'
+import { challengesFor, noteFor } from './education'
+import { liveEvidence, recommendationsFor, type Recommendation, type RecommendationId } from './recommendations'
 
 // The battery's ten readers are replaced so a test can say exactly which bracket each relationship came back with:
 // the correction is the rule under test, and building twelve months of mood data to reach a chosen bracket would test
@@ -233,31 +234,41 @@ describe('recommendationsFor', () => {
     await world()
     const before = await run()
     const small = byId(before, 'small-purchases-add-up')
-    for (const at of [10, 20]) { await recordShown(small.key, small.evidenceFingerprint, at); await recordRejected(small.key) }
+    await recordShown(small.key, small.evidenceFingerprint, 10); await recordRejected(small.key)
+    await recordShown(small.key, 'a-later-month', 20); await recordRejected(small.key) // rejected on a second, separate occasion
     const after = await run()
     expect(after.map((r) => r.id)).not.toContain('small-purchases-add-up')
     expect(after.map((r) => r.id).sort()).toEqual(ALL_SIX.filter((i) => i !== 'small-purchases-add-up').sort())
   })
 
-  it('offers once rejected advice again, since one dismissal is "not now"', async () => {
+  it('keeps once rejected advice away for the month it was rejected in, and offers it again in a later month', async () => {
     await world()
     const small = byId(await run(), 'small-purchases-add-up')
     await recordShown(small.key, small.evidenceFingerprint, 10)
     await recordRejected(small.key)
-    expect((await run()).map((r) => r.id)).toContain('small-purchases-add-up')
+    expect((await run()).map((r) => r.id)).not.toContain('small-purchases-add-up') // "not now" lasts for the period it was said about
+    await tx('s11', '2026-11-28', -500) // an import after the rejection brings one more purchase: still the same occurrence
+    expect((await run()).map((r) => r.id)).not.toContain('small-purchases-add-up')
+    await smallInDecember()
+    const later = byId(await recommendationsFor('2026-12', TODAY, COMPUTED_AT), 'small-purchases-add-up')
+    expect(later.key).toBe(small.key)
+    expect(later.evidenceFingerprint).not.toBe(small.evidenceFingerprint)
   })
 
-  it('hands the state module each recommendation\'s own fingerprint, so accepted advice returns only with new evidence', async () => {
+  it('hands the state module each recommendation own period, so accepted advice returns only in a later month, not after one more purchase', async () => {
     await world()
     const first = byId(await run(), 'overspent-category')
+    expect(first.evidenceFingerprint).toBe(MONTH) // the period the advice is about, not a digest of its rows
     await recordShown(first.key, first.evidenceFingerprint, 10)
     await recordAccepted(first.key)
     expect((await run()).map((r) => r.id)).not.toContain('overspent-category') // the occurrence they already acted on
-    await tx('g4', '2026-11-09', -1000, GROCERIES)                              // a new purchase in the same line
-    const again = byId(await run(), 'overspent-category')
-    expect(again.key).toBe(first.key)
-    expect(again.evidenceFingerprint).not.toBe(first.evidenceFingerprint)
-    expect(again.evidence.transactionIds).toContain('g4')
+    await tx('g4', '2026-11-09', -1000, GROCERIES)                              // a new purchase in the same line, imported later
+    expect((await run()).map((r) => r.id)).not.toContain('overspent-category') // still their Accept: the month is the same
+    // The same line over its allocation in a later month is a new occurrence.
+    await tx('g5', '2026-12-02', -15000, GROCERIES)
+    const later = byId(await recommendationsFor('2026-12', TODAY, COMPUTED_AT), 'overspent-category')
+    expect(later.key).toBe(first.key)
+    expect(later.evidenceFingerprint).toBe('2026-12')
   })
 
   it('keeps each key the same when the figures change, so a dismissal keeps taking effect', async () => {
@@ -280,17 +291,63 @@ describe('recommendationsFor', () => {
     for (const r of before) expect(r.key).not.toMatch(/\d{3,}/) // no figure, no date, in a key
   })
 
-  it('gives the same fingerprint for the same run twice, and a different one when one transaction is swapped for another of the same size', async () => {
+  it('gives the same fingerprint for the same run twice, and when evidence is swapped for other purchases in the same month', async () => {
     await world()
     const a = byId(await run(), 'overspent-category')
     expect(byId(await run(), 'overspent-category').evidenceFingerprint).toBe(a.evidenceFingerprint)
-    // Swap one transaction for another of the same size: same count, same total, different evidence.
     await db.transactions.update('g3', { deletedAt: 5 })
     await tx('g9', '2026-11-08', -5000, GROCERIES)
     const swapped = byId(await run(), 'overspent-category')
-    expect(swapped.evidence.transactionIds.length).toBe(a.evidence.transactionIds.length)
-    expect(swapped.impactCents).toBe(a.impactCents)
-    expect(swapped.evidenceFingerprint).not.toBe(a.evidenceFingerprint)
+    expect(swapped.evidence.transactionIds).not.toEqual(a.evidence.transactionIds) // different evidence...
+    expect(swapped.evidenceFingerprint).toBe(a.evidenceFingerprint)                // ...the same occurrence
+  })
+
+  it('labels each impact figure as what it is and the period it covers, and never calls it a saving', async () => {
+    await world()
+    const recs = await run()
+    expect(byId(recs, 'overspent-category').impactLabel).toBe('Over the allocation in November 2026')
+    expect(byId(recs, 'unusual-spend').impactLabel).toBe('Above your usual for this category in November 2026')
+    for (const r of recs) {
+      expect(r.impactLabel === null, r.id).toBe(r.impactCents === null) // a figure always comes with its label, and no label without a figure
+      expect(r.impactLabel ?? '').not.toMatch(/sav(e|ing)|gain|earn/i)
+    }
+  })
+
+  it('says a month still running is the month so far, in the small-purchases advice', async () => {
+    await world()
+    expect(byId(await run(), 'small-purchases-add-up').noticed).toMatch(/ in November 2026\.$/) // November is over: no "so far"
+    await smallInDecember()
+    const december = byId(await recommendationsFor('2026-12', TODAY, COMPUTED_AT), 'small-purchases-add-up')
+    expect(december.noticed).toMatch(/ so far in December 2026\.$/)
+    expect(december.evidence.summary).toContain('this month so far')
+  })
+
+  it('offers one regret card for the same purchases, the grouping with the most marked not worth it, in a fixed order', async () => {
+    await world()
+    // Give r1 and r2 a shared merchant as well: the same two purchases now form a category group and a merchant group.
+    await db.annotations.update('r1', { merchantId: 'm1' })
+    await db.annotations.update('r2', { merchantId: 'm1' })
+    await db.annotations.update('r3', { merchantId: 'm1' }) // answered "worth it": it makes three answered, which is what a group needs to count
+    const regrets = (await run()).filter((r) => r.id === 'regret-cluster')
+    expect(regrets).toHaveLength(1)
+    expect(regrets[0]?.key).toBe('regret-cluster:category:cat.restaurants') // tie on purchases and amount: the fixed order puts category first
+    expect(regrets[0]?.evidence.transactionIds).toEqual(['r1', 'r2'])
+  })
+
+  it('leaves the how of saving to the challenge, so the advice, the note and the challenge do not say the same thing three times', async () => {
+    await world()
+    const savings = byId(await run(), 'savings-inconsistent')
+    expect(savings.todo).not.toMatch(/\b(day|move the same amount)\b/i) // choosing a day and an amount is the challenge's instruction
+    expect(noteFor('savings-inconsistent')?.body).not.toMatch(/\b(day|amount)\b/i)
+    expect(challengesFor('savings-inconsistent', false).map((c) => c.id)).toEqual(['savings-step-up'])
+  })
+
+  it('says nothing of recent change, rising or time in the wants advice, since it compares higher-income months with lower-income ones', async () => {
+    await world()
+    const wants = byId(await run(), 'discretionary-rising')
+    const said = [wants.noticed, wants.evidence.summary, wants.why, wants.todo].join(' ')
+    expect(said).not.toMatch(/\b(recent\w*|gone up|going up|rising|rises?|rose|growing|grew|over time|increas\w*|more and more)\b/i)
+    expect(wants.noticed).toMatch(/months at your higher income, a larger share of your spending went on wants/)
   })
 
   it('reads every amount from the bank row, whatever the owner typed over it', async () => {
@@ -389,22 +446,6 @@ describe('recommendationsFor', () => {
   })
 })
 
-describe('fingerprintOf', () => {
-  it('does not depend on the order of the ids', () => {
-    expect(fingerprintOf(['a', 'b', 'c'])).toBe(fingerprintOf(['c', 'a', 'b']))
-  })
-  it('differs when the evidence differs: another id, fewer ids, or an id that contains the separator', () => {
-    const base = fingerprintOf(['a', 'b', 'c'])
-    expect(fingerprintOf(['a', 'b', 'd'])).not.toBe(base)
-    expect(fingerprintOf(['a', 'b'])).not.toBe(base)
-    expect(fingerprintOf(['a|b', 'c'])).not.toBe(fingerprintOf(['a', 'b|c'])) // one id containing the separator is not two ids
-    expect(fingerprintOf([])).not.toBe(fingerprintOf(['']))
-  })
-  it('counts a repeated id once, since it is the same transaction', () => {
-    expect(fingerprintOf(['a', 'a', 'b'])).toBe(fingerprintOf(['a', 'b']))
-  })
-})
-
 describe('liveEvidence', () => {
   it('drops evidence whose transaction has since been deleted, rather than showing a blank row', async () => {
     await world()
@@ -440,3 +481,8 @@ describe('liveEvidence', () => {
     expect(out).toEqual({ rows: [], dropped: 1 })
   })
 })
+
+/** Ten small purchases in December, so a later month has the same situation as November. */
+async function smallInDecember(): Promise<void> {
+  for (let i = 1; i <= 10; i++) await tx(`d${i}`, `2026-12-0${i === 10 ? 4 : i}`, -500)
+}
