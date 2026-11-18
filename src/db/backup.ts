@@ -63,8 +63,11 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return Array.isArray(b) && a.length === b.length && a.every((v, i) => deepEqual(v, b[i]))
   }
   if (isRow(a) && isRow(b)) {
-    const ka = Object.keys(a)
-    return ka.length === Object.keys(b).length && ka.every(k => k in b && deepEqual(a[k], b[k]))
+    // A field held as `undefined` is the same as a field that is not there: the database keeps such a key (clearing an
+    // override writes one) and a backup file cannot, so a device's own backup would otherwise differ from the device.
+    const present = (r: Row) => Object.keys(r).filter(k => r[k] !== undefined)
+    const ka = present(a)
+    return ka.length === present(b).length && ka.every(k => b[k] !== undefined && deepEqual(a[k], b[k]))
   }
   return false
 }

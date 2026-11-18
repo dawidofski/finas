@@ -460,3 +460,22 @@ describe('recurring.dismissed in a backup', () => {
     expect(row.dismissed).toBeUndefined()
   })
 })
+
+describe('a field held as undefined', () => {
+  it('does not make a device differ from its own backup: merging it back reports no conflict', async () => {
+    await db.delete(); await db.open(); await seedDatabase()
+    await db.accounts.add(account(1))
+    await db.transactions.add(tx(1))
+    // Clearing an override stores the key with no value; a backup file, being JSON, leaves the key out.
+    await db.annotations.add({ ...annotation(1, { note: 'note 1' }), roundupParentIdOverride: undefined })
+    const file: unknown = JSON.parse(JSON.stringify(await exportBundle()))
+    const report = await inspectBundle(file, 'merge')
+    expect(report.ok).toBe(true)
+    expect(report.perTable['annotations']).toEqual({ incoming: 1, willWrite: 0, conflicts: 0 })
+    expect(report.conflictIds).toBeUndefined()
+    // A real difference is still a conflict.
+    const edited = JSON.parse(JSON.stringify(file)) as { tables: { annotations: Array<{ note: string }> } }
+    edited.tables.annotations[0]!.note = 'another note'
+    expect((await inspectBundle(edited, 'merge')).perTable['annotations']?.conflicts).toBe(1)
+  })
+})
