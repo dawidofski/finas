@@ -136,7 +136,10 @@ describe('Import screen', () => {
     fireEvent.click(within(details).getByRole('button', { name: 'Show 5 more' }))
     expect(within(details).getAllByRole('listitem')).toHaveLength(105)
     expect(details).not.toHaveTextContent(/Showing \d+ of/)
-  })
+    // The whole test needs room, not just the wait above: it commits 105 rows and then previews 106. The 10 s wait
+    // inside it could never be used while the test itself stopped at the default 5 s, which is why this timed out
+    // whenever the machine was busy and passed whenever it was run alone.
+  }, 30000)
 
   it('says nothing about round-ups when every one was matched', async () => {
     render(<Import />)
