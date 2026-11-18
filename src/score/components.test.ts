@@ -3,16 +3,16 @@ import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
 import { budgetAwareness, improvement, savingsConsistency } from './components'
 
-function line(allocatedCents: number, spentCents: number): BudgetLine {
+function line(allocatedCents: number, spentCents: number, targetKind: 'category' | 'goal' = 'category'): BudgetLine {
   return {
-    targetKind: 'category', targetId: `c${allocatedCents}-${spentCents}`, label: 'x', allocatedCents, spentCents,
+    targetKind, targetId: `c${allocatedCents}-${spentCents}`, label: 'x', allocatedCents, spentCents,
     remainingCents: allocatedCents - spentCents,
     varianceBp: allocatedCents === 0 ? null : 0, fixed: true, unbudgeted: allocatedCents === 0,
   }
 }
-function budget(month: string, lines: BudgetLine[]): MonthlyBudget {
+function budget(month: string, lines: BudgetLine[], partial = false): MonthlyBudget {
   return {
-    month, income: { cents: 0, provisional: false, basis: 'actual' }, partial: false, lines, unallocatedCents: 0,
+    month, income: { cents: 0, provisional: false, basis: 'actual' }, partial, lines, unallocatedCents: 0,
     overcommittedBp: null,
     totals: { spentCents: 0, essentialCents: 0, discretionaryCents: 0, savingsCents: 0, savingsRateBp: null },
   }
@@ -23,6 +23,8 @@ function point(month: string, o: Partial<MonthPoint> = {}): MonthPoint {
     netCents: 0, provisional: false, incomeBasis: 'actual', transactions: 1, hasData: true, ...o,
   }
 }
+/** A month the budget screen can score: has data and is complete, unless the caller says otherwise. */
+const bm = (b: MonthlyBudget, hasData = true) => ({ budget: b, hasData })
 const m = (n: number) => `2026-${String(n).padStart(2, '0')}`
 /** A month with data whose discretionary share of spending is `bp`, on 10 000 cents of spending. */
 const shareMonth = (n: number, bp: number) => point(m(n), { spentCents: 10000, discretionaryCents: bp })
@@ -31,36 +33,66 @@ const gap = (n: number) => point(m(n), { hasData: false, transactions: 0, provis
 describe('budgetAwareness', () => {
   it('weights a respected allocation by its size, not by its count', () => {
     // Respected 2000 of (2000 + 200000) allocated: 2000 / 202000 = 0.99% -> 1. A count-based version says 1 of 2 = 50.
-    const c = budgetAwareness([budget('2026-01', [line(2000, 1500), line(200000, 250000)])])
+    const c = budgetAwareness([bm(budget('2026-01', [line(2000, 1500), line(200000, 250000)]))])
     expect(c).toMatchObject({ kind: 'measured', score: 1 })
   })
 
   it('ignores a line with no allocation rather than scoring it as overspent', () => {
     // The 5000 unbudgeted line is dropped: respected 10000 of 10000 = 100. A size-weighted score cannot tell the line
     // was admitted (it adds 0 to the total), so the line count in `inputs` is what pins the exclusion: 1 of 1, not 1 of 2.
-    const c = budgetAwareness([budget('2026-01', [line(10000, 9000), line(0, 5000)])])
+    const c = budgetAwareness([bm(budget('2026-01', [line(10000, 9000), line(0, 5000)]))])
     expect(c).toMatchObject({ kind: 'measured', score: 100 })
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toMatch(/1 of 1 allocation/)
   })
 
   it('is not measured when no line in any month has an allocation', () => {
-    const c = budgetAwareness([budget('2026-01', [line(0, 500)]), budget('2026-02', [])])
+    const c = budgetAwareness([bm(budget('2026-01', [line(0, 500)])), bm(budget('2026-02', []))])
     expect(c.kind).toBe('not-measured')
   })
 
   it('pools every month, and counts spending exactly at the allocation as respected', () => {
     // Jan: 3000 allocated, spent 3000 (respected). Feb: 2000 allocated, spent 2001 (over). Respected 3000 of 5000 = 60.
-    const c = budgetAwareness([budget('2026-01', [line(3000, 3000)]), budget('2026-02', [line(2000, 2001)])])
+    const c = budgetAwareness([bm(budget('2026-01', [line(3000, 3000)])), bm(budget('2026-02', [line(2000, 2001)]))])
     expect(c).toMatchObject({ kind: 'measured', score: 60 })
   })
 
   it('treats a net-refund (negative) spend as respected', () => {
-    expect(budgetAwareness([budget('2026-01', [line(1000, -300)])])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, -300)]))])).toMatchObject({ score: 100 })
+  })
+
+  it('leaves out the month still in progress, since a part-month always looks under budget', () => {
+    // January overspent (0 of 1000). February is partial, 200 spent so far of 1000: admitted it reads 1000 of 2000 = 50.
+    const c = budgetAwareness([bm(budget('2026-01', [line(1000, 1500)])), bm(budget('2026-02', [line(1000, 200)], true))])
+    expect(c).toMatchObject({ kind: 'measured', score: 0 })
+  })
+
+  it('is not measured when the only months are gaps or still in progress', () => {
+    const c = budgetAwareness([bm(budget('2026-01', [line(1000, 0)]), false), bm(budget('2026-02', [line(1000, 0)], true))])
+    expect(c.kind).toBe('not-measured')
+  })
+
+  it('respects a category by staying at or under it', () => {
+    // 400 spent of 1000: respected, 100. 1500 of 1000: not, 0.
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 400, 'category')]))])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'category')]))])).toMatchObject({ score: 0 })
+  })
+
+  it('respects a savings goal by meeting it, not by contributing less than planned', () => {
+    // Goal 1000, 400 put aside: short of the plan, 0. Exactly 1000 or more: met, 100.
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 400, 'goal')]))])).toMatchObject({ score: 0 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1000, 'goal')]))])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'goal')]))])).toMatchObject({ score: 100 })
+  })
+
+  it('never reports 100 while an allocation was not respected', () => {
+    // 199 of 200 respected = 99.5, which rounds to 100; capped at 99 because one line was overspent.
+    const c = budgetAwareness([bm(budget('2026-01', [line(199, 199), line(1, 2)]))])
+    expect(c).toMatchObject({ score: 99 })
   })
 
   it('states its figures without judging', () => {
-    const c = budgetAwareness([budget('2026-01', [line(2000, 1500), line(200000, 250000)])])
+    const c = budgetAwareness([bm(budget('2026-01', [line(2000, 1500), line(200000, 250000)]))])
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toMatch(/1 of 2/)
     expect(c.inputs).not.toMatch(/careless|failed|should|afford|overspent/i)
@@ -128,6 +160,13 @@ describe('improvement', () => {
     expect(improvement([...pts].reverse())).toMatchObject({ score: 60 })
   })
 
+  it('says its months are the ones with spending recorded, since gaps and zero-spend months are skipped', () => {
+    const c = improvement([4000, 4000, 4000, 3500, 3500, 3500].map((bp, i) => shareMonth(i + 1, bp)))
+    if (c.kind !== 'measured') throw new Error('expected measured')
+    expect(c.inputs).toMatch(/months with spending recorded/)
+    expect(c.inputs).toMatch(/not counted/)
+  })
+
   it('does not read income', () => {
     const a = [4000, 4000, 4000, 3500, 3500, 3500].map((bp, i) => shareMonth(i + 1, bp))
     const b = a.map((p) => ({ ...p, incomeCents: 999999, provisional: true, incomeBasis: 'trailing-average' as const }))
@@ -149,8 +188,12 @@ describe('a month with no records', () => {
     const withGap = [...series, { ...gap(7), spentCents: 10000 }]
     expect(improvement(withGap)).toMatchObject({ kind: 'measured', score: 75 })
 
-    // Budget awareness takes MonthlyBudget, which has no gap flag; a month with no lines simply adds nothing.
-    expect(budgetAwareness([budget('2026-01', [line(1000, 500)]), budget('2026-02', [])])).toMatchObject({ score: 100 })
+    // Budget awareness: a real gap month still HAS lines (they come from the allocations), each with spent 0. January
+    // is overspent: 0 of 1000 respected = 0. With the gap admitted, its untouched 1000 allocation counts as respected:
+    // 1000 of 2000 = 50.
+    const jan = bm(budget('2026-01', [line(1000, 1500)]))
+    const feb = bm(budget('2026-02', [line(1000, 0)]), false)
+    expect(budgetAwareness([jan, feb])).toMatchObject({ kind: 'measured', score: 0 })
   })
 
   it('omits a month with data but no spending from the discretionary share, since it has no ratio', () => {

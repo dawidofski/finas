@@ -19,25 +19,34 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  * Share of allocations respected, weighted by allocation size, over every month given. A line is respected when spent
  * does not exceed allocated. A line with no allocation has no ratio (varianceBp is null for the same reason) and is left out.
  */
-export function budgetAwareness(budgets: readonly MonthlyBudget[]): Component {
-  const lines = budgets.flatMap((b) => b.lines).filter((l) => l.allocatedCents > 0)
+export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasData: boolean }[]): Component {
+  // Two kinds of month are not evidence. A month with no records still has lines (they come from the allocations) with
+  // nothing spent, so every one would read as respected. The month still in progress (`partial`) has only part of its
+  // spending so far, almost always under a whole month's allocation, so it would read as respected before it has happened.
+  const lines = months
+    .filter((m) => m.hasData && !m.budget.partial)
+    .flatMap((m) => m.budget.lines)
+    .filter((l) => l.allocatedCents > 0)
   if (lines.length === 0) {
-    return { kind: 'not-measured', why: 'No allocations have been set in the months recorded yet, so there is nothing to compare spending against.' }
+    return { kind: 'not-measured', why: 'No completed month with an allocation is recorded yet, so there is nothing to compare spending against.' }
   }
   let total = 0
   let respected = 0
   let respectedLines = 0
   for (const l of lines) {
     total += l.allocatedCents
-    if (l.spentCents <= l.allocatedCents) {
+    // A category is respected by spending no more than allocated; a savings goal by setting aside no less than planned.
+    const met = l.targetKind === 'goal' ? l.spentCents >= l.allocatedCents : l.spentCents <= l.allocatedCents
+    if (met) {
       respected += l.allocatedCents
       respectedLines += 1
     }
   }
   return {
     kind: 'measured',
-    score: clamp(divRound(respected * 100, total)),
-    inputs: `You stayed within ${respectedLines} of ${plural(lines.length, 'allocation')}, weighted by size: ${formatEur(respected)} of ${formatEur(total)} allocated.`,
+    // 100 means every allocation was respected: rounding must not award it while one was not.
+    score: clamp(respected < total ? Math.min(99, divRound(respected * 100, total)) : 100),
+    inputs: `You respected ${respectedLines} of ${plural(lines.length, 'allocation')} in completed months, weighted by size: ${formatEur(respected)} of ${formatEur(total)} allocated.`,
   }
 }
 
@@ -88,6 +97,6 @@ export function improvement(points: readonly MonthPoint[]): Component {
   return {
     kind: 'measured',
     score: clamp(50 + divRound(gainBp * POINTS_PER_100_BP, 100)),
-    inputs: `Discretionary spending was ${formatBp(priorBp)} of your spending over the ${BASELINE_WINDOW} months before, and ${formatBp(recentBp)} over the latest ${BASELINE_WINDOW}.`,
+    inputs: `Discretionary spending was ${formatBp(priorBp)} of your spending over the ${BASELINE_WINDOW} earlier months with spending recorded, and ${formatBp(recentBp)} over the latest ${BASELINE_WINDOW} such months. Months with no spending recorded are not counted.`,
   }
 }
