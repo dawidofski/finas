@@ -30,7 +30,16 @@ The statistics §12 asks for are all exactly computable in integers:
 |---|---|
 | Compute p with floats in a bounded module | Fastest to write, but it puts float arithmetic in the one place whose whole output is a confidence claim, and a subtly wrong approximation yields a plausible number nobody can check. This project's recurring defect is exactly that. |
 | Integer-scaled normal / χ² approximations | Keeps the rule, but is real numerical work: a rational approximation of a CDF, tuned and verified, for three distributions. High effort, and a quiet error is undetectable without an oracle. |
-| **Critical-value tables, chosen** | Significance becomes an **integer comparison** against a stored critical value at declared α levels. Zero numerical risk, exactly testable (a known statistic at a known n must land in a known bracket), and no float anywhere. |
+| Critical-value tables per sample size | Keeps the rule, but a wrong number in a table of Spearman or Mann–Whitney criticals silently corrupts every finding built on it, and nobody reviewing this can check a table of rank criticals by eye. Rejected for that reason. |
+| **Squared normal comparison, chosen** | Both rank tests have a normal approximation, and the significance test reduces to an **integer inequality once both sides are squared**, which removes the square root. The only constants needed are the two-tailed normal criticals **1.96** and **2.576**, which anyone can check from memory, plus the chi-square criticals for small degrees of freedom (**3.841** and **6.635** at df 1), which are equally well known. No per-n table, no float, and every comparison is exact integer arithmetic. |
+
+**The comparisons, written out, because they are the heart of the plan:**
+
+- **Spearman.** `z = ρ·√(n−1)`. Significant at α when `|ρ|·√(n−1) ≥ z_α`. Square both sides: `ρ_bp² · (n−1) ≥ z_α_bp²`. Both sides are integers; no root is taken.
+- **Mann–Whitney.** `z = (U − n₁n₂/2) / √(n₁n₂(n₁+n₂+1)/12)`. Significant when `(2U − n₁n₂)² · 3 ≥ z_α_bp² · n₁n₂(n₁+n₂+1) / 10000²`, arranged so every term is an integer — derive it yourself from the line above rather than trusting this rearrangement, and show the derivation in a comment.
+- **Chi-square.** Compare the scaled statistic against the scaled critical constant for its degrees of freedom. A short table, df 1 to 6, each value checkable.
+
+`isqrt` is still needed for Cramér's V, which is an effect size rather than a test, and where a floor is honest.
 
 So a result reports `p < 0.01`, `p < 0.05`, or `not significant` — a bracket, not a number. **That is more honest for this app, not less:** the spec never promises a precise p, and "p < 0.05" cannot be mistaken for the precision that "p = 0.0412" implies. The cost, stated plainly: the owner cannot see how far below a threshold a result sat, and a result just under α looks identical to one far under it. The effect size, which is exact, is what carries that information instead — and §12 asks for the effect size in every finding anyway.
 
@@ -105,15 +114,17 @@ The float test is a source-text assertion in the style of `src/learning/bayes.te
 
 ---
 
-### Task 2: Critical values and the significance bracket
+### Task 2: Significance as a squared integer comparison
 
 **Files:** Create `src/battery/critical.ts`, `src/battery/critical.test.ts`
 
 **Interfaces:**
+- Consumes: `CHI_SCALE` (Task 1).
 - Produces:
 ```ts
 export type Bracket = 'p<0.01' | 'p<0.05' | 'none'
-export const ALPHA_BP = { 'p<0.01': 100, 'p<0.05': 500 } as const   // each bracket's upper bound, in basis points
+export const ALPHA_BP = { 'p<0.01': 100, 'p<0.05': 500 } as const   // each bracket's upper bound, for correction
+export const Z_BP = { 'p<0.05': 19600, 'p<0.01': 25758 } as const   // two-tailed normal criticals, in basis points
 export function spearmanBracket(rhoBp: number, n: number): Bracket
 export function mannWhitneyBracket(u: number, n1: number, n2: number): Bracket
 export function chiSquareBracket(chiScaled: number, df: number): Bracket
@@ -122,18 +133,21 @@ export function chiSquareBracket(chiScaled: number, df: number): Bracket
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it('reads a Spearman critical value for a known n and brackets a statistic either side of it', () => {})
-it('reads a Mann-Whitney critical value for known group sizes, and is two-tailed', () => {})
-it('brackets a chi-square statistic against the table for one and for two degrees of freedom', () => {})
-it('returns none for a statistic below the weakest threshold', () => {})
-it('returns none rather than guessing when n is outside the table', () => {})
+it('brackets Spearman by the squared comparison, either side of the 0.05 line', () => {})
+it('brackets Spearman at the stricter line only when the statistic clears it', () => {})
+it('brackets Mann-Whitney two-tailed, symmetrically above and below the midpoint', () => {})
+it('brackets chi-square against the constants for one and two degrees of freedom', () => {})
+it('returns none for a statistic below the weakest line', () => {})
 it('is monotonic: a stronger statistic never brackets weaker than a lesser one', () => {})
-it('states every tables source and the tail it is for', () => {})
+it('agrees with a worked example computed the long way, with a square root', () => {})
+it('uses no floating-point arithmetic', () => {})
 ```
 
-The last is a source-text assertion: each table must carry, in a comment, which distribution it is, which tail, and where the values came from — a table of numbers with no provenance is unreviewable, and the owner's conclusions rest on it.
+The seventh is what makes the squaring trustworthy: take one case, compute `z` the ordinary way with a real square root **inside the test**, compare it to the critical value, and assert the integer comparison reaches the same verdict. The squaring is an algebraic rearrangement, so it must agree with the thing it replaces — and a test that only exercises the rearranged form cannot tell you the rearrangement is right.
 
-The fifth matters more than it looks: §12's gates mean n is usually small and sometimes large. **Outside the table the answer is `none`, never an extrapolation** — a made-up critical value is a made-up finding.
+The sixth guards the case where a rearrangement loses a sign or an inequality direction, which is the likeliest way to get this wrong.
+
+**Where a statistic is too small for the approximation to mean anything, return `none`** rather than a bracket. §12's gates keep most of these samples reasonable, but say in a comment which n the approximation is honest for and what the module does below it — a bracket from a normal approximation at n = 4 is a made-up finding.
 
 - [ ] Steps 2–6 as Task 1, committing `feat: significance as a bracket from a declared table`.
 
