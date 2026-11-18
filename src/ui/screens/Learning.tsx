@@ -5,6 +5,7 @@ import { recordAccepted, recordRejected, recordShown, recordSnoozed, SNOOZE_DAYS
 import { db } from '../../db/db'
 import { formatMonthTitle, formatSpanishDate } from '../../lib/dates'
 import { formatEur } from '../../lib/money'
+import { recurringPayments } from '../../recurring/store'
 
 /** What each kind of advice is called, in the app's own words. */
 const TITLE: Record<RecommendationId, string> = {
@@ -37,7 +38,7 @@ interface Progress { wrote: boolean }
  * nothing. Once the writes begin they run to the end, each of them the showing of advice that was really read.
  */
 async function load(month: string, today: string, computedAt: number, isCurrent: () => boolean, progress: Progress): Promise<{ items: Shown[]; decided: boolean } | null> {
-  const [recs, hasRecurring] = await Promise.all([recommendationsFor(month, today, computedAt), db.recurring.count().then((n) => n > 0)])
+  const [recs, hasRecurring] = await Promise.all([recommendationsFor(month, today, computedAt), recurringPayments(today, computedAt).then((r) => r.length > 0)])
   if (!isCurrent()) return null
   const items = await Promise.all(recs.map(async (rec): Promise<Shown> => {
     const { rows, dropped } = await liveEvidence(rec.evidence)
@@ -103,6 +104,7 @@ function Card({ item, onChoose, headingRef }: { item: Shown; onChoose: (c: Choic
                 <h5>{c.title}</h5>
                 <p>{c.body}</p>
                 {!c.available && <p>Not available yet: {c.why}</p>}
+                {c.id === 'subscription-review' && c.available && <p><a href="#/recurring">See your recurring payments</a></p>}
               </li>
             ))}
           </ul>

@@ -43,6 +43,17 @@ async function smallOnly(): Promise<void> {
 async function smallIn(month: string): Promise<void> {
   for (let i = 1; i <= 10; i++) await tx(`${month}.s${i}`, `${month}-0${i === 10 ? 9 : i}`, -500, GROCERIES, `Compra pequena ${i}`)
 }
+/** A gym payment on the 5th of each month from May to October: a recurring payment that is neither new nor stopped by TODAY. */
+async function gymMonthly(): Promise<void> {
+  for (const m of ['05', '06', '07', '08', '09', '10']) {
+    await tx(`gym${m}`, `2026-${m}-05`, -3000, null, 'Cuota gimnasio')
+    await db.annotations.put({
+      transactionId: `gym${m}`, categoryId: null, subcategoryId: null, merchantId: 'm.gym', typeOverride: null, paymentMethod: null,
+      note: null, moodId: null, purchaseReasonId: null, worthwhile: null, reviewed: false, dateOverride: null,
+      amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
+    })
+  }
+}
 /** Those, plus one restaurant line 100 % over what the owner set (the overspend advice, which comes first). */
 async function twoAdvices(): Promise<void> {
   await smallOnly()
@@ -362,9 +373,27 @@ describe('Learning screen', () => {
     }
     // Recurring data present: the same challenge is offered and says nothing of the kind.
     cleanup()
-    await db.recurring.add({ id: 'r1' } as never)
+    await gymMonthly()
     await mount()
     expect(within(cardOf(SMALL_TITLE)).queryByText(/Not available yet/)).toBeNull()
+  })
+
+  it('makes the subscription review challenge available, and links it to the recurring screen, once a recurring payment exists', async () => {
+    await smallOnly()
+    await mount()
+    const review = (): HTMLElement => within(cardOf(SMALL_TITLE)).getByRole('heading', { level: 5, name: 'Read through what repeats' }).closest('li') as HTMLElement
+    expect(review().textContent).toContain('Not available yet')
+    expect(within(review()).queryByRole('link')).toBeNull()
+    cleanup()
+    // A stored row alone is not a payment the screen can show: it has to be found in the records.
+    await db.recurring.add({ id: 'stale' } as never)
+    await mount()
+    expect(review().textContent).toContain('Not available yet')
+    cleanup()
+    await gymMonthly()
+    await mount()
+    expect(review().textContent).not.toContain('Not available yet')
+    expect(within(review()).getByRole('link', { name: 'See your recurring payments' })).toHaveAttribute('href', '#/recurring')
   })
 
   it('uses no causal, shaming or statistical wording anywhere on the page', async () => {
