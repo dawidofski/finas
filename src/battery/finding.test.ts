@@ -156,8 +156,11 @@ describe('the eight fields a finding carries', () => {
     // `new RegExp('')` and not an empty literal: `//` opens a comment.
     expect(() => assertNotVacuous([{ name: 'matches everything', pattern: new RegExp(''), forbids: 'because', allows: 'ordinary wording' }]))
       .toThrow(/matches ordinary wording/)
+    // 'AI coach' is the non-vacuity check: the read really found the router's stub list. There was also a
+    // `length >= 5` here, removed because it counted the screens that happen to be UNBUILT — so every plan
+    // that builds one broke a test about banned language. It fired the moment the Money Score screen landed.
+    // A count of what is missing is not a property of this file; the named stub is.
     expect(unbuiltScreens).toContain('AI coach')
-    expect(unbuiltScreens.length).toBeGreaterThanOrEqual(5)
     expect(everyScreen).toContain('Dashboard')
   })
 
