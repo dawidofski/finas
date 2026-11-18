@@ -16,8 +16,12 @@ const clamp = (n: number): number => Math.max(0, Math.min(100, n))
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /**
- * Share of allocations respected, weighted by allocation size, over every month given. A line is respected when spent
- * does not exceed allocated. A line with no allocation has no ratio (varianceBp is null for the same reason) and is left out.
+ * Share of allocations respected, weighted by allocation size, pooled over the completed months with data (one ratio over
+ * all their lines, not an average of monthly scores). Left out: a month with `hasData` false (its lines come from the
+ * allocations, so they exist with nothing spent and would all read as respected), a month still in progress
+ * (`partial`: a part-month of spending against a whole month's allocation), and any line with no allocation (no ratio,
+ * as varianceBp is null for the same reason). A category line is respected when spent does not exceed allocated; a
+ * savings-goal line when it is met, spent not below allocated. The score is 100 only when every line was respected.
  */
 export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasData: boolean }[]): Component {
   // Two kinds of month are not evidence. A month with no records still has lines (they come from the allocations) with
@@ -86,7 +90,7 @@ export function improvement(points: readonly MonthPoint[]): Component {
   if (usable.length < MIN_IMPROVEMENT_MONTHS) {
     return {
       kind: 'not-measured',
-      why: `Not enough months recorded yet: this compares the last ${BASELINE_WINDOW} against the ${BASELINE_WINDOW} before them, so it needs ${MIN_IMPROVEMENT_MONTHS} and there ${usable.length === 1 ? 'is' : 'are'} ${usable.length}.`,
+      why: `Not enough months recorded yet: this compares the latest ${BASELINE_WINDOW} months with spending recorded against the ${BASELINE_WINDOW} earlier ones, so it needs ${MIN_IMPROVEMENT_MONTHS} and there ${usable.length === 1 ? 'is' : 'are'} ${usable.length}.`,
     }
   }
   const recent = usable.slice(-BASELINE_WINDOW)

@@ -51,7 +51,7 @@ describe('budgetAwareness', () => {
     expect(c.kind).toBe('not-measured')
   })
 
-  it('pools every month, and counts spending exactly at the allocation as respected', () => {
+  it('pools the completed months with data, and counts spending exactly at the allocation as respected', () => {
     // Jan: 3000 allocated, spent 3000 (respected). Feb: 2000 allocated, spent 2001 (over). Respected 3000 of 5000 = 60.
     const c = budgetAwareness([bm(budget('2026-01', [line(3000, 3000)])), bm(budget('2026-02', [line(2000, 2001)]))])
     expect(c).toMatchObject({ kind: 'measured', score: 60 })
