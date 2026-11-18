@@ -2,6 +2,7 @@ import { db } from '../db/db'
 import { resolveMany } from '../db/annotations'
 import type { TransactionRow } from '../db/schema'
 import { annotatedTransactions } from '../learning/regret'
+import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { cached } from '../analytics/cache'
 import { addDays, isoWeekday } from '../lib/dates'
 import { mannWhitneyU, spearmanRhoBp } from './stats'
@@ -43,15 +44,17 @@ interface Spend {
   moodId: string | null
   valence: number | null      // null: the mood has no valence (Other, or custom and unassigned): unusable, not zero
   discretionary: boolean
+  /** The resolved category's kind; null for an uncategorised spend, which is not evidence either way. */
+  categoryKind: string | null
 }
 
-async function loadSpends(keep: Parameters<typeof annotatedTransactions>[0]): Promise<Spend[]> {
-  const bank: TransactionRow[] = await annotatedTransactions(keep)
+/** Spends among `bank` rows: the kind is the owner's (§43), the sign, amount and date the bank's. */
+async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const byId = new Map(bank.map(t => [t.id, t]))
   const resolved = await resolveMany(bank)
   const [moods, categories] = await Promise.all([db.moods.toArray(), db.categories.toArray()])
   const valence = new Map(moods.map(m => [m.id, m.valence]))
-  const discretionary = new Set(categories.filter(c => c.kind === 'discretionary').map(c => c.id))
+  const kindOf = new Map(categories.map(c => [c.id, c.kind as string]))
   const out: Spend[] = []
   for (const r of resolved) {
     const t = byId.get(r.id)
@@ -62,11 +65,19 @@ async function loadSpends(keep: Parameters<typeof annotatedTransactions>[0]): Pr
       date: t.valueDate,
       moodId: r.moodId,
       valence: r.moodId === null ? null : valence.get(r.moodId) ?? null,
-      discretionary: r.categoryId !== null && discretionary.has(r.categoryId),
+      discretionary: r.categoryId !== null && kindOf.get(r.categoryId) === 'discretionary',
+      categoryKind: r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null,
     })
   }
   return out
 }
+
+/**
+ * Mood and stress read ANNOTATIONS: a mood exists only as an annotation, so a purchase with no mood cannot enter a mood
+ * correlation. That limit is intrinsic and belongs in the finding's limitation line.
+ */
+const loadAnnotatedSpends = async (keep: Parameters<typeof annotatedTransactions>[0]): Promise<Spend[]> =>
+  spendsOf(await annotatedTransactions(keep))
 
 const EMPTY: BatteryData = {
   discretionarySpendsWithMood: 0, moodGroupsOfTen: 0, weeksOfMoodCoverage: 0, stressedSpends: 0, unstressedSpends: 0,
@@ -94,7 +105,7 @@ const weekendKey = (date: string): string => (isoWeekday(date) === 7 ? addDays(d
 
 export function moodAmount(computedAt: number): Promise<RankResult> {
   return cached('battery.rank.mood-amount', async (): Promise<RankResult> => {
-    const all = await loadSpends(a => a.moodId !== null)
+    const all = await loadAnnotatedSpends(a => a.moodId !== null)
     // A null valence is unusable, not neutral: those rows are left out of the count and of the statistic.
     const usable = all.filter(s => s.discretionary && s.valence !== null)
     const perMood = new Map<string, number>()
@@ -113,13 +124,22 @@ export function moodAmount(computedAt: number): Promise<RankResult> {
 
 export function stressDiscretionary(computedAt: number): Promise<RankResult> {
   return cached('battery.rank.stress-discretionary', async (): Promise<RankResult> => {
-    const spends = (await loadSpends(a => a.moodId !== null)).filter(s => s.moodId !== null)
+    // Only essential and discretionary spends are evidence about the SHARE of spending that is discretionary:
+    // an uncategorised spend (or a savings or internal one) says nothing either way and is left out of both groups
+    // and of the gate counts.
+    const spends = (await loadAnnotatedSpends(a => a.moodId !== null))
+      .filter(s => s.moodId !== null && (s.categoryKind === 'discretionary' || s.categoryKind === 'essential'))
     const stressed = spends.filter(s => s.moodId === STRESSED_MOOD)
     const calm = spends.filter(s => s.moodId !== STRESSED_MOOD)
     const short = unmet('stress-discretionary', { stressedSpends: stressed.length, unstressedSpends: calm.length })
     if (short.length > 0) return short
-    // a = the STRESSED purchases, b = the rest: a POSITIVE r means the stressed purchases were the larger ones.
-    const mw = mannWhitneyU(stressed.map(s => s.centsOut), calm.map(s => s.centsOut))
+    // Each spend is 1 if discretionary, 0 if essential. With two values, Kerby's r is exactly P(a discretionary | a
+    // stressed spend) minus P(discretionary | a non-stressed spend), in basis points: the share difference itself.
+    // a = the STRESSED spends: a POSITIVE r means stress shifted spending toward discretionary.
+    // Ties are heavy (two distinct values). doubledRanks-style tie handling is exact in uDoubled, and the variance's tie
+    // correction is deliberately omitted throughout this module, which makes the bracket slightly conservative, not
+    // wrong. Do not add one.
+    const mw = mannWhitneyU(stressed.map(s => (s.discretionary ? 1 : 0)), calm.map(s => (s.discretionary ? 1 : 0)))
     if (mw === null) return unusable(0, 1, 'There are no purchases to compare yet.')
     return {
       effectBp: mw.rBp,
@@ -130,9 +150,15 @@ export function stressDiscretionary(computedAt: number): Promise<RankResult> {
   }, computedAt)
 }
 
-export function weekend(computedAt: number): Promise<RankResult> {
-  return cached('battery.rank.weekend', async (): Promise<RankResult> => {
-    const spends = await loadSpends(() => true)
+/**
+ * `firstMonth` and `lastMonth` ('YYYY-MM') bound the read and are the period reported on: the caller (the screen) names
+ * the window. Unlike mood and stress, the weekend effect reads LIVE transactions, not annotations: nothing in it is
+ * classified by the owner (the weekday is the bank's date, the figure the bank's amount), so restricting it to rows the
+ * owner happened to annotate would bias it for no reason. A month range is the sanctioned bounded read (§39.4).
+ */
+export function weekend(firstMonth: string, lastMonth: string, computedAt: number): Promise<RankResult> {
+  return cached(`battery.rank.weekend.${firstMonth}.${lastMonth}`, async (): Promise<RankResult> => {
+    const spends = await spendsOf(await liveTransactionsBetween(firstMonth, lastMonth))
     // By the BANK date: a date the owner typed in does not move a purchase across the weekend line.
     const onWeekend = spends.filter(s => isoWeekday(s.date) >= 6)
     const onWeekday = spends.filter(s => isoWeekday(s.date) < 6)

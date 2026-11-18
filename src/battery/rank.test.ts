@@ -70,8 +70,8 @@ describe('moodAmount', () => {
     // rho = 2000 / sqrt(2000 * 2247.5) = 2000 / 2120.14 = 0.94333 -> 9433 bp.
     expect(Math.abs(r.effectBp - 9433)).toBeLessThanOrEqual(1)
     expect(r.n).toBe(30)
-    // n = 30, rho .943: far beyond the 1 % critical value, so it is a finding. Which finer bracket is critical.ts's business.
-    expect(r.bracket).not.toBe('none')
+    // n = 30, rho .943: rho * sqrt(n-1) = 5.08, past the 3.29 critical of p < 0.001.
+    expect(r.bracket).toBe('p<0.001')
   })
 
   it('treats a mood with no valence as unusable rather than as zero', async () => {
@@ -116,28 +116,63 @@ describe('moodAmount', () => {
 })
 
 describe('stressDiscretionary', () => {
-  it('compares stressed against non-stressed spends and reports the effect size', async () => {
-    // Stressed amounts 10..19 (x100 cents), calm 5..14. a = stressed, b = calm.
-    // Pairs 100. a>b iff j < 5+i: i=0..4 give 5,6,7,8,9 = 35; i=5..9 give 10 each = 50 -> wins 85.
-    // ties: j = 5+i for i=0..4 -> 5. losses = 100-85-5 = 10. r = (85-10)/100 = +0.75 -> 7500 bp (stressed spent more).
-    // Normal approximation: U = 85 + 5/2 = 87.5, mean 50, sd sqrt(10*10*21/12) = 13.23,
-    // z = (37.5 - 0.5)/13.23 = 2.80 > 2.576, so p < 0.01.
+  const ess = async (): Promise<string> => (await db.categories.toArray()).find(c => c.kind === 'essential')!.id
+  /** `n` spends in `mood`, the first `disc` of them discretionary and the rest essential. */
+  async function seedGroup(prefix: string, mood: string, n: number, disc: number, extra: Partial<TransactionRow> = {}): Promise<void> {
+    const e = await ess()
     const txs: TransactionRow[] = []; const anns: AnnotationRow[] = []
-    for (let i = 0; i < 10; i++) {
-      txs.push(tx(`s${i}`, { amountCents: -(1000 + 100 * i) })); anns.push(ann(`s${i}`, { moodId: 'mood.stressed' }))
-      txs.push(tx(`c${i}`, { amountCents: -(500 + 100 * i) })); anns.push(ann(`c${i}`, { moodId: 'mood.happy' }))
+    for (let i = 0; i < n; i++) {
+      txs.push(tx(`${prefix}${i}`, extra)); anns.push(ann(`${prefix}${i}`, { moodId: mood, categoryId: i < disc ? cat : e }))
     }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
+  }
+
+  it('compares stressed against non-stressed spends and reports the effect size', async () => {
+    // Each spend is 1 (discretionary) or 0 (essential). Stressed: 9 of 10 discretionary; calm: 2 of 10. a = stressed.
+    // wins (a=1 vs b=0) = 9*8 = 72; losses (a=0 vs b=1) = 1*2 = 2; ties = 100-74 = 26.
+    // r = (72-2)/100 = +0.70 -> 7000 bp, which is 0.9 - 0.2 = the difference in share. uDoubled = 2*72+26 = 170.
+    // Normal approximation: D = 70, (|D|-1)/2 = 34.5, 34.5^2 / V = 1190.25 / (10*10*21/12 = 175) = 6.80,
+    // above 2.576^2 = 6.64 (p < 0.01) and below 3.29^2 = 10.83 (not p < 0.001).
+    await seedGroup('s', 'mood.stressed', 10, 9)
+    await seedGroup('c', 'mood.happy', 10, 2)
     const r = finding(await stressDiscretionary(1))
-    expect(r.effectBp).toBe(7500)
+    expect(r.effectBp).toBe(7000)
     expect(r.bracket).toBe('p<0.01')
     expect(r.n).toBe(20)
   })
 
-  it('withholds when either side is short, naming what is short', async () => {
+  it('leaves uncategorised spends out of both groups', async () => {
+    // Ten stressed and ten calm categorised spends, plus uncategorised ones in each that would change the answer
+    // if they were counted as essential (0): 10 extra stressed zeros would drag the stressed share down.
+    await seedGroup('s', 'mood.stressed', 10, 9)
+    await seedGroup('c', 'mood.happy', 10, 2)
     const txs: TransactionRow[] = []; const anns: AnnotationRow[] = []
-    for (let i = 0; i < 10; i++) { txs.push(tx(`s${i}`)); anns.push(ann(`s${i}`, { moodId: 'mood.stressed' })) }
-    for (let i = 0; i < 9; i++) { txs.push(tx(`c${i}`)); anns.push(ann(`c${i}`, { moodId: 'mood.happy' })) }
+    for (let i = 0; i < 10; i++) { txs.push(tx(`u${i}`)); anns.push(ann(`u${i}`, { moodId: 'mood.stressed' })) }
+    await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
+    const r = finding(await stressDiscretionary(1))
+    expect(r.effectBp).toBe(7000)
+    expect(r.n).toBe(20)
+  })
+
+  it('leaves savings spends out, since they are neither essential nor discretionary', async () => {
+    // Ten stressed spends in a savings category: counted as 0 they would pull the stressed share down and move r.
+    await seedGroup('s', 'mood.stressed', 10, 9)
+    await seedGroup('c', 'mood.happy', 10, 2)
+    const sav = (await db.categories.toArray()).find(c => c.kind === 'savings')!.id
+    const txs: TransactionRow[] = []; const anns: AnnotationRow[] = []
+    for (let i = 0; i < 10; i++) { txs.push(tx(`v${i}`)); anns.push(ann(`v${i}`, { moodId: 'mood.stressed', categoryId: sav })) }
+    await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
+    const r = finding(await stressDiscretionary(1))
+    expect(r.effectBp).toBe(7000)
+    expect(r.n).toBe(20)
+  })
+
+  it('withholds when either side is short, naming what is short', async () => {
+    // 10 stressed, 9 calm categorised; three uncategorised calm ones must not make up the difference.
+    await seedGroup('s', 'mood.stressed', 10, 5)
+    await seedGroup('c', 'mood.happy', 9, 5)
+    const txs: TransactionRow[] = []; const anns: AnnotationRow[] = []
+    for (let i = 0; i < 3; i++) { txs.push(tx(`u${i}`)); anns.push(ann(`u${i}`, { moodId: 'mood.happy' })) }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
     const r = await stressDiscretionary(1)
     expect(r).toEqual([{ have: 9, need: 10, what: gateText('stress-discretionary', 1, { stressedSpends: 10, unstressedSpends: 9 }) }])
@@ -145,12 +180,13 @@ describe('stressDiscretionary', () => {
 
   it('reports the period it covered, from the bank dates', async () => {
     // Bank dates run 2026-01-03 .. 2026-02-21; the owner's typed dates (2020 and 2030) must not widen it.
+    const e = await ess()
     const txs: TransactionRow[] = []; const anns: AnnotationRow[] = []
     for (let i = 0; i < 10; i++) {
       const date = i === 0 ? '2026-01-03' : i === 9 ? '2026-02-21' : '2026-01-20'
       txs.push(tx(`s${i}`, { valueDate: date }))
-      anns.push(ann(`s${i}`, { moodId: 'mood.stressed', dateOverride: i === 0 ? '2020-01-01' : '2030-12-31' }))
-      txs.push(tx(`c${i}`, { valueDate: '2026-01-25' })); anns.push(ann(`c${i}`, { moodId: 'mood.happy' }))
+      anns.push(ann(`s${i}`, { moodId: 'mood.stressed', categoryId: cat, dateOverride: i === 0 ? '2020-01-01' : '2030-12-31' }))
+      txs.push(tx(`c${i}`, { valueDate: '2026-01-25' })); anns.push(ann(`c${i}`, { moodId: 'mood.happy', categoryId: e }))
     }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
     const r = finding(await stressDiscretionary(1))
@@ -178,11 +214,33 @@ describe('weekend', () => {
     // Bank: the large spends are on Saturdays. The owner "moved" each onto a Monday and each small one onto a Saturday.
     // Resolved dates would put the small spends on the weekend and report r = -10000.
     // Every weekend value exceeds every weekday value: wins 64, losses 0, r = +10000; uDoubled 128 = 2 * pairs.
-    // Normal approximation: mean 32, sd sqrt(8*8*17/12) = 9.52, z = (32 - 0.5)/9.52 = 3.31 > 2.576, so p < 0.01.
+    // Normal approximation: mean 32, sd sqrt(8*8*17/12) = 9.52, z = (32 - 0.5)/9.52 = 3.31 > 2.576, so p < 0.001.
     await seedWeekends(true)
-    const r = finding(await weekend(1))
+    const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.effectBp).toBe(10000) // positive: weekend purchases were the larger
-    expect(r.bracket).not.toBe('none') // z = 3.31, past the 1 % critical value
+    expect(r.bracket).toBe('p<0.001') // z = 3.31 > 3.29
+    expect(r.n).toBe(16)
+  })
+
+  it('reads transactions the owner never annotated', async () => {
+    // Eight Saturdays and eight Mondays with no annotation at all: the weekend is the bank's date, so none is needed.
+    const txs: TransactionRow[] = []
+    for (let i = 0; i < 8; i++) {
+      txs.push(tx(`w${i}`, { valueDate: addWeeks('2026-01-03', i), amountCents: -(5000 + 100 * i) }))
+      txs.push(tx(`d${i}`, { valueDate: addWeeks('2026-01-05', i), amountCents: -(1000 + 100 * i) }))
+    }
+    await db.transactions.bulkAdd(txs)
+    const r = finding(await weekend('2026-01', '2026-03', 1))
+    expect(r.effectBp).toBe(10000)
+    expect(r.n).toBe(16)
+    expect(r.period).toEqual({ from: '2026-01-03', to: '2026-02-23' })
+  })
+
+  it('leaves out transactions outside the month range it was asked about', async () => {
+    // The same sixteen spends, plus a huge weekday spend in June that a whole-table read would include.
+    await seedWeekends(false)
+    await db.transactions.add(tx('far', { valueDate: '2026-06-01', amountCents: -900000 }))
+    const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.n).toBe(16)
   })
 
@@ -199,7 +257,7 @@ describe('weekend', () => {
       for (const [id, valueDate, cents] of rows) { txs.push(tx(id, { valueDate, amountCents: -cents })); anns.push(ann(id)) }
     }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
-    const r = finding(await weekend(1))
+    const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.effectBp).toBe(10000)
     expect(r.n).toBe(32)
   })
@@ -213,14 +271,14 @@ describe('weekend', () => {
       txs.push(tx(`mo${i}`, { valueDate: addWeeks('2026-01-05', i), amountCents: -(1000 + 100 * i) })); anns.push(ann(`mo${i}`))
     }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
-    expect(finding(await weekend(1)).effectBp).toBe(10000)
+    expect(finding(await weekend('2026-01', '2026-03', 1)).effectBp).toBe(10000)
   })
 
   it('returns a real effect with no bracket when the groups are below the statistical floor', async () => {
     // Eight weekends meet the gate, but only 3 weekday spends: below the 8-per-group floor. All 8 weekend values
     // exceed all 3 weekday values, so r = +10000, and the bracket is 'none': an effect not yet certain, not an error.
     await seedWeekends(false, 3)
-    const r = finding(await weekend(1))
+    const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.effectBp).toBe(10000)
     expect(r.bracket).toBe('none')
   })
@@ -234,6 +292,6 @@ describe('weekend', () => {
       txs.push(tx(`d${i}`, { valueDate: addWeeks('2026-01-05', i) })); anns.push(ann(`d${i}`))
     }
     await db.transactions.bulkAdd(txs); await db.annotations.bulkAdd(anns)
-    expect(await weekend(1)).toEqual([{ have: 7, need: 8, what: gateText('weekend', 0, { weekendsObserved: 7 }) }])
+    expect(await weekend('2026-01', '2026-03', 1)).toEqual([{ have: 7, need: 8, what: gateText('weekend', 0, { weekendsObserved: 7 }) }])
   })
 })
