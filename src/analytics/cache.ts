@@ -1,11 +1,11 @@
 import { db, ENGINE_VERSION } from '../db/db'
-import type { AnalyticsCacheRow, BudgetAllocationRow } from '../db/schema'
+import type { AnalyticsCacheRow, BudgetAllocationRow, SavingsGoalRow } from '../db/schema'
 import { sha256Hex } from '../lib/hash'
 
 /**
  * A derived-figure cache that is either current or absent: a figure the owner reads is never one produced by an older formula
  * or from older data (design 7.1). Every cache row is disposable, so this module only ever READS the tables a figure is
- * computed from (transactions, annotations, transfers, budgetAllocations) and only ever writes analyticsCache. The durable
+ * computed from (transactions, annotations, transfers, budgetAllocations, savingsGoals) and only ever writes analyticsCache. The durable
  * truth (transactions, annotations, learningEvents) is never touched here.
  * Any restore of a backup already clears the table (design 31.3, the backup module), so nothing here repeats that.
  */
@@ -43,6 +43,14 @@ const allocationText = (a: BudgetAllocationRow): string =>
   JSON.stringify([a.id, a.categoryId, a.savingsGoalId, a.percentBp, a.fixedCents, a.effectiveFrom, a.note])
 
 /**
+ * One savings goal as text, for the content digest below, built exactly as allocationText is: every field named, in a fixed
+ * order, JSON-escaped (`name` is free text). A field added to SavingsGoalRow later must be added here too, or a change to it
+ * is invisible. `archived` and `completedAt` are in on purpose: archiving or completing a goal changes what a budget shows.
+ */
+const goalText = (g: SavingsGoalRow): string =>
+  JSON.stringify([g.id, g.name, g.targetCents, g.deadline, g.contributionPercentBp, g.createdAt, g.completedAt, g.archived])
+
+/**
  * WHICH TABLES A CACHED FIGURE IS COMPUTED FROM, and what this digest therefore has to key on.
  *
  * That is the question this comment exists to answer, because the version before it did not ask it. It reasoned carefully
@@ -54,7 +62,7 @@ const allocationText = (a: BudgetAllocationRow): string =>
  *                              (income.ts `exclusions`) and subtracts it from its purchase's category (`refundSubtractions`);
  *   budgetAllocations          what is budgeted, and therefore which line owns each euro (most-specific-wins);
  *   categories, savingsGoals   the names and kinds those lines are built from.
- * Four of the six are digested below. The two that are not are named at the end, with the reason and what would change it.
+ * Five of the six are digested below. The one that is not is named at the end, with the reason and what would change it.
  *
  * Each table is keyed on the cheapest thing that cannot miss the changes that table can actually undergo — which is a
  * DIFFERENT key per table, because the writers differ. A uniform "hash every row of every table" would be slower and no
@@ -85,23 +93,26 @@ const allocationText = (a: BudgetAllocationRow): string =>
  *   note } and nothing more. The cost is one full read of a tiny table: one row per budgeted category or goal, which is a
  *   handful, not a ledger.
  *
+ * savingsGoals — the CONTENT of every row, serialised like allocations and for the same reason. A goal is edited IN PLACE:
+ *   updateGoal in the goals store puts the row back under its own id, so a new target, name, deadline or share, and an
+ *   archive or completion, are all the same id with different content, which neither a count nor a key set can see. The
+ *   row has no timestamp that moves on an edit (createdAt is fixed at creation), so there is nothing cheaper to key on.
+ *   The cost is one full read of a tiny table: one row per goal the owner has set, a handful.
+ *
  * What is still NOT covered, stated rather than left to silence:
  *
- * categories and savingsGoals are read by monthlyBudget and are not digested, because today they cannot change under a
- *   cached figure. Nothing outside seeding and import writes categories, and an import creates a category only alongside at
- *   least one new transaction (commitPreview refuses an import with nothing new), which moves the digest anyway. Nothing in
- *   the app creates or edits a savings goal at all — the Goals screen is a stub. The same holds for the two label tables
- *   `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else does.
- *   So the first screen that renames a category, a mood or a reason, or that creates or edits a savings goal, has to add its
- *   table to this digest — a rename leaves a cached figure carrying the old label, and an edited goal makes a budget line
- *   wrong rather than merely mislabelled. Nothing enforces this yet. The durable-truth guard in cache.test.ts scans only
- *   this file, so it fires only if someone adds a read of one of those four tables inside this module; a new Goals or
- *   rename screen that writes to them (a put on the categories table, say) trips no test at all. A rule over every writer of
- *   those tables, across the whole source tree, does not exist; until it does, noticing this paragraph is on whoever adds
- *   such a screen. A goal screen should digest
- *   savingsGoals by content, for the same reason allocations are:
- *   editing a goal's target is an in-place put. A rename screen for a label table could get away with a count plus a hash of
- *   the names.
+ * categories is read by monthlyBudget and is not digested, because today it cannot change under a cached figure. Nothing
+ *   outside seeding and import writes categories, and an import creates a category only alongside at least one new
+ *   transaction (commitPreview refuses an import with nothing new), which moves the digest anyway. The same holds for the two
+ *   label tables `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else
+ *   does. So the first screen that renames a category, a mood or a reason has to add its table to this digest — a rename
+ *   leaves a cached figure carrying the old label. A rename screen could get away with a count plus a hash of the names.
+ *   Nothing enforces this yet. The durable-truth guard in cache.test.ts scans only this file, so it fires only if someone
+ *   adds a read of one of those three tables inside this module; a screen that writes to them (a put on the categories
+ *   table, say) trips no test at all. A rule over every writer of those tables, across the whole source tree, does not
+ *   exist; until it does, noticing this paragraph is on whoever adds such a screen.
+ *   (savingsGoals used to be in this list, when nothing could create or edit a goal. The goals store now does, and the digest
+ *   above covers it. A new writer of that table needs nothing here, provided it keeps every goal field in goalText.)
  * Merchant naming is not in that list: it goes through rememberMerchantName, which writes an annotation as part of the same
  *   transaction, so it already moves the digest — and no cached figure carries a merchant name in any case.
  *
@@ -125,10 +136,12 @@ export async function inputsHash(): Promise<string> {
   // place is safe, and sorting is what makes the digest independent of the order the keys happen to come back in.
   const transfers = (await db.transfers.toCollection().primaryKeys()).map(String).sort()
   const allocations = (await db.budgetAllocations.toArray()).map(allocationText).sort()
+  const goals = (await db.savingsGoals.toArray()).map(goalText).sort()
   const joined = [
     `live=${total - deleted}`, `deleted=${deleted}`, `newestDeleted=${newestDeleted}`,
     `annotations=${annotations}`, `newest=${newest}`,
     `transfers=${JSON.stringify(transfers)}`, `allocations=${JSON.stringify(allocations)}`,
+    `goals=${JSON.stringify(goals)}`,
   ].join('|')
   return sha256Hex(new TextEncoder().encode(joined))
 }

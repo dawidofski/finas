@@ -3,12 +3,13 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
-import type { AnnotationRow, BudgetAllocationRow, TransactionRow } from '../db/schema'
+import type { AnnotationRow, BudgetAllocationRow, SavingsGoalRow, TransactionRow } from '../db/schema'
 import { deleteAllocation, saveAllocation } from '../budget/allocations'
 import { monthlyBudget } from '../budget/month'
 import { linkRefund, unlinkRefund } from '../import/refunds'
 import { ENGINE_VERSION, cached, inputsHash, rebuildAnalytics } from './cache'
 import { monthSummary } from './monthly'
+import { archiveGoal, completeGoal, createGoal, updateGoal } from '../goals/store'
 
 let uid = 0
 const tx = async (id: string, deletedAt: number | null = null): Promise<void> => {
@@ -270,6 +271,94 @@ describe('figures that depend on tables other than transactions and annotations'
     expect(await allocated(2)).toEqual([40000])
   })
 
+  describe('savings goals, digested by content', () => {
+    const AT = Date.UTC(2026, 10, 5, 12)
+    const input = { name: 'Viaje inventado', targetCents: 120000, deadline: '2027-06-30', contributionPercentBp: 1000 }
+    const edits: [string, (id: string) => Promise<void>][] = [
+      ['target', (id) => updateGoal(id, { targetCents: 130000 })],
+      ['percentage', (id) => updateGoal(id, { contributionPercentBp: 1500 })],
+      ['name', (id) => updateGoal(id, { name: 'Otro nombre' })],
+      ['deadline', (id) => updateGoal(id, { deadline: '2027-07-01' })],
+      ['archived', (id) => archiveGoal(id)],
+      ['completedAt', (id) => completeGoal(id, AT + 5)],
+    ]
+
+    it('moves the digest when a goal is created', async () => {
+      const before = await inputsHash()
+      await createGoal(input, AT)
+      expect(await inputsHash()).not.toBe(before)
+    })
+
+    for (const [field, edit] of edits) {
+      it(`moves the digest when only the goal ${field} is edited, though the count and id set are unchanged`, async () => {
+        const g = await createGoal(input, AT)
+        const before = await inputsHash()
+        const goalsBefore = JSON.stringify(await db.savingsGoals.toCollection().primaryKeys())
+        await edit(g.id)
+        expect(JSON.stringify(await db.savingsGoals.toCollection().primaryKeys())).toBe(goalsBefore)
+        expect(await inputsHash()).not.toBe(before)
+      })
+    }
+
+    // Each field alone, written straight to the goal row so no allocation moves with it: the digest must see the goal table itself.
+    const rowEdits: [string, (g: SavingsGoalRow) => SavingsGoalRow][] = [
+      ['name', (g) => ({ ...g, name: 'Otro' })],
+      ['targetCents', (g) => ({ ...g, targetCents: g.targetCents + 1 })],
+      ['deadline', (g) => ({ ...g, deadline: '2028-01-01' })],
+      ['contributionPercentBp', (g) => ({ ...g, contributionPercentBp: g.contributionPercentBp + 1 })],
+      ['createdAt', (g) => ({ ...g, createdAt: g.createdAt + 1 })],
+      ['completedAt', (g) => ({ ...g, completedAt: 99 })],
+      ['archived', (g) => ({ ...g, archived: true })],
+    ]
+    for (const [field, change] of rowEdits) {
+      it(`moves the digest when only the goal row's ${field} changes and no other table does`, async () => {
+        const g = await createGoal(input, AT)
+        const before = await inputsHash()
+        const allocBefore = JSON.stringify(await db.budgetAllocations.toArray())
+        await db.savingsGoals.put(change(g))
+        expect(JSON.stringify(await db.budgetAllocations.toArray())).toBe(allocBefore)
+        expect(await inputsHash()).not.toBe(before)
+      })
+    }
+
+    it('digests the goal fields by content, not by the allocation that moves with the percentage', async () => {
+      const g = await createGoal(input, AT)
+      const before = await inputsHash()
+      const allocBefore = JSON.stringify(await db.budgetAllocations.toArray())
+      await updateGoal(g.id, { targetCents: 130000 })
+      expect(JSON.stringify(await db.budgetAllocations.toArray())).toBe(allocBefore) // only the goal row moved
+      expect(await inputsHash()).not.toBe(before)
+    })
+
+    it('does not change the digest when nothing about any goal changed', async () => {
+      const g = await createGoal(input, AT)
+      await createGoal({ ...input, name: 'Segundo' }, AT)
+      const before = await inputsHash()
+      await updateGoal(g.id, { name: input.name, targetCents: input.targetCents, contributionPercentBp: input.contributionPercentBp })
+      expect(await inputsHash()).toBe(before)
+      expect(await inputsHash()).toBe(before)
+    })
+
+    it('does not move for a change to some other table alone, and the goal table alone moves it', async () => {
+      const g = await createGoal(input, AT)
+      const before = await inputsHash()
+      await db.savingsGoals.put({ ...g, archived: true }) // the goal table alone, no allocation touched
+      const afterGoal = await inputsHash()
+      expect(afterGoal).not.toBe(before)
+      await db.savingsGoals.put(g)
+      expect(await inputsHash()).toBe(before)
+    })
+
+    it('recomputes a cached figure when a goal target is edited', async () => {
+      const g = await createGoal(input, AT)
+      const figure = async (computedAt: number): Promise<number[]> =>
+        cached('goal-targets', async () => (await db.savingsGoals.toArray()).map((x) => x.targetCents), computedAt)
+      expect(await figure(1)).toEqual([120000])
+      await updateGoal(g.id, { targetCents: 130000 })
+      expect(await figure(2)).toEqual([130000])
+    })
+  })
+
   it('moves the digest when one refund link is swapped for another, though the transfer count is equal both times', async () => {
     await addTx({ id: 'sp1', valueDate: '2026-11-01', amountCents: -5000 })
     await addTx({ id: 'sp2', valueDate: '2026-11-02', amountCents: -5000 })
@@ -331,7 +420,7 @@ describe('durable truth', () => {
   // touch durable data. `transfers` and `budgetAllocations` joined the readable list when the digest started keying on them
   // (a refund link and a budget change both move every figure and moved nothing this module looked at); the rule the test
   // enforces is unchanged — read freely, write only the disposable table.
-  const readable = ['transactions', 'annotations', 'transfers', 'budgetAllocations']
+  const readable = ['transactions', 'annotations', 'transfers', 'budgetAllocations', 'savingsGoals']
   const readOnly = new Set(['count', 'where', 'above', 'each', 'get', 'toArray', 'orderBy', 'first', 'last', 'toCollection', 'primaryKeys'])
   const violations = (text: string): string[] => {
     const out: string[] = []
@@ -359,11 +448,12 @@ describe('durable truth', () => {
       // The two tables the digest learned to read are readable, not writable: this module must never link a refund or
       // change an allocation, however convenient that would be.
       'db.transfers.add(row)', "db.transfers.delete('t1')", 'db.budgetAllocations.put(row)', 'db.budgetAllocations.clear()',
-      'const a = db.budgetAllocations', 'db.savingsGoals.toArray()', 'db.categories.toArray()',
+      'const a = db.budgetAllocations', 'db.savingsGoals.put(row)', 'db.savingsGoals.clear()', 'const g = db.savingsGoals',
+      'db.categories.toArray()',
     ]) expect(violations(bad), bad).not.toEqual([])
     for (const good of [
       'db.transactions.count()', "db.transactions.where('deletedAt').above(-Infinity).count()", 'db.analyticsCache.put(x)',
-      'db.annotations.each(f)', 'db.transfers.toCollection().primaryKeys()', 'db.budgetAllocations.toArray()',
+      'db.annotations.each(f)', 'db.transfers.toCollection().primaryKeys()', 'db.budgetAllocations.toArray()', 'db.savingsGoals.toArray()',
     ]) {
       expect(violations(good), good).toEqual([])
     }
