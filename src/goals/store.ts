@@ -80,7 +80,9 @@ export async function createGoal(input: GoalInput, at: number): Promise<SavingsG
 
 /**
  * Edits a goal. Fields absent from the patch are left alone. A changed percentage ALWAYS starts a new allocation on the
- * UTC day `at` falls in; nothing is ever edited in place, because that would change the share of months already lived.
+ * UTC day `at` falls in; nothing is ever edited in place, because that would change the share of months already lived. The new
+ * percentage governs the whole of the month `at` falls in (the allocation in force on a month's last day governs it), so
+ * that month is shared at the new rate from its first day; months before it keep the rate they had.
  * "Changed" is judged against the allocation actually in force that day, not against the goal row: a Budget-screen edit can
  * leave the two disagreeing. The goal is read inside the transaction, so a concurrent edit is not overwritten by a stale copy.
  */
@@ -113,9 +115,10 @@ export async function updateGoal(
 }
 
 /**
- * Ends a goal's allocation from the UTC day `at` falls in, by writing a zero one effective that day. Without this a retired
- * goal would keep taking its share of every month's savings, understating every live goal and losing the difference from
- * view. Earlier allocations stay, so past contributions remain computable.
+ * Ends a goal's allocation by writing a zero one effective on the UTC day `at` falls in. The allocation in force on a month's
+ * LAST day governs that whole month, so the goal takes nothing from the whole of that month (its first days included) and from
+ * every month after. Without this a retired goal would keep taking its share of every month's savings, understating every
+ * live goal and losing the difference from view. Allocations of earlier months stay, so past contributions remain computable.
  */
 async function endAllocation(id: string, at: number): Promise<void> {
   await saveAllocation({
@@ -124,8 +127,8 @@ async function endAllocation(id: string, at: number): Promise<void> {
 }
 
 /**
- * Archives a goal. Nothing is deleted: the row and every earlier allocation stay. From the day `at` the goal's allocation is
- * zero, so it stops absorbing savings. Archiving a goal already archived changes nothing.
+ * Archives a goal. Nothing is deleted: the row and every earlier allocation stay. From the whole month `at` falls in, and every month after, the
+ * goal's allocation is zero, so it stops absorbing savings. Archiving a goal already archived changes nothing.
  */
 export async function archiveGoal(id: string, at: number): Promise<void> {
   await db.transaction('rw', db.savingsGoals, db.budgetAllocations, async () => {
@@ -137,7 +140,7 @@ export async function archiveGoal(id: string, at: number): Promise<void> {
   })
 }
 
-/** Marks a goal reached at `at` and ends its allocation from that day. A goal already marked keeps its first completion time. */
+/** Marks a goal reached at `at` and ends its allocation for the whole month `at` falls in and every month after. A goal already marked keeps its first completion time. */
 export async function completeGoal(id: string, at: number): Promise<void> {
   await db.transaction('rw', db.savingsGoals, db.budgetAllocations, async () => {
     const goal = await db.savingsGoals.get(id)

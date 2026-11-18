@@ -3,6 +3,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow, TransferRow } from '../db/schema'
 import { saveAllocation } from './allocations'
+import { archiveGoal, completeGoal } from '../goals/store'
 import { monthlyBudget } from './month'
 import { resolveMany } from '../db/annotations'
 
@@ -632,6 +633,28 @@ describe('monthlyBudget goal lines', () => {
     await tx('s1', '2026-11-05', -2000, ROUNDUP, 'roundup')
     expect(await line('goal.1')).toMatchObject({ spentCents: 2000 })
     expect(await line('goal.2')).toMatchObject({ allocatedCents: 0, spentCents: 0, varianceBp: null })
+  })
+
+  it('omits the line of an archived or completed goal once its allocation is zero, but keeps every month before', async () => {
+    await goalAlloc('goal.1', 3000)
+    await goalAlloc('goal.2', 1000)
+    await tx('s1', '2026-11-05', -2000, ROUNDUP, 'roundup')
+    await tx('pay2', '2026-12-01', 200000)
+    await archiveGoal('goal.1', Date.UTC(2026, 11, 10)) // 2026-12-10: December and after read zero
+    await completeGoal('goal.2', Date.UTC(2027, 0, 10)) // 2027-01-10
+    const ids = async (m: string) => (await monthlyBudget(m, '2027-03-05')).lines.map((l) => l.targetId)
+    expect(await ids('2026-11')).toEqual(['goal.1', 'goal.2']) // before either ended: both lines, as they were
+    expect(await ids('2026-12')).toEqual(['goal.2']) // goal.1 archived, zero: gone
+    expect(await ids('2027-02')).toEqual([]) // both retired and zero
+    expect(await line('goal.1', '2026-11')).toMatchObject({ allocatedCents: 3000, spentCents: 1500 })
+  })
+
+  it('still shows a retired goal that has a non-zero allocation, and a live goal with a zero one', async () => {
+    await goalAlloc('goal.1', 3000)
+    await goalAlloc('goal.2', 0)
+    await db.savingsGoals.update('goal.1', { archived: true }) // retired in the row, but its allocation was never ended
+    const ids = (await monthlyBudget(NOV, TODAY)).lines.map((l) => l.targetId)
+    expect(ids).toEqual(['goal.1', 'goal.2'])
   })
 
   it('does not let savings change what a category line shows', async () => {

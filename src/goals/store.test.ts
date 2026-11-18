@@ -119,7 +119,7 @@ const inForce = async (month: string) =>
   (await allocationsFor(month)).map((a) => ({ goalId: a.savingsGoalId ?? '', allocatedCents: (a.percentBp ?? 0) * 10 }))
 
 describe('archiveGoal and completeGoal', () => {
-  it('archiving ends the allocation from that day: later months give it nothing and the other goal gets more', async () => {
+  it('archiving gives the goal nothing for the whole month it happens in and every month after, and the other goal gets more', async () => {
     const a = await createGoal(input, AT)
     const b = await createGoal({ ...input, name: 'Otra' }, AT)
     const before = attribute(10000, await inForce('2026-12'))
@@ -140,7 +140,7 @@ describe('archiveGoal and completeGoal', () => {
     await expect(archiveGoal('nope', DEC10)).rejects.toThrow(/no longer exists/)
   })
 
-  it('completing ends the allocation the same way, and only the first completion does', async () => {
+  it('completing ends the allocation the same way (the whole month it happens in and after), and only the first completion does', async () => {
     const a = await createGoal(input, AT)
     const b = await createGoal({ ...input, name: 'Otra' }, AT)
     await completeGoal(a.id, DEC10)

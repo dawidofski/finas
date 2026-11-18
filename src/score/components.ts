@@ -63,7 +63,7 @@ export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasDat
     kind: 'measured',
     // 100 means every allocation was respected: rounding must not award it while one was not.
     score: wholePoints(respected, total),
-    inputs: `You respected ${respectedLines} of ${plural(lines.length, 'allocation')} in completed months, weighted by size: ${formatEur(respected)} of ${formatEur(total)} allocated.`,
+    inputs: `You respected ${respectedLines} of ${plural(lines.length, 'allocation')} in completed months, weighted by size: ${formatEur(respected)} of ${formatEur(total)} allocated. A spending allocation counts as respected when spending stayed within it; a savings goal counts as respected only when its full planned amount was set aside that month, so a month with no savings lowers this figure.`,
   }
 }
 
@@ -184,7 +184,7 @@ export function goalProgress(goals: readonly { goal: SavingsGoalRow; progress: G
   return {
     kind: 'measured',
     score: wholePoints(funded, total),
-    inputs: `Across ${plural(counted.length, 'active savings goal')}, ${formatEur(funded)} of ${formatEur(total)} of the targets is funded, weighted by target. Each goal counts up to its own target, and a goal marked completed counts in full.`,
+    inputs: `Across ${plural(counted.length, 'savings goal')}, ${formatEur(funded)} of ${formatEur(total)} of the targets is funded, weighted by target. Each goal counts up to its own target, and a goal marked completed counts in full. Goals archived before they were completed are not counted.`,
   }
 }
 

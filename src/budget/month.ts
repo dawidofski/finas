@@ -237,7 +237,16 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
       .map((a) => ({ goalId: a.savingsGoalId as string, allocatedCents: allocatedOf(a) })),
   )
 
-  const lines: BudgetLine[] = allocations.map((a) => {
+  // A goal that is archived or completed, whose allocation has been ended (set to zero), has nothing left to show or edit:
+  // its line would sit at 0 % every later month, and removing that line would delete the zero allocation and bring the old
+  // percentage back from the month it ended. A retired goal whose allocation is NOT zero still shows, as an inconsistency worth seeing.
+  const isEnded = (a: (typeof allocations)[number]): boolean => {
+    if (a.savingsGoalId === null || a.categoryId !== null) return false
+    const g = goalById.get(a.savingsGoalId)
+    return g !== undefined && (g.archived || g.completedAt !== null) && (a.fixedCents ?? a.percentBp) === 0
+  }
+
+  const lines: BudgetLine[] = allocations.filter((a) => !isEnded(a)).map((a) => {
     const fixed = a.fixedCents !== null
     const allocatedCents = allocatedOf(a)
     const isCategory = a.categoryId !== null

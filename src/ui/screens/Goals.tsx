@@ -7,17 +7,25 @@ import { archiveGoal, completeGoal, createGoal, updateGoal } from '../../goals/s
 import { GOAL_MONTHS, goalWindow } from '../../goals/window'
 import { addMonths, formatMonthTitle, formatSpanishDate } from '../../lib/dates'
 import { centsToTypedString, formatBp, formatEur, parseTypedAmount } from '../../lib/money'
+import { allocationsFor } from '../../budget/allocations'
 
 interface Figures { goal: SavingsGoalRow; progress: GoalProgress }
-interface Loaded { figures: Figures[]; capped: boolean }
+interface Loaded { figures: Figures[]; capped: boolean; shares: Map<string, string> }
 
 async function load(today: string, computedAt: number): Promise<Loaded> {
   const goals = (await db.savingsGoals.toArray()).sort((a, b) => (a.createdAt - b.createdAt) || (a.id < b.id ? -1 : 1))
-  if (goals.length === 0) return { figures: [], capped: false }
+  if (goals.length === 0) return { figures: [], capped: false, shares: new Map() }
   const last = addMonths(today.slice(0, 7), -1)
   const { from, capped } = goalWindow(goals, last)
   const months = from > last ? [] : await goalContributions(from, last, today, computedAt)
-  return { figures: goals.map((goal) => ({ goal, progress: progressOf(goal, months, last) })), capped }
+  // The share the arithmetic uses is the allocation in force this month, which a Budget-screen edit can change; the goal row's
+  // own percentage is only what the goal was created or last edited here with.
+  const shares = new Map<string, string>()
+  for (const a of await allocationsFor(today.slice(0, 7))) {
+    if (a.savingsGoalId === null) continue
+    shares.set(a.savingsGoalId, a.fixedCents !== null ? `a fixed ${formatEur(a.fixedCents)} a month` : formatBp(a.percentBp ?? 0))
+  }
+  return { figures: goals.map((goal) => ({ goal, progress: progressOf(goal, months, last) })), capped, shares }
 }
 
 const monthName = (m: string): string => formatMonthTitle(m).replace(/ \d{4}$/, '')
@@ -29,7 +37,7 @@ export function estimateWords(p: GoalProgress): { sentence: string; note: string
   if (b === null) {
     return { sentence: `Going by your record so far, it could be reached from ${formatMonthTitle(a)} on.`, note: p.estimateNote }
   }
-  if (a === b) return { sentence: `Going by your record so far, around ${formatMonthTitle(a)}, with little room either way.`, note: p.estimateNote }
+  if (a === b) return { sentence: `Going by your record so far, your faster and slower months both point to ${formatMonthTitle(a)}.`, note: p.estimateNote }
   const sameYear = a.slice(0, 4) === b.slice(0, 4)
   return {
     sentence: `Going by your record so far, between ${sameYear ? monthName(a) : formatMonthTitle(a)} and ${formatMonthTitle(b)}.`,
@@ -83,8 +91,8 @@ function GoalForm({ initial, submitLabel, busy, error, onSubmit, onCancel, nameR
 
 const EMPTY: FormValues = { name: '', target: '', deadline: '', percent: '' }
 
-function GoalCard({ f, onEdit, onArchive, onComplete, headingRef, busy }: {
-  f: Figures; onEdit: () => void; onArchive: () => void; onComplete: () => void
+function GoalCard({ f, share, onEdit, onArchive, onComplete, headingRef, busy }: {
+  f: Figures; share: string; onEdit: () => void; onArchive: () => void; onComplete: () => void
   headingRef: (el: HTMLHeadingElement | null) => void; busy: boolean
 }): ReactNode {
   const { goal, progress: p } = f
@@ -101,7 +109,7 @@ function GoalCard({ f, onEdit, onArchive, onComplete, headingRef, busy }: {
         <dt>Still to go</dt>
         <dd>{formatEur(p.remainingCents)}</dd>
         <dt>Share of income planned</dt>
-        <dd>{formatBp(goal.contributionPercentBp)}</dd>
+        <dd>{share}</dd>
         {goal.deadline !== null && (<><dt>Deadline</dt><dd>{formatSpanishDate(goal.deadline)}</dd></>)}
         <dt>When it might be reached</dt>
         <dd>
@@ -111,6 +119,7 @@ function GoalCard({ f, onEdit, onArchive, onComplete, headingRef, busy }: {
           {!done && !p.reached && words.note !== null && <> {words.note}</>}
         </dd>
       </dl>
+      {p.reached && !done && <p>This goal keeps receiving a share of your savings until you mark it as completed.</p>}
       <div className="goal-actions">
         <button type="button" disabled={busy} aria-label={`Edit goal: ${goal.name}`} onClick={onEdit}>Edit</button>
         {p.reached && !done && <button type="button" disabled={busy} aria-label={`Mark as completed: ${goal.name}`} onClick={onComplete}>Mark as completed</button>}
@@ -229,7 +238,7 @@ export default function Goals({ today, computedAt }: { today: string; computedAt
                 )
                 : (
                   <GoalCard
-                    f={f} busy={busy}
+                    f={f} share={data.shares.get(f.goal.id) ?? 'None in force this month'} busy={busy}
                     headingRef={(el) => { if (el) headings.current.set(f.goal.id, el); else headings.current.delete(f.goal.id) }}
                     onEdit={() => { focusNext.current = 'edit'; setAdding(false); setEditing(f.goal.id) }}
                     onComplete={() => void act(async () => { await completeGoal(f.goal.id, computedAt); return f.goal.id }, (id) => id ?? 'region')}
@@ -256,8 +265,9 @@ export default function Goals({ today, computedAt }: { today: string; computedAt
         )
         : <button type="button" disabled={busy} onClick={() => { focusNext.current = 'add'; setAdding(true); setEditing(null) }}>Add a goal</button>}
       <p>
-        Archiving a goal moves it to the list below and stops it receiving savings from today. What it received before is kept, and an archived goal cannot be changed.
-        {' '}A goal whose contributions have reached its target can be marked as completed; that also stops it receiving savings from today.
+        Archiving or completing a goal applies to this whole month and every month after, so the goal receives nothing from this month on. What it received in earlier months is kept.
+        {' '}An archived goal moves to the list below and cannot be changed. A goal whose contributions have reached its target can be marked as completed.
+        {' '}Changing the share of income applies to the whole of the current month, and earlier months keep the share they had.
       </p>
       {archived.length > 0 && (
         <>

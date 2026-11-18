@@ -149,7 +149,7 @@ describe('Money Score screen', () => {
 
     const goals = itemOf('goal-progress')
     expect(field(goals, 'Status')).toBe('Measured: 25 out of 100')
-    expect(field(goals, 'Inputs')).toContain('Across 2 active savings goals')
+    expect(field(goals, 'Inputs')).toContain('Across 2 savings goals')
     expect(field(goals, 'Arithmetic')).toBe('25 × 2 = 50')
 
     // The four are there for the four that are not measured too, each with its own words.

@@ -9,7 +9,7 @@ import type {
 /** Governs Dexie migrations. Derived from the migration registry (highest registered version, 1 if none). */
 export { SCHEMA_VERSION } from './migrations'
 /** Invalidates cached analytics when a formula changes. Independent of SCHEMA_VERSION. */
-export const ENGINE_VERSION = 1
+export const ENGINE_VERSION = 2
 
 export type OpenResult =
   | { ok: true }

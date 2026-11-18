@@ -7,6 +7,7 @@ import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
 import type { GoalProgress } from '../goals/progress'
 import { formatEur } from '../lib/money'
+import { ENGINE_VERSION } from '../db/db'
 import { violations } from '../test/bannedWords'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, wholePoints } from './components'
 
@@ -101,6 +102,8 @@ describe('budgetAwareness', () => {
     expect(c).toMatchObject({ kind: 'measured', score: 25 })
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toMatch(/1 of 2 allocations/)
+    // A month with no savings lowers a goal line, so the sentence says what a goal line needs.
+    expect(c.inputs).toMatch(/savings goal counts as respected only when its full planned amount was set aside that month/)
   })
 
   it('still leaves out a goal line with no allocation, as an archived goal now has', () => {
@@ -374,6 +377,11 @@ const prog = (g: SavingsGoalRow, contributedCents: number): { goal: SavingsGoalR
 })
 
 describe('goalProgress', () => {
+  it('ships under an engine version that retires scores cached by the earlier goal formulas', () => {
+    // Version 1 cached budgetAwareness without goal lines and goalProgress as completion-only; neither may be served now.
+    expect(ENGINE_VERSION).toBeGreaterThanOrEqual(2)
+  })
+
   it('says the owner has set no goal yet, rather than scoring no progress', () => {
     const c = goalProgress([])
     expect(c.kind).toBe('not-measured')
@@ -388,7 +396,9 @@ describe('goalProgress', () => {
     expect(c).toMatchObject({ kind: 'measured', score: 23 })
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toContain(`${formatEur(23000)} of ${formatEur(100000)}`)
-    expect(c.inputs).toMatch(/2 active savings goals/)
+    expect(c.inputs).toMatch(/2 savings goals/)
+    expect(c.inputs).not.toMatch(/active/)
+    expect(c.inputs).toMatch(/archived before they were completed are not counted/)
   })
 
   it('caps each goal at its own target, so a surplus on one cannot cover a shortfall on another', () => {

@@ -6,7 +6,8 @@ import { seedDatabase } from '../../db/seed'
 import type { TransactionRow } from '../../db/schema'
 import { createGoal } from '../../goals/store'
 import type { GoalProgress } from '../../goals/progress'
-import { formatEur } from '../../lib/money'
+import { formatBp, formatEur } from '../../lib/money'
+import { saveAllocation } from '../../budget/allocations'
 import { violations } from '../../test/bannedWords'
 import { appSpoken } from '../../test/spoken'
 import { guardWording } from '../../test/wording'
@@ -89,7 +90,8 @@ describe('Goals screen', () => {
       .toBe('Going by your record so far, between March and June 2027.')
     expect(estimateWords(progress({ estimate: { earliestMonth: '2027-03', latestMonth: '2028-01' } })).sentence)
       .toBe('Going by your record so far, between March 2027 and January 2028.')
-    expect(estimateWords(progress({ estimate: { earliestMonth: '2027-03', latestMonth: '2027-03' } })).sentence).toContain('around March 2027')
+    expect(estimateWords(progress({ estimate: { earliestMonth: '2027-03', latestMonth: '2027-03' } })).sentence)
+      .toBe('Going by your record so far, your faster and slower months both point to March 2027.')
   })
 
   it('says why there is no estimate yet, in the owner terms', async () => {
@@ -151,6 +153,35 @@ describe('Goals screen', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('the disk is full')
     expect(await db.savingsGoals.count()).toBe(0)
     expect(screen.getByLabelText(/Name of the goal/)).toHaveValue('Viaje')
+  })
+
+  it('says what archiving, completing and changing the share apply to: the whole of the month they happen in', async () => {
+    await mount()
+    const page = text()
+    expect(page).toContain('Archiving or completing a goal applies to this whole month and every month after')
+    expect(page).toContain('Changing the share of income applies to the whole of the current month')
+    expect(page).not.toContain('from today')
+  })
+
+  it('shows the share that is in force this month, which a Budget-screen edit can change, not the one on the goal row', async () => {
+    const g = await make()
+    await saveAllocation({ categoryId: null, savingsGoalId: g.id, percentBp: 2500, fixedCents: null, effectiveFrom: '2026-11-10', note: null })
+    await mount()
+    expect(within(card('Viaje inventado')).getByText('Share of income planned').nextElementSibling).toHaveTextContent(formatBp(2500))
+    cleanup()
+    await saveAllocation({ categoryId: null, savingsGoalId: g.id, percentBp: null, fixedCents: 4000, effectiveFrom: '2026-11-12', note: null })
+    await mount()
+    expect(within(card('Viaje inventado')).getByText('Share of income planned').nextElementSibling).toHaveTextContent(`a fixed ${formatEur(4000)} a month`)
+  })
+
+  it('tells the owner a goal that has reached its target keeps taking a share until it is marked completed', async () => {
+    await make('Viaje inventado', 5000)
+    await months([['2026-08', 1000], ['2026-09', 2000], ['2026-10', 3000]])
+    await mount()
+    expect(card('Viaje inventado')).toHaveTextContent('keeps receiving a share of your savings until you mark it as completed')
+    fireEvent.click(screen.getByRole('button', { name: /Mark as completed: Viaje inventado/ }))
+    await waitFor(() => expect(card('Viaje inventado')).toHaveTextContent('You marked this goal as completed.'))
+    expect(card('Viaje inventado')).not.toHaveTextContent('keeps receiving a share')
   })
 
   it('explains how savings are shared between goals', async () => {
