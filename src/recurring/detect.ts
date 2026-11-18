@@ -34,31 +34,63 @@ function toleranceOf(median: number): number {
   return Math.max(MIN_TOLERANCE_CENTS, divRound(median * TOLERANCE_PERCENT, 100))
 }
 
-function frequencyOfGap(medianGapDays: number): Frequency {
-  if (medianGapDays >= 5 && medianGapDays <= 9) return 'weekly'
-  if (medianGapDays >= 26 && medianGapDays <= 35) return 'monthly'
-  if (medianGapDays >= 80 && medianGapDays <= 100) return 'quarterly'
-  if (medianGapDays >= 350 && medianGapDays <= 380) return 'annual'
-  return 'irregular'
+const BANDS: readonly { frequency: Exclude<Frequency, 'irregular'>; lo: number; hi: number }[] = [
+  { frequency: 'weekly', lo: 5, hi: 9 },
+  { frequency: 'monthly', lo: 26, hi: 35 },
+  { frequency: 'quarterly', lo: 80, hi: 100 },
+  { frequency: 'annual', lo: 350, hi: 380 },
+]
+
+/**
+ * The band the median gap falls in, if at least two thirds of ALL gaps also fall in it (gapsInBand * 3 >= gaps * 2, integers);
+ * otherwise 'irregular'. Two bills on days 1 and 8 give gaps 7,23,7,23,7: median 7 but only 3 of 5 in the weekly band, so
+ * not weekly.
+ */
+function classify(gaps: readonly number[], medianGap: number): { frequency: Frequency; inBand: number } {
+  const band = BANDS.find((b) => medianGap >= b.lo && medianGap <= b.hi)
+  if (!band) return { frequency: 'irregular', inBand: 0 }
+  const inBand = gaps.filter((g) => g >= band.lo && g <= band.hi).length
+  if (inBand * 3 < gaps.length * 2) return { frequency: 'irregular', inBand }
+  return { frequency: band.frequency, inBand }
 }
 
 /**
- * matchScoreBp = steadiness * count / 10000, an integer in 0..10000.
- *   steadiness = max(0, 10000 - 4 * relSpread), relSpread = (largest |gap - median gap| * 10000) / median gap, in bp
+ * matchScoreBp = steadiness * count / 10000, an integer in 0..10000; an 'irregular' cluster scores 0 (no band to fit).
+ *   steadiness = gapsInBand * 10000 / gaps (share of gaps inside the frequency's band, in bp)
  *   count      = (n - 1) * 10000 / (n + 1) for n payments (3 -> 5000, 4 -> 6000, 12 -> 8462; never reaches 10000)
- * A wider spread of gaps can only lower steadiness and more payments can only raise count, so the score is monotone in both.
+ * More in-band gaps can only raise steadiness and more payments can only raise count, so it is monotone in both.
  * It says how well the evidence pins the pattern, nothing more; it is not a probability that the payment will recur.
  */
-function matchScoreBp(gaps: readonly number[], medianGap: number, n: number): number {
-  const maxDeviation = gaps.reduce((m, g) => Math.max(m, Math.abs(g - medianGap)), 0)
-  const relSpreadBp = divRound(maxDeviation * 10000, Math.max(medianGap, 1))
-  const steadiness = Math.max(0, 10000 - 4 * relSpreadBp)
+function matchScoreBp(inBand: number, gaps: number, n: number): number {
+  const steadiness = divRound(inBand * 10000, gaps)
   const count = divRound((n - 1) * 10000, n + 1)
   return divRound(steadiness * count, 10000)
 }
 
+const CHANGE_MIN_CENTS = 50
+const CHANGE_PERCENT = 2
+
+/**
+ * A price change is reported only when sustained: the latest two payments both differ from the median of the payments before
+ * them, in the same direction, by more than max(50 cents, 2% of that median). A variable bill that wobbles reports nothing.
+ */
+function sustainedChange(amounts: readonly number[]): { fromCents: number; toCents: number } | null {
+  if (amounts.length < 3) return null
+  const m = medianOf(amounts.slice(0, -2))
+  const prev = amounts[amounts.length - 2]
+  const last = amounts[amounts.length - 1]
+  if (m === null || prev === undefined || last === undefined) return null
+  const threshold = Math.max(CHANGE_MIN_CENTS, divRound(m * CHANGE_PERCENT, 100))
+  const up = prev - m > threshold && last - m > threshold
+  const down = m - prev > threshold && m - last > threshold
+  return up || down ? { fromCents: m, toCents: last } : null
+}
+
 /**
  * Finds recurring payments from the gaps between payments to one merchant. Pure: no database, no clock.
+ *
+ * Precondition: the caller passes spends only (no refunds or credits); Math.abs would otherwise merge a refund into the
+ * payments at the same merchant.
  *
  * Internally every amount is an absolute value (the bank's amount for a spend is negative, money out); `amountCents` and the
  * other figures in Detected are positive magnitudes.
@@ -67,7 +99,7 @@ function matchScoreBp(gaps: readonly number[], medianGap: number, n: number): nu
  * order give the same clusters. Within a merchant, each payment joins the existing cluster whose median it is nearest to
  * (earliest-created on a tie) provided it is within max(100 cents, 5% of that median) of it; otherwise it starts a new cluster.
  * Clusters with fewer than MIN_OCCURRENCES payments are not reported. Frequency comes from the median gap in days between
- * consecutive payments of a cluster. Output is ordered by merchantId, amount, then last seen.
+ * consecutive payments of a cluster, and only if two thirds of the gaps fit that frequency's band (see classify). Output is ordered by merchantId, amount, then last seen.
  */
 export function detectRecurring(rows: readonly { merchantId: string; valueDate: string; amountCents: number }[]): Detected[] {
   const sorted = rows
@@ -103,8 +135,7 @@ export function detectRecurring(rows: readonly { merchantId: string; valueDate: 
     const gaps: number[] = []
     for (let i = 1; i < n; i++) gaps.push(daysBetween((c.payments[i - 1] as Payment).date, (c.payments[i] as Payment).date))
     const medianGap = medianOf(gaps) ?? 0
-    const frequency = frequencyOfGap(medianGap)
-    const earlier = medianOf(c.payments.slice(0, n - 1).map((p) => p.amount)) ?? last.amount
+    const { frequency, inBand } = classify(gaps, medianGap)
     out.push({
       merchantId: c.merchantId,
       amountCents: c.median,
@@ -113,8 +144,8 @@ export function detectRecurring(rows: readonly { merchantId: string; valueDate: 
       occurrences: n,
       lastSeenDate: last.date,
       expectedNextDate: frequency === 'irregular' ? null : addDays(last.date, medianGap),
-      matchScoreBp: matchScoreBp(gaps, medianGap, n),
-      amountChanged: earlier === last.amount ? null : { fromCents: earlier, toCents: last.amount },
+      matchScoreBp: frequency === 'irregular' ? 0 : matchScoreBp(inBand, gaps.length, n),
+      amountChanged: sustainedChange(c.payments.map((p) => p.amount)),
     })
   }
   return out.sort((a, b) =>

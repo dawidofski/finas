@@ -74,29 +74,69 @@ describe('detectRecurring', () => {
   })
 
   it('treats a small price change as the same payment and reports the change', () => {
-    const d = one([...series('m', 30, 3, -1000), row('m', addDays('2026-01-01', 90), -1050)])
-    expect(d.occurrences).toBe(4)
-    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1050 })
+    // 3 x 10,00 then two payments at 10,80: one payment, a sustained step up of 80 > max(50, 2%)
+    const d = one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -1080), row('m', '2026-05-01', -1080)])
+    expect(d.occurrences).toBe(5)
+    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1080 })
+  })
+
+  it('reports a sustained step down too', () => {
+    const d = one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -920), row('m', '2026-05-01', -920)])
+    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 920 })
   })
 
   it('reports no change when every payment is the same amount', () => {
     expect(one(series('m', 30, 4, -1000)).amountChanged).toBeNull()
   })
 
-  it('reports the earlier typical amount as the median of the payments before the latest', () => {
-    // earlier 1000, 1040, 1000 -> median 1000; latest 1060
+  it('reports no change for a variable bill that wobbles inside the tolerance', () => {
+    const amounts = [-1000, -1030, -990, -1020, -1010, -1040]
+    const d = one(amounts.map((a, i) => row('electric', addDays('2026-01-01', i * 30), a)))
+    expect(d.occurrences).toBe(6)
+    expect(d.amountChanged).toBeNull()
+  })
+
+  it('does not report a change from a single payment, nor one that goes both ways', () => {
+    expect(one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -1080)]).amountChanged).toBeNull()
+    expect(one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -1080), row('m', '2026-05-01', -920)]).amountChanged).toBeNull()
+  })
+
+  it('needs both latest payments to clear the threshold: more than 50 cents on a 10,00 bill', () => {
+    const at = (x: number) => one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -x), row('m', '2026-05-01', -x)]).amountChanged
+    expect(at(1050)).toBeNull()
+    expect(at(1051)).toEqual({ fromCents: 1000, toCents: 1051 })
+    expect(one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -1051), row('m', '2026-05-01', -1050)]).amountChanged).toBeNull()
+    expect(one([...series('m', 30, 3, -1000), row('m', '2026-04-01', -1050), row('m', '2026-05-01', -1051)]).amountChanged).toBeNull()
+  })
+
+  it('uses 2% of the earlier median once that exceeds 50 cents: 40,00 needs more than 80', () => {
+    const at = (x: number) => one([...series('m', 30, 3, -4000), row('m', '2026-04-01', -x), row('m', '2026-05-01', -x)]).amountChanged
+    expect(at(4080)).toBeNull()
+    expect(at(4081)).toEqual({ fromCents: 4000, toCents: 4081 })
+  })
+
+  it('compares the latest two with the median of the payments before them', () => {
+    // before the last two: 1000, 1040, 1000 -> median 1000; latest two 1070, 1080
     const d = one([
-      row('m', '2026-01-01', -1000), row('m', '2026-01-31', -1040),
-      row('m', '2026-03-02', -1000), row('m', '2026-04-01', -1060),
+      row('m', '2026-01-01', -1000), row('m', '2026-01-31', -1040), row('m', '2026-03-02', -1000),
+      row('m', '2026-04-01', -1070), row('m', '2026-05-01', -1080),
     ])
-    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1060 })
+    expect(d.amountChanged).toEqual({ fromCents: 1000, toCents: 1080 })
   })
 
   it('scores a steadier payment above an uneven one with the same count', () => {
     const steady = one(withGaps('m', [30, 30, 30, 30]))
-    const uneven = one(withGaps('m', [28, 33, 30, 27]))
+    const uneven = one(withGaps('m', [30, 30, 30, 60])) // one missed month: 3 of 4 gaps in band
     expect(steady.occurrences).toBe(uneven.occurrences)
+    expect(uneven.frequency).toBe('monthly')
     expect(steady.matchScoreBp).toBeGreaterThan(uneven.matchScoreBp)
+  })
+
+  it('scores one missed month in a year well above zero', () => {
+    const gaps = [30, 30, 30, 30, 30, 60, 30, 30, 30, 30, 30]
+    const d = one(withGaps('m', gaps))
+    expect(d.frequency).toBe('monthly')
+    expect(d.matchScoreBp).toBeGreaterThan(5000)
   })
 
   it('never lowers the score for more occurrences at the same spread', () => {
@@ -109,15 +149,36 @@ describe('detectRecurring', () => {
     expect(one(series('m', 30, 12)).matchScoreBp).toBeGreaterThan(one(series('m', 30, 3)).matchScoreBp)
   })
 
-  it('never raises the score for a wider spread of gaps', () => {
-    let prev = 10001
-    for (const dev of [0, 1, 2, 3, 5, 8]) {
-      const s = one(withGaps('m', [30 - dev, 30 + dev, 30, 30, 30])).matchScoreBp
-      expect(s).toBeLessThanOrEqual(prev)
+  it('never lowers the score for more in-band gaps out of the same twelve', () => {
+    let prev = -1
+    for (let outOfBand = 4; outOfBand >= 0; outOfBand--) {
+      const gaps = Array.from({ length: 12 }, (_, i) => (i < outOfBand ? 60 : 30))
+      const s = one(withGaps('m', gaps)).matchScoreBp
+      expect(s).toBeGreaterThanOrEqual(prev)
       prev = s
     }
-    expect(one(withGaps('m', [30, 30, 30, 30, 30])).matchScoreBp)
-      .toBeGreaterThan(one(withGaps('m', [22, 38, 30, 30, 30])).matchScoreBp)
+    expect(prev).toBeGreaterThan(0)
+  })
+
+  it('does not call a pattern monthly when fewer than two thirds of the gaps are monthly', () => {
+    // two bills on days 1 and 8: gaps 7,23,7,23,7 -> median 7 but only 3 of 5 gaps in the weekly band
+    const d = one(withGaps('m', [7, 23, 7, 23, 7]))
+    expect(d.frequency).toBe('irregular')
+    expect(d.expectedNextDate).toBeNull()
+    expect(d.matchScoreBp).toBe(0)
+  })
+
+  it('needs gaps * 2 <= gapsInBand * 3: 2 of 3 passes, 3 of 5 fails, 4 of 6 passes', () => {
+    expect(one(withGaps('m', [30, 30, 60])).frequency).toBe('monthly')
+    expect(one(withGaps('m', [30, 30, 30, 60, 60])).frequency).toBe('irregular')
+    expect(one(withGaps('m', [30, 30, 30, 30, 60, 60])).frequency).toBe('monthly')
+  })
+
+  it('calls three payments on one day irregular, with no date and a zero score', () => {
+    const d = one(series('m', 0, 3))
+    expect(d.frequency).toBe('irregular')
+    expect(d.expectedNextDate).toBeNull()
+    expect(d.matchScoreBp).toBe(0)
   })
 
   it('scores an integer from 0 to 10000 basis points', () => {
