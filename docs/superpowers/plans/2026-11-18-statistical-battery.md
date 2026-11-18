@@ -182,7 +182,25 @@ export type RelationshipId =
   | 'mood-amount' | 'mood-frequency' | 'stress-discretionary' | 'boredom-impulse'
   | 'reason-worthwhile' | 'weekend' | 'payday' | 'small-purchases'
   | 'salary-lifestyle' | 'category-savings'
-export interface Gate { have: number; need: number; what: string }   // what is owner-facing
+export interface Gate { have: number; need: number; what: string }   // `what` is owner-facing
+/**
+ * Every count §12's minimum-data column asks about, gathered ONCE so each gate stays pure and the data is read once
+ * per load rather than once per relationship. Defined by this task; Task 9 computes it and hands it in.
+ */
+export interface BatteryData {
+  discretionarySpendsWithMood: number
+  moodGroupsOfTen: number           // mood groups holding at least ten spends
+  weeksOfMoodCoverage: number
+  stressedSpends: number
+  unstressedSpends: number
+  impulseTaggedSpends: number
+  spendsWithReasonAndWorthwhile: number
+  weekendsObserved: number
+  incomeEvents: number
+  fullMonths: number
+  incomeLevelsWithTwoMonths: number
+  monthsObserved: number
+}
 export interface Relationship {
   id: RelationshipId
   question: string          // owner-facing, no jargon, no causal wording
