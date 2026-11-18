@@ -1,13 +1,15 @@
 import { CHI_SCALE } from './stats'
 
 /**
- * How certain a battery result is, as one of three brackets — and nothing more precise.
+ * How certain a battery result is, as one of three rungs or nothing at all — and never anything more precise.
  *
  * A p-value needs a continuous distribution function, which needs floats, and this application contains no
  * floating-point arithmetic anywhere (src/sourceRules.test.ts enforces that over every file in src/). Both rank tests
  * §12 asks for have a normal approximation whose significance test becomes an exact INTEGER inequality once both
- * sides are squared, which removes the square root. What is left is a handful of constants a reviewer can check from
- * memory: the two-tailed normal criticals 1.96 and 2.5758, and the chi-square criticals at small degrees of freedom.
+ * sides are squared, which removes the square root. What is left is three two-tailed normal criticals — 1.96, 2.5759
+ * and 3.2906 — and a table of chi-square criticals for df 1 to 20 at the same three levels: all values a reviewer
+ * can check a row at a time against any statistics table, which is exactly what a table of rank criticals per
+ * sample size is not.
  *
  * The squaring is an algebraic rearrangement, so it is worth only as much as its agreement with the thing it
  * replaces. critical.test.ts computes z the ordinary way — a real square root, a real division, a float comparison —
@@ -16,30 +18,54 @@ import { CHI_SCALE } from './stats'
  *
  * There is no division anywhere in this file: removing the square root removed the denominator with it. So the float
  * guard in critical.test.ts can insist on something stronger than the usual rule: not a single slash in the code.
+ *
+ * The rungs are declared strongest first, which is the order ALPHA_BP, Z_BP and CHI_CRIT are written in and the
+ * order each function tests them in. Anything relying on the type's order depends on that and nothing else.
  */
-export type Bracket = 'p<0.01' | 'p<0.05' | 'none'
+export type Bracket = 'p<0.001' | 'p<0.01' | 'p<0.05' | 'none'
 
 /**
  * Each bracket's UPPER BOUND, in basis points, standing in for the p this module deliberately never computes.
  * Benjamini–Hochberg reads these: taking the bound rather than the true p can only withhold a finding, never invent
  * one, which is the direction this application errs in everywhere else too.
+ *
+ * WHY THERE ARE THREE RUNGS AND NOT TWO. The resolution of this ladder, not the correction procedure, is what
+ * decides whether a finding can ever be admitted — because standing an upper bound in for a p throws away however
+ * much the true p sits below it. With all ten of §12's relationships tested and an FDR level of 500 bp, the smallest
+ * Benjamini–Hochberg threshold is 500/10 = 50 bp. A ladder stopping at 'p<0.01' offers nothing below 100 bp, so:
+ *
+ *   - one strong finding among ten: 100 > 50, withheld — at any effect size, forever;
+ *   - two strong findings: the k = 2 threshold is 100 bp, so both survive;
+ *   - one 'p<0.05' finding: needs all ten at or under 500 bp, which does not happen.
+ *
+ * That is a battery that goes permanently quiet as soon as the owner has enough data to open every gate, which is
+ * the opposite of what more data should do. 'p<0.001' bounds at 10 bp, which clears the 50 bp threshold alone with
+ * room over, and nothing about the guarantee changes: it is still an upper bound, and the procedure is still
+ * conservative. Raising the FDR level to 1000 bp was the alternative and was rejected — it would admit a lone
+ * 'p<0.01' only because 100 would exactly equal the threshold, which is fragile, and it leaves the resolution
+ * problem in place for whatever m comes next.
  */
-export const ALPHA_BP = { 'p<0.01': 100, 'p<0.05': 500 } as const
+export const ALPHA_BP = { 'p<0.001': 10, 'p<0.01': 100, 'p<0.05': 500 } as const
 
 /**
  * The two-tailed normal criticals, in basis points — ten-thousandths — because a decimal literal is banned in src/:
  * 1.96 is float arithmetic waiting to happen, 19600 is a count.
  *
- * Both are rounded UP from the true critical value, so both ask for a hair more than they strictly must and both can
- * only withhold a finding, never invent one:
+ * All three are rounded UP from the true critical value, so each asks for a hair more than it strictly must and each
+ * can only withhold a finding, never invent one:
  * - 19600 is 1.96, just above the true 1.9599640.
  * - 25759 is 2.5759, just above the true 2.5758293. It was 25758 at first, which was BELOW the true value and so
  *   leant toward claiming — the only constant in the module that did. The cost of the change is one part in 100 000,
  *   far inside the error of the normal approximation these are critical values for, and what it buys is a property
  *   a reader can verify by inspection: every constant here errs toward silence. "All but one do" is a footnote
  *   nobody reads.
+ * - 32906 is 3.2906, just above the true 3.2905267.
+ *
+ * Each was computed, not recalled, as the root of erfc(z/√2) = α, and each squares to this module's own df-1
+ * chi-square critical, which is the cross-check: 1.9599640² = 3.8414588, 2.5758293² = 6.6348966 and
+ * 3.2905267² = 10.8275662 are the three df-1 entries of CHI_CRIT below, to the last digit computed.
  */
-export const Z_BP = { 'p<0.05': 19600, 'p<0.01': 25759 } as const
+export const Z_BP = { 'p<0.001': 32906, 'p<0.01': 25759, 'p<0.05': 19600 } as const
 
 /**
  * Below this many paired observations spearmanBracket returns 'none' rather than a bracket.
@@ -69,7 +95,7 @@ const SPEARMAN_MIN_N = 10
  * variance makes |z| smaller and the bracket weaker than it could be — the omission errs toward silence, which is
  * the direction this application errs in everywhere, so it stays.
  */
-const MW_MIN_GROUP = 8
+export const MW_MIN_GROUP = 8
 
 /**
  * Chi-square criticals in CHI_SCALE units — ten-thousandths of a chi-square value, which is the scale
@@ -82,42 +108,53 @@ const MW_MIN_GROUP = 8
  *
  * Unlike a table of rank criticals per sample size, which is why those were rejected, these are standard textbook
  * rows and a reviewer can check any ONE of them against any statistics table without reading the others. Each row
- * names the unrounded value it was rounded up from, and the three-decimal figure in a printed table is that value
- * to three decimals.
+ * names the three unrounded values it was rounded up from, in the same strongest-first order as the fields, and the
+ * three-decimal figure in a printed table is that value to three decimals.
  *
  * The first two rows check against the rest of this file rather than against a table. At df 1 the critical is z²,
- * the square of the true two-tailed normal criticals that Z_BP above rounds (1.9599640² = 3.8414588 and
- * 2.5758293² = 6.6348966); at df 2 it is −2·ln α exactly (−2·ln 0.05 = 5.9914645, −2·ln 0.01 = 9.2103404). Every
- * row was computed twice before it was written down: once from the regularized incomplete gamma function by
- * bisection, and once — for the even rows — from the closed-form even-df survival function in exact decimal
- * arithmetic. The two agreed to ten decimals on every entry they share, which is what caught df 18 at 0.05 sitting
- * at 28.8692994 rather than just over 28.8693, where the fourth-decimal ceiling differs.
+ * the square of the true two-tailed normal criticals that Z_BP above rounds (1.9599640² = 3.8414588,
+ * 2.5758293² = 6.6348966, 3.2905267² = 10.8275662); at df 2 it is −2·ln α exactly (5.9914645, 9.2103404,
+ * 13.8155106).
+ *
+ * EVERY ENTRY WAS COMPUTED, NOT RECALLED, by three routes that share no arithmetic:
+ *   A. the regularized incomplete gamma function (series and continued fraction), bisected;
+ *   B. the survival function built by the recurrence Q(x; k+2) = Q(x; k) + (x/2)^(k/2)·e^(−x/2)/Γ(k/2+1), seeded
+ *      with Q(x; 1) = erfc(√(x/2)) and Q(x; 2) = e^(−x/2) — no incomplete gamma anywhere, and it reaches the odd
+ *      rows as well as the even ones;
+ *   C. for the even rows, the closed form Q = e^(−x/2)·Σ (x/2)^j/j! in exact 45-digit decimal arithmetic.
+ * The largest disagreement between any two routes on any of the sixty entries was 1.4·10⁻¹⁴ — agreement to
+ * fourteen decimals, four more than the ten this table needs to round correctly at the fourth.
+ *
+ * This is not ceremony. It is what caught df 18 at 0.05 sitting at 28.8692994 rather than just over 28.8693: the
+ * remembered figure would have stored 288694 and made that one row a count stricter than every other row in the
+ * table. A reviewer checking against a printed three-decimal table cannot see that, and neither could a second
+ * person recalling the same wrong digits.
  *
  * The table stops at df 20 and chiSquareBracket throws beyond it, rather than growing without limit: §12's widest
  * contingency relationship is reason × worthwhile, and the owner would need twenty-one purchase reasons against
  * three hindsight answers to pass this.
  */
-const CHI_CRIT: readonly { readonly p05: number; readonly p01: number }[] = [
-  { p05: 38415, p01: 66349 }, //   df 1:  3.8414588,  6.6348966
-  { p05: 59915, p01: 92104 }, //   df 2:  5.9914645,  9.2103404
-  { p05: 78148, p01: 113449 }, //  df 3:  7.8147279, 11.3448667
-  { p05: 94878, p01: 132768 }, //  df 4:  9.4877290, 13.2767041
-  { p05: 110705, p01: 150863 }, // df 5: 11.0704977, 15.0862725
-  { p05: 125916, p01: 168119 }, // df 6: 12.5915872, 16.8118938
-  { p05: 140672, p01: 184754 }, // df 7: 14.0671404, 18.4753069
-  { p05: 155074, p01: 200903 }, // df 8: 15.5073131, 20.0902350
-  { p05: 169190, p01: 216660 }, // df 9: 16.9189776, 21.6659943
-  { p05: 183071, p01: 232093 }, // df 10: 18.3070381, 23.2092512
-  { p05: 196752, p01: 247250 }, // df 11: 19.6751376, 24.7249703
-  { p05: 210261, p01: 262170 }, // df 12: 21.0260698, 26.2169673
-  { p05: 223621, p01: 276883 }, // df 13: 22.3620325, 27.6882496
-  { p05: 236848, p01: 291413 }, // df 14: 23.6847913, 29.1412377
-  { p05: 249958, p01: 305780 }, // df 15: 24.9957901, 30.5779142
-  { p05: 262963, p01: 320000 }, // df 16: 26.2962276, 31.9999269
-  { p05: 275872, p01: 334087 }, // df 17: 27.5871116, 33.4086636
-  { p05: 288693, p01: 348054 }, // df 18: 28.8692994, 34.8053057
-  { p05: 301436, p01: 361909 }, // df 19: 30.1435272, 36.1908691
-  { p05: 314105, p01: 375663 }, // df 20: 31.4104328, 37.5662348
+const CHI_CRIT: readonly { readonly p001: number; readonly p01: number; readonly p05: number }[] = [
+  { p001: 108276, p01: 66349, p05: 38415 }, // df 1   10.8275662, 6.6348966, 3.8414588
+  { p001: 138156, p01: 92104, p05: 59915 }, // df 2   13.8155106, 9.2103404, 5.9914645
+  { p001: 162663, p01: 113449, p05: 78148 }, // df 3   16.2662362, 11.3448667, 7.8147279
+  { p001: 184669, p01: 132768, p05: 94878 }, // df 4   18.4668274, 13.2767041, 9.4877290
+  { p001: 205151, p01: 150863, p05: 110705 }, // df 5   20.5150057, 15.0862725, 11.0704977
+  { p001: 224578, p01: 168119, p05: 125916 }, // df 6   22.4577445, 16.8118938, 12.5915872
+  { p001: 243219, p01: 184754, p05: 140672 }, // df 7   24.3218863, 18.4753069, 14.0671404
+  { p001: 261245, p01: 200903, p05: 155074 }, // df 8   26.1244816, 20.0902350, 15.5073131
+  { p001: 278772, p01: 216660, p05: 169190 }, // df 9   27.8771649, 21.6659943, 16.9189776
+  { p001: 295883, p01: 232093, p05: 183071 }, // df 10  29.5882984, 23.2092512, 18.3070381
+  { p001: 312642, p01: 247250, p05: 196752 }, // df 11  31.2641336, 24.7249703, 19.6751376
+  { p001: 329095, p01: 262170, p05: 210261 }, // df 12  32.9094904, 26.2169673, 21.0260698
+  { p001: 345282, p01: 276883, p05: 223621 }, // df 13  34.5281790, 27.6882496, 22.3620325
+  { p001: 361233, p01: 291413, p05: 236848 }, // df 14  36.1232737, 29.1412377, 23.6847913
+  { p001: 376973, p01: 305780, p05: 249958 }, // df 15  37.6972982, 30.5779142, 24.9957901
+  { p001: 392524, p01: 320000, p05: 262963 }, // df 16  39.2523548, 31.9999269, 26.2962276
+  { p001: 407903, p01: 334087, p05: 275872 }, // df 17  40.7902167, 33.4086636, 27.5871116
+  { p001: 423124, p01: 348054, p05: 288693 }, // df 18  42.3123963, 34.8053057, 28.8692994
+  { p001: 438202, p01: 361909, p05: 301436 }, // df 19  43.8201960, 36.1908691, 30.1435272
+  { p001: 453148, p01: 375663, p05: 314105 }, // df 20  45.3147466, 37.5662348, 31.4104328
 ]
 
 /**
@@ -156,6 +193,7 @@ export function spearmanBracket(rhoBp: number, n: number): Bracket {
   if (n < SPEARMAN_MIN_N) return 'none'
   const left = rhoBp * rhoBp * (n - 1)
   assertInt(left, 'rhoBp squared times n minus one')
+  if (left >= Z_BP['p<0.001'] * Z_BP['p<0.001']) return 'p<0.001'
   if (left >= Z_BP['p<0.01'] * Z_BP['p<0.01']) return 'p<0.01'
   if (left >= Z_BP['p<0.05'] * Z_BP['p<0.05']) return 'p<0.05'
   return 'none'
@@ -193,9 +231,15 @@ export function spearmanBracket(rhoBp: number, n: number): Bracket {
  * squaring is also what would turn a |D| of 0 — a result sitting exactly on the null midpoint — into a positive C²
  * of 1 if the clamp were missing. It is defence in depth and NOT currently observable, which is worth saying plainly
  * rather than claiming a test for: without it the left side at |D| = 0 would be 3·10⁸, and the smallest right side
- * MW_MIN_GROUP admits is Z_BP²·V at n₁ = n₂ = 8, which is 384 160 000 · 1088 = 417 966 080 000. The verdict cannot
- * change, so no test can kill the clamp, and critical.test.ts asserts that inequality instead — if the group floor
- * is ever lowered far enough for the clamp to matter, that assertion is what fails and sends the reader here.
+ * MW_MIN_GROUP admits is Z_BP²·V at n₁ = n₂ = 8, which is 384 160 000 · 1088 = 417 966 080 000.
+ *
+ * Lowering the floor would NOT make it observable either, which is worth knowing before anyone goes looking:
+ * V = n₁n₂(n₁+n₂+1) is 3 even at one observation per group, and Z_BP²·3 is 1 152 480 000, still far above 3·10⁸. So
+ * the clamp is unobservable at every input this function accepts, and it is untested — flatly, with no claim that
+ * any particular future change would catch it. The only changes that could make a test of it possible are a
+ * two-tailed critical below 1.0 (Z_BP ≤ 10000) or a floor of zero, neither of which is a thing anyone will do.
+ * critical.test.ts states the same gap and anchors the arithmetic to MW_MIN_GROUP and Z_BP rather than to literals,
+ * so the claim at least reads from this module instead of restating itself.
  *
  * C² is why this is two-tailed with nothing extra: C depends on |D|, so uDoubled and 2n₁n₂ − uDoubled — a result as
  * far above the null midpoint as the other is below it — can only ever bracket the same.
@@ -215,6 +259,8 @@ export function mannWhitneyBracket(uDoubled: number, n1: number, n2: number): Br
   const c = dAbs > 0n ? dAbs - 1n : 0n // C = max(0, |D| − 1): the continuity correction, clamped
   const left = VARIANCE_DIVISOR_AFTER_DOUBLING * BASIS_POINTS_SQUARED * c * c
   const v = BigInt(n1) * BigInt(n2) * BigInt(n1 + n2 + 1)
+  const z001 = BigInt(Z_BP['p<0.001'])
+  if (left >= z001 * z001 * v) return 'p<0.001'
   const z01 = BigInt(Z_BP['p<0.01'])
   if (left >= z01 * z01 * v) return 'p<0.01'
   const z05 = BigInt(Z_BP['p<0.05'])
@@ -246,6 +292,7 @@ export function chiSquareBracket(chiScaled: number, df: number): Bracket {
   if (row === undefined) {
     throw new RangeError(`no chi-square critical for df ${df}: the table carries df 1 to ${CHI_CRIT.length}`)
   }
+  if (chiScaled >= row.p001) return 'p<0.001'
   if (chiScaled >= row.p01) return 'p<0.01'
   if (chiScaled >= row.p05) return 'p<0.05'
   return 'none'
