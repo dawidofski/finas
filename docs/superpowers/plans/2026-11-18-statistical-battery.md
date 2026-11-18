@@ -31,7 +31,7 @@ The statistics §12 asks for are all exactly computable in integers:
 | Compute p with floats in a bounded module | Fastest to write, but it puts float arithmetic in the one place whose whole output is a confidence claim, and a subtly wrong approximation yields a plausible number nobody can check. This project's recurring defect is exactly that. |
 | Integer-scaled normal / χ² approximations | Keeps the rule, but is real numerical work: a rational approximation of a CDF, tuned and verified, for three distributions. High effort, and a quiet error is undetectable without an oracle. |
 | Critical-value tables per sample size | Keeps the rule, but a wrong number in a table of Spearman or Mann–Whitney criticals silently corrupts every finding built on it, and nobody reviewing this can check a table of rank criticals by eye. Rejected for that reason. |
-| **Squared normal comparison, chosen** | Both rank tests have a normal approximation, and the significance test reduces to an **integer inequality once both sides are squared**, which removes the square root. The only constants needed are the two-tailed normal criticals **1.96** and **2.576**, which anyone can check from memory, plus the chi-square criticals for small degrees of freedom (**3.841** and **6.635** at df 1), which are equally well known. No per-n table, no float, and every comparison is exact integer arithmetic. |
+| **Squared normal comparison, chosen** | Both rank tests have a normal approximation, and the significance test reduces to an **integer inequality once both sides are squared**, which removes the square root. The only constants needed are the two-tailed normal criticals **1.96** and **2.5758**, which anyone can check from memory, plus the chi-square criticals for small degrees of freedom (**3.841** and **6.635** at df 1), which are equally well known. No per-n table, no float, and every comparison is exact integer arithmetic. |
 
 **The comparisons, written out, because they are the heart of the plan:**
 
@@ -149,7 +149,7 @@ The sixth guards the case where a rearrangement loses a sign or an inequality di
 
 **Where a statistic is too small for the approximation to mean anything, return `none`** rather than a bracket. §12's gates keep most of these samples reasonable, but say in a comment which n the approximation is honest for and what the module does below it — a bracket from a normal approximation at n = 4 is a made-up finding.
 
-- [ ] Steps 2–6 as Task 1, committing `feat: significance as a bracket from a declared table`.
+- [ ] Steps 2–6 as Task 1, committing `feat: significance as a squared integer comparison`.
 
 ---
 
