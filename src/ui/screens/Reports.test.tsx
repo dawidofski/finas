@@ -9,6 +9,8 @@ import type { MonthPoint } from '../../analytics/series'
 import type { AnnotatedRow } from '../../analytics/annotated'
 import { formatBp, formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
+import { violations } from '../../test/bannedWords'
+import { spoken } from '../../test/spoken'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']
@@ -310,8 +312,7 @@ describe('Reports screen', () => {
     expect(p.textContent).not.toContain('No spending is recorded')
     expect(p.textContent).not.toContain('cannot be given as a percentage')
     expect(p.textContent).not.toContain(formatEur(-30000)) // the contradictory second sentence is gone
-    expect(p.textContent).not.toMatch(causalWords)
-    expect(p.textContent).not.toMatch(jargonWords)
+    expect(violations(spoken(p)), 'lists tripped by the panel').toEqual([])
   })
 
   it('still says no spending is recorded when nothing was spent and nothing was returned', async () => {
@@ -404,26 +405,22 @@ describe('Reports screen', () => {
   })
 
   it('uses no causal wording and no technical terms in any reading', async () => {
-    const causal = causalWords
-    const jargon = jargonWords
     await rich()
     const first = await mount()
-    const rich1 = text()
+    const rich1 = spoken()
     first.unmount()
     // The other branches of the same sentences: a completed month, an estimate, a refund, no income, a late payday.
     await mount('2026-12-05', '2026-11')
-    const rich2 = text()
+    const rich2 = spoken()
     cleanup()
     for (const t of [rich1, rich2]) {
-      expect(t).not.toMatch(causal)
-      expect(t).not.toMatch(jargon)
+      expect(violations(t), 'lists tripped by the page').toEqual([])
     }
     await db.delete(); await db.open(); await seedDatabase()
     await tx('a', '2026-11-03', -10000, GROCERIES)
     await mount()
-    expect(text()).not.toMatch(causal)
-    expect(text()).not.toMatch(jargon)
-    expect(text().length).toBeGreaterThan(500) // a scan of nothing proves nothing
+    expect(violations(spoken()), 'lists tripped by the page').toEqual([])
+    expect(spoken().length).toBeGreaterThan(500) // a scan of nothing proves nothing
     // The returned-money branches: an uncategorised return, and a return that makes a group negative.
     for (const purchase of [{ ing: null, cents: 25000 }, { ing: SHOPPING, cents: 30000 }]) {
       cleanup()
@@ -432,8 +429,7 @@ describe('Reports screen', () => {
       await returnedInNovember(purchase, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
       await mount()
       expect(text()).toMatch(/money returned to you/i)
-      expect(text()).not.toMatch(causal)
-      expect(text()).not.toMatch(jargon)
+      expect(violations(spoken()), 'lists tripped by the page').toEqual([])
     }
   })
 

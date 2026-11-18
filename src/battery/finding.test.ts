@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BANNED_LISTS, assertNotVacuous, causalWords, jargonWords, noJargon } from '../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, assertNotVacuous, causalWords, jargonWords, noJargon, violations } from '../test/bannedWords'
 import { BATTERY, type RelationshipId } from './battery'
 import type { Bracket } from './critical'
 import type { ContingencyResult, ContingencyRow } from './contingency'
@@ -207,6 +207,19 @@ describe('the eight fields a finding carries', () => {
         expect(s, `${id}: ${s}`).not.toMatch(noJargon)
       }
     }
+  })
+
+  it('uses no presuming or judging wording, nor any list at all, in any field of any template', () => {
+    // Both sets of lists apply to every owner-facing surface: BANNED_LISTS (pinned at three above) and WORDING_LISTS.
+    expect(() => assertNotVacuous(WORDING_LISTS)).not.toThrow()
+    let scanned = 0
+    for (const { id, finding } of everyFinding()) {
+      for (const s of copyOf(finding)) {
+        scanned += 1
+        expect(violations(s), `${id}: ${s}`).toEqual([])
+      }
+    }
+    expect(scanned).toBeGreaterThan(50) // a scan of nothing proves nothing
   })
 
   it('never renders the name of the test that was run', () => {

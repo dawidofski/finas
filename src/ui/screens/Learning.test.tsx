@@ -10,6 +10,7 @@ import { challengesFor, noteFor } from '../../advice/education'
 import { SNOOZE_DAYS, SUPPRESS_AFTER_REJECTIONS } from '../../advice/state'
 import { formatEur } from '../../lib/money'
 import { BANNED_LISTS, WORDING_LISTS } from '../../test/bannedWords'
+import { appSpoken, spoken } from '../../test/spoken'
 import type { TransactionRow } from '../../db/schema'
 import { ROUTES } from '../routes'
 
@@ -58,18 +59,7 @@ const mount = async (computedAt = AT) => {
   return view
 }
 const text = () => document.body.textContent ?? ''
-/** Space-separated element text (the idea of spoken() in Score.test.tsx): textContent runs adjacent elements together, and a word boundary then misses a word at an element edge. */
-const spokenOf = (root: HTMLElement): string => {
-  const clone = root.cloneNode(true) as HTMLElement
-  for (const el of clone.querySelectorAll('*')) { el.insertAdjacentText('beforebegin', ' '); el.insertAdjacentText('afterend', ' ') }
-  return clone.textContent ?? ''
-}
-/** The app's own words: the owner's words (<q>) are taken out of the scan, as in Intelligence.test.tsx. */
-const appWords = (): string => {
-  const clone = document.body.cloneNode(true) as HTMLElement
-  for (const q of clone.querySelectorAll('q')) q.remove()
-  return spokenOf(clone)
-}
+const appWords = (): string => appSpoken()
 const cards = () => screen.queryAllByRole('article')
 const cardOf = (heading: string): HTMLElement => screen.getByRole('heading', { level: 3, name: heading }).closest('article') as HTMLElement
 const states = async () => Object.fromEntries((await db.recommendationState.toArray()).map((r) => [r.key, r]))
@@ -285,7 +275,7 @@ describe('Learning screen', () => {
     await mount()
     expect([...document.querySelectorAll('q')].map((q) => q.textContent)).toContain('Compra pequena 1')
     expect(appWords()).not.toContain('Compra pequena')
-    expect(spokenOf(document.body)).toContain('Compra pequena 1')
+    expect(spoken()).toContain('Compra pequena 1')
   })
 
   it('keeps focus after an action, on the next piece of advice or else the heading', async () => {

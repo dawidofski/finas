@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Mood from './Mood'
+import { spoken } from '../../test/spoken'
 import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { writeAnnotation } from '../../db/annotations'
@@ -190,6 +191,6 @@ describe('Mood screen', () => {
   it('says the queue is empty in a way that is not a reproach', async () => {
     render(<Mood />)
     expect(await screen.findByText(/nothing waiting/)).toBeInTheDocument()
-    expect(document.body.textContent).not.toMatch(/behind|overdue|missed|should have|failed|catch up|not yet/i)
+    expect(spoken()).not.toMatch(/behind|overdue|missed|should have|failed|catch up|not yet/i)
   })
 })

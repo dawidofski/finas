@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, violations } from '../../test/bannedWords'
+import { appSpoken, spoken } from '../../test/spoken'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Intelligence, { MIN_ANSWERED, MIN_REGRETTED, isFinding } from './Intelligence'
 import { db } from '../../db/db'
@@ -154,8 +155,8 @@ describe('Intelligence screen: purchases marked not worth it', () => {
     expect(merchantItem).toHaveTextContent(`2 of 3 answered purchases marked not worth it, ${formatEur(2500)} in total (all your records)`)
     expect(within(list).getByText(/^Mood: Bored/)).toHaveTextContent('2 of 3')
     expect(within(list).getByText(/^Day of the week: martes/)).toHaveTextContent('2 of 3')
-    expect(pageText()).not.toMatch(/because you|caused|makes you|leads? to|results? in|due to/i)
-    expect(pageText()).not.toMatch(/\b(tier|classifier|bayesian|cluster|correlation|posterior)\b/i)
+    expect(spoken()).not.toMatch(/because you|caused|makes you|leads? to|results? in|due to/i)
+    expect(spoken()).not.toMatch(/\b(tier|classifier|bayesian|cluster|correlation|posterior)\b/i)
   })
 
   it('names the month when the period is narrowed to it, and counts only that month', async () => {
@@ -422,7 +423,7 @@ describe('Intelligence screen: the ten questions', () => {
     // An ingredient list, not an error log: nothing is raised as a fault and nothing claims the app is broken.
     expect(within(region()).queryAllByRole('alert')).toEqual([])
     expect(region().querySelectorAll('.notice-refusal')).toHaveLength(0)
-    expect(region().textContent ?? '').not.toMatch(/\b(error|errors|failed|failure|fails|warning|invalid|unavailable|problem|sorry|unable)\b/i)
+    expect(spoken(region())).not.toMatch(/\b(error|errors|failed|failure|fails|warning|invalid|unavailable|problem|sorry|unable)\b/i)
     expect(region()).toHaveTextContent('Nothing was looked at this time')
     expect(region()).toHaveTextContent('What this one still needs')
   })
@@ -455,7 +456,7 @@ describe('Intelligence screen: the ten questions', () => {
     expect(size.textContent ?? '').not.toContain(f.confidence)
     expect(sure.textContent ?? '').not.toContain(formatEffect(f.effect))
     // No single merged score, bar or adjective standing for both.
-    expect(item.textContent ?? '').not.toMatch(/\b(score|rating|out of 10|strength and certainty)\b/i)
+    expect(spoken(item)).not.toMatch(/\b(score|rating|out of 10|strength and certainty)\b/i)
   })
 
   it('renders each kind of effect figure as what it is, never all three as a percentage', async () => {
@@ -524,7 +525,7 @@ describe('Intelligence screen: the ten questions', () => {
     const states = [stateOf(uncertain), stateOf(sparse), stateOf(tooMany), stateOf(gated)]
     expect(new Set(states).size).toBe(4)
     // Nothing anywhere says the app found no connection: not one of these said that.
-    expect(region().textContent ?? '').not.toMatch(/no (effect|connection|link|pattern at all)|does not predict|unrelated/i)
+    expect(spoken(region())).not.toMatch(/no (effect|connection|link|pattern at all)|does not predict|unrelated/i)
   })
 
   it('says a table could not be compared at all without calling that an answer', async () => {
@@ -565,8 +566,8 @@ describe('Intelligence screen: the ten questions', () => {
     expect(readFrom(questionFor('category-savings'))).toBe(`Read from: 7 months, ${PERIOD_TEXT}`)
     expect(readFrom(questionFor('weekend'))).toBe(`Read from: 96 purchases, ${PERIOD_TEXT}`)
     expect(readFrom(questionFor('small-purchases'))).toBe('Read from: 23 purchases, 01/10/2026 to 31/10/2026')
-    expect(pageText()).not.toMatch(/\d+\s+transactions?\b/i)
-    expect(region().textContent ?? '').not.toMatch(/\btransactions? (analysed|counted|used)\b/i)
+    expect(spoken()).not.toMatch(/\d+\s+transactions?\b/i)
+    expect(spoken(region())).not.toMatch(/\btransactions? (analysed|counted|used)\b/i)
   })
 
   it("shows a reason or a category the owner named as the owner's own words", async () => {
@@ -646,21 +647,17 @@ describe('Intelligence screen: the ten questions', () => {
     // Nothing is copied here, and neither is the extraction: it was a local function in three files, which made
     // three copies of the mechanism that exists to prevent copies.
     // A vacuous extraction would make the assertions below pass on anything, so each list is probed first.
-    for (const list of BANNED_LISTS) {
+    for (const list of [...BANNED_LISTS, ...WORDING_LISTS]) {
       expect(list.forbids, list.name).toMatch(list.pattern)
       expect(list.allows, list.name).not.toMatch(list.pattern)
     }
 
     // The APP's words. What the owner wrote is quoted as theirs and is not the app speaking: this fixture's own reason
     // is "Because I was tired", which the app may repeat but may not be judged on.
-    const clone = document.body.cloneNode(true) as HTMLElement
-    for (const q of clone.querySelectorAll('q')) q.remove()
-    const appWords = clone.textContent ?? ''
+    const appWords = appSpoken()
     expect(pageText()).toContain(OWN_REASON) // the owner's words really are on the page
     expect(appWords).not.toContain(OWN_REASON)
-    expect(appWords).not.toMatch(causalWords)
-    expect(appWords).not.toMatch(jargonWords)
-    expect(appWords).not.toMatch(noJargon)
+    expect(violations(appWords), 'lists tripped by the app words').toEqual([])
   })
 
   it('stamps the figures it computes with the instant it was given, not with the day', async () => {

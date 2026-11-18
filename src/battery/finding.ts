@@ -233,14 +233,14 @@ function verdictWords(
   const neither = 'It has not said your answers go together, and it has not said they do not.'
   if (result.verdict === 'sparse') {
     return {
-      confidence: 'Some corners of this comparison hold too few of your answers for the app to say how certain it is, so it did not judge. The strength figure stands; the certainty behind it is simply not known.',
+      confidence: 'Some corners of this comparison hold too few of your answers for the app to say how certain it is, so it did not judge. The strength figure stands; the certainty behind it is not known.',
       meaning: `${held}: too few of your answers fall in some corners of the comparison for the app to judge it. ${neither}`,
       action: untested.sparseAction,
     }
   }
   if (result.verdict === 'too-many-categories') {
     return {
-      confidence: 'You have recorded more different answers here than this comparison can weigh at once, so the app did not judge how certain it is rather than judge it wrongly. The strength figure stands; the certainty behind it is simply not known.',
+      confidence: 'You have recorded more different answers here than this comparison can weigh at once, so the app did not judge how certain it is rather than judge it wrongly. The strength figure stands; the certainty behind it is not known.',
       meaning: `${held}: there are more different answers here than this comparison can weigh at once, so the app has not judged it. ${neither}`,
       action: untested.tooManyAction,
     }
@@ -314,7 +314,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
       period: r.period,
       effect: { label: 'The gap in the share of purchases that went on wants rather than needs', bp: r.effectBp, scale: 'points' },
       limitation: `This is a share and not an amount: across ${count(r.n, 'purchase', 'purchases')} it says which way your spending leaned and nothing at all about how much each one came to. Only the purchases you gave a mood to and sorted into wants or needs are counted, so an uncategorised one is in neither group, and these are the purchases you chose to annotate rather than everything you spent.`,
-      meaning: 'One reading is that a stressed hour is an hour when a want feels like a need. Another is that the hours you record as stressed are your busiest, when a want is simply what is nearest to hand.',
+      meaning: 'One reading is that a stressed hour is an hour when a want feels like a need. Another is that the hours you record as stressed are your busiest, when a want is whatever is nearest to hand.',
       action: 'Name the one want you reach for when stressed, the coffee or the takeaway, and settle now on what you would rather do instead, so the choice is already made the next time.',
     }
   },
@@ -335,7 +335,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
       effect: { label: 'How strongly the mood you recorded and the tag you gave a purchase went together', bp: r.vBp, scale: 'percent' },
       limitation: `This covers ${count(r.n, 'purchase', 'purchases')} that carry both a mood and a reason. ${FLOORED_STRENGTH} It also cannot tell apart a purchase that felt like an impulse at the time from one you tagged that way afterwards.`,
       ...verdictWords(r, {
-        meaning: 'One reading is that an empty hour and a quick purchase keep each other company. Another is that boredom is simply the mood you are readiest to admit to on a purchase you have already tagged that way.',
+        meaning: 'One reading is that an empty hour and a quick purchase keep each other company. Another is that boredom is the mood you are readiest to admit to on a purchase you have already tagged that way.',
         action: 'When you next notice you are bored and reaching for your phone, put the one thing you were about to buy on a list for tomorrow instead.',
       }, {
         sparseAction: 'Open a few more purchases from your Transactions list and give each one a mood and a reason; the thin corners of this comparison need filling in before it can be judged.',
@@ -422,7 +422,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     period: { from: `${c.month}-01`, to: addDays(nextMonthStart(c.month), -1) },
     effect: { label: `The part of that month’s spending that went in purchases under ${formatEur(c.ceilingCents)}`, bp: percentBpOf(c.small.totalCents, c.monthSpendCents), scale: 'percent' },
     limitation: `This is a straight count of the ${count(c.small.count, 'purchase', 'purchases')} under ${formatEur(c.ceilingCents)} that ${formatMonthTitle(c.month)} holds${c.small.medianCents === null ? '' : `, where the middle one of them came to ${formatEur(c.small.medianCents)}`}. It is one month standing on its own, and it counts every purchase under that line whether it was a coffee or a bus fare, so it says what the small ones came to and nothing about which of them you would miss.`,
-    meaning: 'Small purchases of this kind add up to a sum most people would notice if it left the account in one go, and some of them are essentials that merely happen to be cheap. The figure is what they came to, and it is for you to say which of them was worth it.',
+    meaning: 'Small purchases of this kind add up to a total, and some of them are essentials that happen to be cheap. The figure is what they came to, and it is for you to say which of them was worth it.',
     action: `Pick the one kind of purchase under ${formatEur(c.ceilingCents)} you make most often and buy it in a weekly batch instead of one at a time, then look at this figure again next month.`,
     confidence: 'This one is a count of your own purchases rather than a comparison, so there is nothing here to be uncertain about.',
   }),
@@ -481,7 +481,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
         bp: top?.effectBp ?? 0,
         scale: 'closeness',
       },
-      limitation: `This is ${count(r.months, 'month', 'months')} of records rather than a count of purchases. ${searchClause(r.categories.length, top?.label)} A category you spent the same in every month was not compared at all, and the savings figure is simply what was left at the end of a month, which one large purchase can move on its own.`,
+      limitation: `This is ${count(r.months, 'month', 'months')} of records rather than a count of purchases. ${searchClause(r.categories.length, top?.label)} A category you spent the same in every month was not compared at all, and the savings figure is what was left at the end of a month, which one large purchase can move on its own.`,
       meaning: 'One reading is that this is where the spare money goes in a month that has any. Another is that this category and your savings both follow the same quiet and busy months, which would look the same from here.',
       action: top === undefined
         ? 'Keep importing your statements each month on the Import screen: this one needs a longer run of months before any category stands out.'

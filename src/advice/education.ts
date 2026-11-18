@@ -35,7 +35,7 @@ const NOTES: Readonly<Record<RecommendationId, Note>> = {
   'small-purchases-add-up': {
     topic: 'small-purchase-accumulation',
     title: 'Small amounts and their total',
-    body: 'Each small purchase is a small amount, and the total across a month is a different figure. The total is shown here beside the individual amounts, so you can compare it with what those purchases are worth to you.',
+    body: 'Each small purchase is a small amount, and the total across a month is a different figure. You can compare that total with what those purchases are worth to you.',
   },
   'savings-inconsistent': {
     topic: 'savings-consistency',
@@ -45,12 +45,12 @@ const NOTES: Readonly<Record<RecommendationId, Note>> = {
   'discretionary-rising': {
     topic: 'lifestyle-inflation',
     title: 'Spending on wants over time',
-    body: 'Lifestyle inflation is the name for spending on wants rising over time. In your records this spending has gone up over recent months, and the months are laid out so you can see by how much. Whether that matches what you want from your money is yours to judge.',
+    body: 'Lifestyle inflation is the name for spending on wants rising over time. In your records this spending has gone up over recent months. Whether that matches what you want from your money is yours to judge.',
   },
   'regret-cluster': {
     topic: 'impulse-spending',
     title: 'Wanting and buying',
-    body: 'You marked some of these purchases as not worth it, and they have something in common. An impulse purchase is one made quickly, with little time between wanting and buying. A question you can ask of your own purchases is whether any of these were bought quickly. If so, a pause before buying gives you time to see whether the wish stays.',
+    body: 'You marked some of these purchases as not worth it. An impulse purchase is one made quickly, with little time between wanting and buying. A question you can ask of your own purchases is whether any of these were bought quickly. If so, a pause before buying gives you time to see whether the wish stays.',
   },
   'unusual-spend': {
     topic: 'value-of-money',
@@ -77,12 +77,12 @@ const CHALLENGES: Readonly<Record<ChallengeId, Omit<Challenge, 'available' | 'wh
   'twenty-four-hour-rule': {
     id: 'twenty-four-hour-rule',
     title: 'Wait a day on a want',
-    body: 'When you notice a wish to buy something that was not planned, note it and wait a day before deciding. If it still matters the next day, buy it knowing that. If it does not, nothing was lost.',
+    body: 'When you notice a wish to buy something that was not planned, note it and wait a day before deciding. If it still matters the next day, decide knowing that. If it does not, nothing was lost.',
   },
   'subscription-review': {
     id: 'subscription-review',
     title: 'Read through what repeats',
-    body: 'Go through the payments that recur each month and, for each, ask whether you still use it and still want it. Keep what earns its place and end what does not.',
+    body: 'Go through the payments that recur each month and, for each, ask whether you still use it and still want it. Decide for each one whether to keep it or end it.',
   },
   'savings-step-up': {
     id: 'savings-step-up',
@@ -101,7 +101,7 @@ const OFFERED: Readonly<Record<RecommendationId, readonly ChallengeId[]>> = {
 }
 
 /** Said in place of silence, so a challenge that cannot run yet never reads as a bug. */
-const NEEDS_RECURRING = 'The app cannot list subscriptions yet, so it cannot show which payments repeat.'
+const NEEDS_RECURRING = 'The app cannot list subscriptions, so it cannot show which payments repeat.'
 
 /**
  * The challenges that go with a recommendation. `subscription-review` is returned wherever it applies: with

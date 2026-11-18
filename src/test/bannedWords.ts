@@ -69,13 +69,21 @@ export const BANNED_LISTS: readonly BannedList[] = [
 ]
 
 /**
- * Wording that presumes what the owner can afford (anti-goal A1). "just" and "only" are ordinary words, so this list
- * matches the PRESUMING usages ("just stop", "you only need to", "simply", "cut back on luxuries"), not the words.
+ * Wording that presumes what the owner can afford (anti-goal A1). "just", "only", "merely" and "easy" are ordinary
+ * words, so this list matches the PRESUMING constructions ("just stop", "you only need to", "simply", "cut back on
+ * luxuries", "you must cut"), not the words: "rows just set aside", "the app merely lists them" and "it is easy to fix
+ * a typo" describe the app or a task and presume nothing about the owner's means. A list that forbids ordinary
+ * sentences gets weakened by the next person who hits it, so each risky word is held to its presuming construction.
  * OWNED HERE, unlike the three above: no test file carries this rule, so a copy elsewhere would be the first drift.
  */
-export const meansAssumption = /\b(simply|merely|just (stop|skip|cut|drop|save|put|set|use|say|try|buy|spend|don['’]?t|stick)|why not just|(you|you['’]ll) (only|just) (need|have)|only (need|have) to|all you need to do|cut back on (the )?luxur\w*|(should be able|ought) to|(it['’]?s|is) (easy|simple) to (save|cut|stop|skip|afford|fix)|easily (afford|save|cut)|if you can spare|you can afford)\b/i
-/** Judging wording (anti-goal A1): the app describes what happened, it does not grade the person who did it. */
-export const shamingWords = /\b(should(n['’]?t)?|ought to|wast(e[ds]?|ing|eful)|squander\w*|overspen[dt]\w*|bad (habit|decision|choice|purchase)s?|irresponsible|reckless|guilty|lazy|careless|splurg\w*|blew|poorly|foolish|indulgent|extravagant|frivolous|excessive|too much|lack of control|regret\w*)\b/i
+export const meansAssumption = /\b(simply|merely (stop|skip|cut|drop|save|spend|buy|try|stick|a (habit|choice|matter|question|case))|just (stop|skip|cut|drop|save|spend|buy|try|stick|don['’]?t)|(?<=(?:^|[.!?:;]\s*|\byou (?:can|could|might|may) |\bthen ))just (put|set|use|say)|why not just|(you|you['’]ll) (only|just) (need|have)|only (need|have) to|all you need to do|cut back on (the )?luxur\w*|you(['’](ll|ve got))? (will )?(need to|have to|must|got to|ought to) (cut|stop|spend (less|fewer)|reduce|give up)|(should be able|ought) to|(it['’]?s|is) (easy|simple) to (save|cut|stop|skip|afford)|easily (afford|save|cut)|if you can spare|you can afford)\b/i
+/**
+ * Judging wording (anti-goal A1): the app describes what happened, it does not grade the person who did it.
+ * Held to the JUDGING construction, so a category called "Food waste", "too much of the data is missing" and "regretted
+ * purchases are listed" read as the plain description they are, while "money wasted", "you spent too much", "excessive
+ * spending" and "you'll regret it" do not.
+ */
+export const shamingWords = /\b(should(n['’]?t)?|ought to|wast(ed|es|ing)|wasteful\w*|a waste|waste of|to waste|(you|we|they|is|was|be|been|such|pure) waste|waste (money|time|cash)|squander\w*|overspen[dt]\w*|bad (habit|decision|choice|purchase|buy)s?|irresponsib\w*|reckless|guilty|lazy|careless\w*|splurg\w*|blew|poorly (spent|judged|chosen|planned|managed|budgeted|handled|decided|considered|thought)|(spent|spend|spending|managed|budgeted|handled|chose|planned|decided|paid|bought) poorly|foolish|indulg\w*|extravagan\w*|needless\w*|frivolous|excessive (spend\w*|purchas\w*|buy\w*|shopping|consumption|outlay|expense\w*)|(is|was|are|were|be|been|felt|seems?|looks?|got|so|too|rather|quite) excessive|excessive(?=\s*[.!?]|$)|(spen[dt]\w*|pa(y|id)|buy\w*|bought) too much|too much (on|for|money|spending|spent|of (your|the) (money|income|budget|salary|spending))|too much(?=\s*[.!?]|$)|lack of control|(you|you['’](ll|d|ve|re)) (\w+ )?regret\w*|regret (it|that|this|them|buying|spending|your|having)|(feel|feeling|felt|with|full of|have|had) regret|regrettabl\w*)\b/i
 
 /**
  * The owner-facing wording rules owned in THIS file. Kept apart from BANNED_LISTS, which names the three lists read
@@ -83,8 +91,8 @@ export const shamingWords = /\b(should(n['’]?t)?|ought to|wast(e[ds]?|ing|eful
  * that file asserts. Probed on import by the `assertNotVacuous(WORDING_LISTS)` call at the foot of this file.
  */
 export const WORDING_LISTS: readonly BannedList[] = [
-  { name: 'meansAssumption', pattern: meansAssumption, forbids: 'you only need to', allows: 'Only the card payments are counted, just as the bank lists them, and it is easy to lose track of a month' },
-  { name: 'shamingWords', pattern: shamingWords, forbids: 'a wasted month', allows: 'This spending went up over recent months, and the total is shown beside each purchase' },
+  { name: 'meansAssumption', pattern: meansAssumption, forbids: 'you only need to', allows: 'Only the card payments are counted, just as the bank lists them, and it is easy to lose track of a month. The app merely lists them, rows just set aside are shown apart, and it is easy to fix a typo in a note.' },
+  { name: 'shamingWords', pattern: shamingWords, forbids: 'a wasted month', allows: 'This spending went up over recent months, and the total is shown beside each purchase. This month had too much variation to compare, too much of the data is missing, an excessive number of rows were skipped, and matches were poorly scored. Food waste is a category, and regretted purchases are listed.' },
 ]
 
 /**
@@ -123,3 +131,12 @@ assertNotVacuous(BANNED_LISTS)
 
 /** The same probe for the lists owned here, so the comment on WORDING_LISTS is true. */
 assertNotVacuous(WORDING_LISTS)
+
+/**
+ * The names of every list (of both sets) that `text` trips, empty when it is clean. One call applies the causal,
+ * jargon, learning-engine, presuming-means and judging lists together, so a scan cannot quietly use fewer of them
+ * than another surface does. Assert it equals `[]`: a failure then names the list, and the sentence is in the label.
+ */
+export function violations(text: string): string[] {
+  return [...BANNED_LISTS, ...WORDING_LISTS].filter((list) => list.pattern.test(text)).map((list) => list.name)
+}

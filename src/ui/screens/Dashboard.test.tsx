@@ -7,6 +7,8 @@ import { inputsHash, ENGINE_VERSION } from '../../analytics/cache'
 import type { MonthPoint } from '../../analytics/series'
 import { formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
+import { violations } from '../../test/bannedWords'
+import { spoken } from '../../test/spoken'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']
@@ -56,8 +58,6 @@ async function returnedInNovember(purchase: { ing: [string, string] | null; cent
   await link('r1', 'buy', 'ref', purchase.cents)
 }
 const SHOPPING: [string, string] = ['Compras', 'Compras (otros)']
-const causalWords = /\b(because|cause[sd]?|causing|due to|owing to|leads? to|led to|results? in|resulted|as a result|therefore|thus|so that|drives?|driven|explains?|explained|why|makes you|made you|since you|which is why)\b/i
-const jargonWords = /\b(cache|cached|basis|engine|z-score|median|deviation|outlier|percentile|standard|component|net)\b/i
 
 /** A November with income, groceries and a restaurant, and an October with income and groceries. */
 async function twoMonths() {
@@ -223,8 +223,7 @@ describe('Dashboard screen', () => {
     expect(rows).toEqual([['Essentials', 80000], ['Discretionary', -25000]])
     await waitFor(() => expect(screen.getByText(`Money returned to you in November 2026 came to more than was spent on discretionary spending, and its bar is drawn below zero. Essentials come to ${formatEur(80000)} and discretionary spending to ${formatEur(-25000)}.`)).toBeInTheDocument())
     expect(text()).not.toContain('is not filed under a spending category') // the uncategorised notice is a different case
-    expect(text()).not.toMatch(causalWords)
-    expect(text()).not.toMatch(jargonWords)
+    expect(violations(spoken()), 'lists tripped by the page').toEqual([])
   })
 
   it('names essentials when the returned purchase was groceries, and says nothing when no bar is below zero', async () => {
@@ -242,17 +241,16 @@ describe('Dashboard screen', () => {
   it('uses no causal wording and no technical terms, including when money has been returned', async () => {
     await twoMonths()
     const first = await mount()
-    const plain = text()
+    const plain = spoken()
     first.unmount()
     await db.delete(); await db.open(); await seedDatabase()
     uid = 0
     await returnedInNovember({ ing: null, cents: 25000 }, [['g', 80000, GROCERIES], ['r', 5000, RESTAURANTS]])
     await mount()
-    const returned = text()
+    const returned = spoken()
     expect(returned).toContain('money returned to you') // the branch under scan is on screen
     for (const t of [plain, returned]) {
-      expect(t).not.toMatch(causalWords)
-      expect(t).not.toMatch(jargonWords)
+      expect(violations(t), 'lists tripped by the page').toEqual([])
       expect(t.length).toBeGreaterThan(200) // a scan of nothing proves nothing
     }
   })

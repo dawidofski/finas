@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import WorthIt from './WorthIt'
+import { spoken } from '../../test/spoken'
 import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { writeAnnotation } from '../../db/annotations'
@@ -149,7 +150,7 @@ describe('WorthIt screen', () => {
   it('says an empty queue is nothing waiting, not a reproach', async () => {
     render(<WorthIt today={TODAY} />)
     const status = (await screen.findByText(/nothing waiting/)).closest('[role="status"]') as HTMLElement
-    expect(status.textContent).not.toMatch(/behind|overdue|should|failed/i)
+    expect(spoken(status)).not.toMatch(/behind|overdue|should|failed/i)
   })
 
   it('changing the delay setting changes what is offered', async () => {

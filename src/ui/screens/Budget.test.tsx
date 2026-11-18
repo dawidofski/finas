@@ -6,6 +6,7 @@ import { seedDatabase } from '../../db/seed'
 import { saveAllocation } from '../../budget/allocations'
 import { formatBp, formatEur } from '../../lib/money'
 import type { TransactionRow } from '../../db/schema'
+import { spoken } from '../../test/spoken'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación']
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']
@@ -286,7 +287,7 @@ describe('Budget screen', () => {
     render(<Budget today={TODAY_DEC} initialMonth="2026-11" />)
     const group = await outsideGroup()
     expect(group.textContent ?? '').not.toContain('%')
-    expect(group.textContent ?? '').not.toMatch(/over|under|plan\b/)
+    expect(spoken(group)).not.toMatch(/over|under|plan\b/)
     expect(group).toHaveTextContent(formatEur(4000))
   })
 

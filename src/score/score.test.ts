@@ -113,7 +113,7 @@ describe('moneyScore', () => {
   it('gives every component its own non-empty label for the owner', () => {
     const labels = moneyScore(six({})).components.map((c) => c.label)
     // Each id carries its own label, in the order the screen shows them.
-    expect(labels).toEqual(['Budget awareness', 'Savings consistency', 'Discretionary share over time', 'Spending review', 'Goal progress', 'Repeated regrets'])
+    expect(labels).toEqual(['Budget awareness', 'Savings consistency', 'Discretionary share over time', 'Spending review', 'Goal progress', 'Repeat purchases marked not worth it'])
     expect(moneyScore(six({})).components.map((c) => c.id)).toEqual(
       ['budget-awareness', 'savings-consistency', 'improvement', 'spending-awareness', 'goal-progress', 'learning'])
     expect(labels.every((l) => l.trim().length > 0)).toBe(true)

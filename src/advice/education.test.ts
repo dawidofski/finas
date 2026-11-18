@@ -156,7 +156,7 @@ describe('education', () => {
     expect(nsd?.body).toMatch(/groceries/)
     // Says what is true now, not what is coming.
     const why = challengesFor('small-purchases-add-up', false).find((c) => c.id === 'subscription-review')?.why ?? ''
-    expect(why).not.toMatch(/\b(will|soon|later|once|yet to|coming)\b/i)
+    expect(why).not.toMatch(/\b(will|soon|later|once|yet to|yet|coming)\b/i)
     expect(why).toMatch(/cannot list subscriptions/)
   })
 

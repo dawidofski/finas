@@ -5,7 +5,8 @@ import { db } from '../../db/db'
 import { seedDatabase } from '../../db/seed'
 import { saveAllocation } from '../../budget/allocations'
 import { moneyScore, WEIGHTS, type ComponentId } from '../../score/score'
-import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, violations } from '../../test/bannedWords'
+import { spoken } from '../../test/spoken'
 import { transactionRowReads } from '../../test/reads'
 import type { TransactionRow } from '../../db/schema'
 import type { MonthPoint } from '../../analytics/series'
@@ -55,16 +56,6 @@ const mount = async () => {
   return view
 }
 const text = () => document.body.textContent ?? ''
-/**
- * What the owner reads, with a space wherever one element ends and the next begins. textContent runs them together
- * ("worked outComponent weight"), and a word boundary in a banned-word pattern never sees a word that starts there,
- * so a scan of textContent passes on wording the pattern exists to forbid.
- */
-const spoken = (): string => {
-  const clone = document.body.cloneNode(true) as HTMLElement
-  for (const el of clone.querySelectorAll('*')) { el.insertAdjacentText('beforebegin', ' '); el.insertAdjacentText('afterend', ' ') }
-  return clone.textContent ?? ''
-}
 
 /**
  * Two of the six measured, with DIFFERENT weights (budget 3, goals 2) so that the divisor the screen shows can be told from
@@ -323,7 +314,7 @@ describe('Money Score screen', () => {
 
   it('uses no causal, shaming or statistical wording anywhere on the page', async () => {
     // The lists come from src/test/bannedWords.ts. A vacuous extraction would pass anything, so each is probed first.
-    for (const list of BANNED_LISTS) {
+    for (const list of [...BANNED_LISTS, ...WORDING_LISTS]) {
       expect(list.forbids, list.name).toMatch(list.pattern)
       expect(list.allows, list.name).not.toMatch(list.pattern)
     }
@@ -338,9 +329,7 @@ describe('Money Score screen', () => {
       if (setup === allSixMeasured) expect(page.match(/Measured: \d+ out of 100/g)).toHaveLength(6) // every part's own sentences are on the page
       expect(page).toContain('The six parts') // it really rendered, so this is not a scan of nothing
       expect(page).toContain(LABEL['learning'])
-      expect(page).not.toMatch(causalWords)
-      expect(page).not.toMatch(jargonWords)
-      expect(page).not.toMatch(noJargon)
+      expect(violations(page), 'lists tripped by the page').toEqual([])
     }
   })
 

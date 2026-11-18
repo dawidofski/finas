@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, violations } from '../test/bannedWords'
 import { BATTERY, isMet, type BatteryData, type RelationshipId } from './battery'
 
 const ZERO: BatteryData = {
@@ -122,10 +122,9 @@ describe('the declared battery', () => {
     // cannot fail if it is deleted -- removing it and removing the rule it enforces look identical. So the predicate
     // is made to prove itself first, on a word that ONLY ONE of the four lists catches. Drop a list from `violates`
     // and its control fails; return a vacuous regex from the extraction and all four fail.
-    const violates = (s: string) =>
-      causalWords.test(s) || jargonWords.test(s) || noJargon.test(s) || BATTERY_JARGON.test(s)
+    const violates = (s: string) => violations(s).length > 0 || BATTERY_JARGON.test(s)
     // Each shared list is probed against a word it forbids; bannedWords.ts does the same on import and throws.
-    for (const list of BANNED_LISTS) {
+    for (const list of [...BANNED_LISTS, ...WORDING_LISTS]) {
       expect(list.forbids, list.name).toMatch(list.pattern)
       expect(list.allows, list.name).not.toMatch(list.pattern)
     }
@@ -133,6 +132,8 @@ describe('the declared battery', () => {
     expect(violates('your 90th percentile')).toBe(true) // jargonWords alone
     expect(violates('a bayes estimate')).toBe(true) // noJargon alone
     expect(violates('a significant result')).toBe(true) // BATTERY_JARGON alone
+    expect(violates('you only need to skip it')).toBe(true) // meansAssumption alone
+    expect(violates('a wasted month')).toBe(true) // shamingWords alone
     expect(violates('how much you spent on groceries last month')).toBe(false)
 
     const strings: string[] = []
