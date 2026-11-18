@@ -410,6 +410,41 @@ describe('the eight fields a finding carries', () => {
     }
   })
 
+  it('names how many categories were searched, so the strongest of them carries its own correction', () => {
+    // Picking the strongest of N categories is itself a multiple comparison. Benjamini-Hochberg corrects across the
+    // ten relationships and sees ONE bracket from this one, so the search inside it is uncorrected and the certainty
+    // reaching the owner is overstated by exactly what that search is worth. Until trend.ts corrects within the
+    // relationship, the sentence has to carry its own correction, and it does that by naming the number compared.
+    const base = FIXTURES['category-savings']
+    const two = build('category-savings')
+    expect(two.limitation).toMatch(/Eating out is the strongest of 2 categories compared/)
+    expect(two.limitation).toMatch(/itself a comparison/)
+    expect(two.limitation).not.toMatch(/\b12\b/) // the figure is counted, not a constant
+
+    const twelve = findingFor('category-savings', {
+      ...base,
+      categories: [...Array(12).keys()].map((i) => ({
+        categoryId: `cat.${i}`, label: `Category ${i}`, effectBp: 5200 - i * 100, bracket: 'none' as const,
+      })),
+    }, VERDICT)
+    expect(twelve.limitation).toMatch(/Category 0 is the strongest of 12 categories compared/)
+    expect(twelve.limitation).toMatch(/the more categories you spend in, the more it overstates/)
+
+    // One category is not a search, and no category is not a comparison: neither may claim to have been either.
+    const one = findingFor('category-savings', { ...base, categories: base.categories.slice(0, 1) }, VERDICT)
+    expect(one.limitation).toMatch(/the only category your spending moved in/)
+    expect(one.limitation).not.toMatch(/strongest of/)
+    const none = findingFor('category-savings', { ...base, categories: [] }, VERDICT)
+    expect(none.limitation).toMatch(/No category moved enough .* to be compared at all/)
+    expect(none.limitation).not.toMatch(/strongest of/)
+
+    // No other relationship runs more than one comparison, so none of them may borrow this clause.
+    for (const id of ids) {
+      if (id === 'category-savings') continue
+      expect(build(id).limitation, id).not.toMatch(/strongest of/)
+    }
+  })
+
   it('reports the period as the bank dates the result covers', () => {
     expect(build('weekend').period).toBe('05/01/2026 to 15/11/2026')
     // Every result module reports the span of the data it ACTUALLY used, and this module reads that field and

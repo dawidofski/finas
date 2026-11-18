@@ -151,6 +151,18 @@ function sharedLabelClause(rows: readonly ContingencyRow[]): string {
     .join('')
 }
 
+/**
+ * Category -> savings reports the STRONGEST of however many categories were compared, so the sentence has to say how
+ * many that was: the battery's correction runs across the ten relationships and sees one bracket from this one, which
+ * leaves the search inside it uncorrected. Naming the number is what lets the owner discount it themselves. With one
+ * category there was no search to discount, and with none there was nothing to compare, so neither claims otherwise.
+ */
+function searchClause(compared: number, label: string | undefined): string {
+  if (compared === 0 || label === undefined) return 'No category moved enough from month to month to be compared at all.'
+  if (compared === 1) return `${label} is the only category your spending moved in from month to month, so nothing was picked out of a field of them.`
+  return `${label} is the strongest of ${count(compared, 'category', 'categories')} compared, and picking the strongest of several is itself a comparison: a figure found that way reads as more certain than one you had gone looking for on its own, and the more categories you spend in, the more it overstates.`
+}
+
 /** The row with the smallest share in the first column, compared by cross-multiplication so no division is needed. */
 function lowestFirstColumn(rows: readonly ContingencyRow[]): ContingencyRow | undefined {
   let lowest: ContingencyRow | undefined
@@ -378,8 +390,20 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
   }),
 
   // trend.ts categorySavings: one rho per category, x = that category's monthly spending, y = the month's savings, so
-  // a POSITIVE rho means the months you spent more in it were the months you saved more. Strongest first, and MANY
-  // comparisons: the strongest of many looks stronger than it is, which is the limitation that matters here.
+  // a POSITIVE rho means the months you spent more in it were the months you saved more. Strongest first.
+  //
+  // THIS RELATIONSHIP IS ITSELF A SEARCH, AND THE SENTENCE HAS TO SAY SO. Every other relationship in the battery runs
+  // one comparison; this one runs one per category the owner's spending varies in and reports the BEST of them. The
+  // screen then takes that one bracket into Benjamini-Hochberg, which corrects across the ten relationships and knows
+  // nothing of the search inside this one — so the certainty reaching the owner is overstated by exactly what picking
+  // the strongest of N is worth. "Your spending on groceries moves against your saving" reads as one test; over twelve
+  // categories it is the best of twelve. So the limitation NAMES the number compared, and the owner can discount it.
+  //
+  // DEFERRED, NOT MISSED: correcting WITHIN the relationship — a Bonferroni or Benjamini-Hochberg step over the
+  // categories before the strongest is chosen — is the fuller answer, and it belongs in trend.ts rather than here. It
+  // was considered and put off deliberately: it needs its own threshold, its own tests, and a decision about what the
+  // screen says when no category survives, which is more than this plan should take on at its end. Naming the search
+  // is the honest minimum in the meantime, not a substitute for that work.
   'category-savings': (r) => {
     const top = r.categories[0]
     const many = count(r.categories.length, 'category', 'categories')
@@ -400,7 +424,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
           : `How closely spending in ${top.label} and that month’s savings moved together`,
         bp: top?.effectBp ?? 0,
       },
-      limitation: `This is ${count(r.months, 'month', 'months')} of records rather than a count of purchases, and it runs one comparison for every category that moved, ${many} here, so the strongest of many will always look stronger than it is. A category you spent the same in every month is left out, and the savings figure is simply what was left at the end of a month, which one large purchase can move on its own.`,
+      limitation: `This is ${count(r.months, 'month', 'months')} of records rather than a count of purchases. ${searchClause(r.categories.length, top?.label)} A category you spent the same in every month was not compared at all, and the savings figure is simply what was left at the end of a month, which one large purchase can move on its own.`,
       meaning: 'One reading is that this is where the spare money goes in a month that has any. Another is that this category and your savings both follow the same quiet and busy months, which would look the same from here.',
       action: top === undefined
         ? 'Keep importing your statements each month on the Import screen: this one needs a longer run of months before any category stands out.'
