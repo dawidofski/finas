@@ -45,8 +45,14 @@ function ReportsRoute() {
   return <Reports today={epochMsToIso(now)} computedAt={now} />
 }
 
+/**
+ * The day and the instant together, as the dashboard and the reports take them. The battery on this screen writes
+ * cache rows, and `computedAt` is stored on every one of them: deriving it from the day inside the screen would
+ * stamp them all "midnight UTC" whatever time it really was, which is a stored value that lies.
+ */
 function IntelligenceRoute() {
-  return <Intelligence today={epochMsToIso(Date.now())} />
+  const now = Date.now()
+  return <Intelligence today={epochMsToIso(now)} computedAt={now} />
 }
 
 function WorthItRoute() {

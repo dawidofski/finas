@@ -20,6 +20,20 @@ import { cached } from './cache'
  * The month is read with `liveTransactionsBetween`, which is already bounded by the date range.
  */
 
+/**
+ * WHAT COUNTS AS A SMALL PURCHASE, for the whole application: strictly under 10 EUR.
+ *
+ * It is a policy threshold and not a utility, so it lives beside the figure it defines rather than in src/lib. Both
+ * screens that print the figure (Reports and Intelligence) read it from here, and each prints it with formatEur beside
+ * the total so the line the owner is shown is never implicit. It used to be a `const` inside each of those two screens
+ * — the shape where two screens quietly answer the same question differently and no test fails.
+ *
+ * `smallPurchases` below still TAKES the ceiling as a parameter: it is in the cache key, so a caller asking a different
+ * question (a test, or a future screen that lets the owner move the line) gets its own cached figure rather than
+ * overwriting this one's.
+ */
+export const SMALL_PURCHASE_CEILING_CENTS = 1000
+
 export interface SmallPurchases {
   count: number
   totalCents: number

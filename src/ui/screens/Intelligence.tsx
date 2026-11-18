@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { db } from '../../db/db'
 import { CORRECTIONS_NEEDED, categoryMemory } from '../../learning/memory'
 import { regretClusters, type RegretCluster } from '../../learning/regret'
-import { smallPurchases } from '../../analytics/habits'
+import { SMALL_PURCHASE_CEILING_CENTS, smallPurchases } from '../../analytics/habits'
 import { monthSeries } from '../../analytics/series'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from '../../battery/battery'
 import { FDR_BP, benjaminiHochberg, type Corrected } from '../../battery/correction'
@@ -13,7 +13,7 @@ import {
   findingFor,
   type Bracket, type CorrectionVerdict, type Finding, type Observation, type SmallPurchasesContext,
 } from '../../battery/finding'
-import { addDays, daysBetween, epochMsToIso, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
+import { addDays, epochMsToIso, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
 import { formatBp, formatEur } from '../../lib/money'
 
 /**
@@ -81,19 +81,6 @@ async function loadTaught(): Promise<Taught[]> {
  * bounded read (§39.4) rather than the whole ledger.
  */
 const WINDOW_MONTHS = 12
-/** A purchase is small when it is under this. The Reports screen prints the same figure; the two must move together. */
-const SMALL_CEILING_CENTS = 1000
-const MS_PER_DAY = 86_400_000
-const EPOCH_DAY = '1970-01-01'
-
-/**
- * The instant the cache rows are STAMPED with. `cached` takes it from the caller and never compares it — a row is
- * current when its engine version and its inputs hash match — so this value is a record of when a figure was built
- * and nothing reasons about it. routes.tsx is the one place the app reads the clock, and what it hands this screen is
- * the day; the day's own UTC midnight is therefore the most this screen can honestly stamp, and it reads no clock to
- * arrive at it.
- */
-const instantOf = (today: string): number => daysBetween(EPOCH_DAY, today) * MS_PER_DAY
 
 const previousMonth = (month: string): string => monthKeyOf(addDays(`${month}-01`, -1))
 
@@ -185,14 +172,14 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
   // and a part of a month compared with whole ones would read as a fall in spending that is only the calendar.
   const complete = points.filter((p) => p.hasData && p.month < to)
   const latest = complete[complete.length - 1]
-  const small = latest === undefined ? null : await smallPurchases(latest.month, SMALL_CEILING_CENTS, computedAt)
+  const small = latest === undefined ? null : await smallPurchases(latest.month, SMALL_PURCHASE_CEILING_CENTS, computedAt)
   const counted: Body = latest === undefined || small === null
     ? gated(unmetGates('small-purchases', { fullMonths: complete.length }))
     : {
       kind: 'untested',
       state: 'A count of your own purchases, not a comparison',
       finding: findingFor('small-purchases', {
-        small, month: latest.month, ceilingCents: SMALL_CEILING_CENTS, monthSpendCents: latest.spentCents,
+        small, month: latest.month, ceilingCents: SMALL_PURCHASE_CEILING_CENTS, monthSpendCents: latest.spentCents,
       } satisfies SmallPurchasesContext, UNJUDGED),
       own: [],
     }
@@ -366,8 +353,14 @@ function Battery({ rows }: { rows: Record<RelationshipId, Body> }): ReactNode {
 
 type Period = 'month' | 'all'
 
-/** `today` is injected so the tests own time. */
-export default function Intelligence({ today }: { today: string }): ReactNode {
+/**
+ * `today` and `computedAt` are both injected so the tests own time, and because routes.tsx is the one place the app
+ * reads the clock. They are the same reading of it: the DAY the figures are about, and the INSTANT they were computed,
+ * which is what every cache row this screen writes is stamped with. The instant cannot be derived from the day — it
+ * would stamp every row "midnight UTC" whatever time it really was, and `computedAt` is a stored field that something
+ * will eventually show the owner or expire a row by.
+ */
+export default function Intelligence({ today, computedAt }: { today: string; computedAt: number }): ReactNode {
   const [taught, setTaught] = useState<Taught[] | null>(null)
   const [period, setPeriod] = useState<Period>('all')
   const [clusters, setClusters] = useState<RegretCluster[] | null>(null)
@@ -389,11 +382,11 @@ export default function Intelligence({ today }: { today: string }): ReactNode {
   // which narrow only the answers to "Worth it?".
   useEffect(() => {
     let live = true
-    loadBattery(today, instantOf(today)).then((rows) => { if (live) setBattery(rows) }, (e: unknown) => {
+    loadBattery(today, computedAt).then((rows) => { if (live) setBattery(rows) }, (e: unknown) => {
       if (live) setBatteryError(`The questions about your spending could not be worked out${e instanceof Error && e.message ? ` (${e.message})` : ''}. Nothing was changed.`)
     })
     return () => { live = false }
-  }, [today])
+  }, [today, computedAt])
 
   useEffect(() => {
     const mine = ++latest.current

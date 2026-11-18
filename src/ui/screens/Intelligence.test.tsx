@@ -13,12 +13,17 @@ import { findingFor } from '../../battery/finding'
 import type { ContingencyResult } from '../../battery/contingency'
 import type { RankFinding } from '../../battery/rank'
 import type { CategorySavings, MoodFrequencyFinding, TrendFinding } from '../../battery/trend'
-import type { SmallPurchases } from '../../analytics/habits'
+import { SMALL_PURCHASE_CEILING_CENTS, type SmallPurchases } from '../../analytics/habits'
 import type { MonthPoint } from '../../analytics/series'
 import { formatBp, formatEur } from '../../lib/money'
 import type { AnnotationRow, TransactionRow } from '../../db/schema'
 
 const TODAY = '2026-11-17' // a Tuesday
+/**
+ * The instant the screen is given, deliberately NOT midnight of TODAY: it is stamped on every cache row the battery
+ * writes, and a value derived from the day would be wrong by up to a day while looking perfectly plausible.
+ */
+const AT = Date.UTC(2026, 10, 17, 16, 42, 13)
 // 05/03/2026, deliberately not the month of TODAY and with a day that cannot be read as a month.
 const TAUGHT_AT = Date.UTC(2026, 2, 5, 12)
 
@@ -67,7 +72,7 @@ describe('Intelligence screen: what has been learned', () => {
     await merchant('m1', 'Supermercado Ejemplo'); await merchant('m2', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries'); await correct('c', 'm1', 'cat.groceries')
     await correct('d', 'm2', 'cat.shopping')
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     const learned = within(await screen.findByRole('list', { name: 'Learned merchants' })).getAllByRole('listitem')
     expect(learned).toHaveLength(1)
@@ -82,7 +87,7 @@ describe('Intelligence screen: what has been learned', () => {
   })
 
   it('says plainly that it has learned nothing yet, rather than showing an empty table', async () => {
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     expect(screen.getByText(/Nothing learned yet/)).toHaveTextContent(/corrected it the same way twice/)
     expect(screen.getByText(/have not corrected any merchant/)).toBeInTheDocument()
@@ -95,7 +100,7 @@ describe('Intelligence screen: what has been learned', () => {
   it('still says nothing is learned when every merchant has only one correction, and says how many are one short', async () => {
     await merchant('m1', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.shopping')
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     expect(screen.getByText(/Nothing learned yet/)).toHaveTextContent(/1 merchant has one correction so far/)
     expect(screen.queryByRole('list', { name: 'Learned merchants' })).not.toBeInTheDocument()
@@ -106,7 +111,7 @@ describe('Intelligence screen: what has been learned', () => {
     await merchant('m1', 'Supermercado Ejemplo'); await merchant('m2', 'Tienda Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries'); await correct('c', 'm2', 'cat.shopping')
     const reads = vi.spyOn(db.merchants, 'toArray')
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     await screen.findByRole('list', { name: 'Learned merchants' })
     await waitFor(() => expect(screen.queryByText(/Loading/)).not.toBeInTheDocument())
@@ -118,7 +123,7 @@ describe('Intelligence screen: what has been learned', () => {
   it('shows dates in Spanish format', async () => {
     await merchant('m1', 'Supermercado Ejemplo')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries')
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     const item = within(await screen.findByRole('list', { name: 'Learned merchants' })).getByRole('listitem')
     expect(item).toHaveTextContent('05/03/2026')
@@ -130,7 +135,7 @@ describe('Intelligence screen: what has been learned', () => {
     await merchant('m1', 'Gone')
     await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries')
     await db.merchants.delete('m1'); await db.categories.delete('cat.groceries')
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     const item = within(await screen.findByRole('list', { name: 'Learned merchants' })).getByRole('listitem')
     expect(item).toHaveTextContent('Removed merchant: Removed category.')
@@ -143,7 +148,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
   it('shows a group with its denominator and its period, and no causal wording', async () => {
     await merchant('m1', 'Bar Pepe')
     await answered('r', [false, false, true], { merchantId: 'm1', purchaseReasonId: 'reason.impulse', moodId: 'mood.bored' })
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     const list = await screen.findByRole('list', { name: 'Not worth it, all your records' })
     const merchantItem = within(list).getByText(/^Merchant: Bar Pepe/)
@@ -158,7 +163,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
     await merchant('m1', 'Bar Pepe')
     await answered('n', [false, false, true], { merchantId: 'm1' }, '2026-11-10')
     await answered('o', [false, true, true, true], { merchantId: 'm1' }, '2026-10-10') // 1 of 4 in October
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     expect(await screen.findByText(/^Merchant: Bar Pepe/)).toHaveTextContent('3 of 7')
     fireEvent.click(screen.getByRole('button', { name: 'November 2026' }))
@@ -170,7 +175,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
   it('does not render one regretted purchase out of one as a finding, and says what is missing instead', async () => {
     await merchant('m1', 'Bar Pepe')
     await answered('x', [false], { merchantId: 'm1', purchaseReasonId: 'reason.impulse' })
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     expect(await screen.findByText(/Not enough to say anything yet/)).toHaveTextContent(
       `at least ${MIN_REGRETTED} of its purchases are marked not worth it, out of at least ${MIN_ANSWERED} you answered`)
@@ -184,7 +189,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
     // Merchant m1 and the weekday group are 2 of 3 and 1 of 1 respectively for the reason only the first purchase has.
     await answered('p', [false, false, true], { merchantId: 'm1' })
     await db.annotations.update('p0', { purchaseReasonId: 'reason.impulse' })
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     const list = await screen.findByRole('list', { name: 'Not worth it, all your records' })
     expect(within(list).getByText(/^Merchant: Bar Pepe/)).toBeInTheDocument()
@@ -193,7 +198,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
   })
 
   it('says plainly that nothing is marked yet, with what each group will need, rather than an empty list', async () => {
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     expect(await screen.findByText(/no purchase is marked as not worth it/)).toHaveTextContent(
       `at least ${MIN_REGRETTED} marked not worth it out of at least ${MIN_ANSWERED} you answered`)
@@ -210,7 +215,7 @@ describe('Intelligence screen: purchases marked not worth it', () => {
 describe('Intelligence screen: keyboard', () => {
   it('has only controls that act, they are native buttons, and focus stays on the one just used', async () => {
     await answered('p', [false, false, true])
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     await screen.findByRole('list', { name: /Not worth it/ })
     const buttons = screen.getAllByRole('button')
@@ -229,7 +234,7 @@ describe('Intelligence screen: keyboard', () => {
   })
 
   it('renders no button at all while there is nothing to act on besides the period', async () => {
-    render(<Intelligence today={TODAY} />)
+    render(<Intelligence today={TODAY} computedAt={AT} />)
     await settled()
     await screen.findByText(/no purchase is marked/)
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['All time', 'November 2026'])
@@ -251,7 +256,6 @@ describe('Intelligence screen: keyboard', () => {
 const WINDOW_FROM = '2025-12' // twelve months ending in the month of TODAY
 const WINDOW_TO = '2026-11'
 const SMALL_MONTH = '2026-10' // the latest COMPLETE month in that window
-const SMALL_CEILING_CENTS = 1000
 
 const KEY = {
   'mood-amount': 'battery.rank.mood-amount',
@@ -264,7 +268,7 @@ const KEY = {
   'salary-lifestyle': `battery.trend.salary-lifestyle:${WINDOW_FROM}:${WINDOW_TO}:${TODAY}`,
   'category-savings': `battery.trend.category-savings:${WINDOW_FROM}:${WINDOW_TO}:${TODAY}`,
   months: `monthSeries:${WINDOW_FROM}:${WINDOW_TO}`,
-  small: `habits.small:${SMALL_MONTH}:${SMALL_CEILING_CENTS}`,
+  small: `habits.small:${SMALL_MONTH}:${SMALL_PURCHASE_CEILING_CENTS}`,
 }
 
 /** A figure the modules would have computed, put where the screen reads from. The hash is taken after the data is set up. */
@@ -373,10 +377,13 @@ const readFrom = (item: HTMLElement): string =>
   [...item.querySelectorAll('p')].map((p) => p.textContent ?? '').find((t) => t.startsWith('Read from:')) ?? ''
 
 const mountBattery = async () => {
-  render(<Intelligence today={TODAY} />)
+  render(<Intelligence today={TODAY} computedAt={AT} />)
   await settled()
   await screen.findByRole('list', { name: QUESTION_LIST })
 }
+
+/** Every battery figure goes through the cache, so every row it writes carries the instant the screen was given. */
+const batteryRows = async () => (await db.analyticsCache.toArray()).filter((r) => r.key.startsWith('battery'))
 
 describe('Intelligence screen: the ten questions', () => {
   it('says what each relationship still needs, on a fresh install, without reading as ten failures', async () => {
@@ -494,6 +501,9 @@ describe('Intelligence screen: the ten questions', () => {
     expect(await db.transactions.count()).toBe(0)
     expect(questionFor('weekend')).toHaveTextContent(findingFor('weekend', WEEKEND, { bracket: 'p<0.001', survives: true }).pattern)
     expect(questionFor('small-purchases')).toHaveTextContent('23 purchases')
+    // The one definition of a small purchase, owned by habits.ts: this is the same line the Reports screen prints,
+    // and the figure is written out here so the two screens cannot drift apart without a test failing.
+    expect(questionFor('small-purchases')).toHaveTextContent('purchases under 10,00 €')
     expect(questionFor('category-savings')).toHaveTextContent(OWN_CATEGORY)
     expect(reads).not.toHaveBeenCalled()
   })
@@ -561,6 +571,34 @@ describe('Intelligence screen: the ten questions', () => {
     expect(appWords).not.toMatch(causalWords)
     expect(appWords).not.toMatch(jargonWords)
     expect(appWords).not.toMatch(noJargon)
+  })
+
+  it('stamps the figures it computes with the instant it was given, not with the day', async () => {
+    await mountBattery()
+    const rows = await batteryRows()
+    expect(rows.length).toBeGreaterThan(5)
+    for (const row of rows) expect(row.computedAt, row.key).toBe(AT)
+    // The instant is not derivable from the day: a screen that worked it out from `today` would stamp midnight.
+    expect(AT).not.toBe(Date.UTC(2026, 10, 17))
+    expect(rows.map((r) => r.computedAt)).not.toContain(Date.UTC(2026, 10, 17))
+  })
+
+  it('says the questions could not be worked out, and leaves the rest of the screen standing', async () => {
+    await merchant('m1', 'Supermercado Ejemplo')
+    await correct('a', 'm1', 'cat.groceries'); await correct('b', 'm1', 'cat.groceries')
+    await answered('r', [false, false, true])
+    // The cache is the battery's only way in, and nothing else on this screen reads it.
+    vi.spyOn(db.analyticsCache, 'get').mockRejectedValue(new Error('the store is gone'))
+    render(<Intelligence today={TODAY} computedAt={AT} />)
+    await settled()
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The questions about your spending could not be worked out (the store is gone). Nothing was changed.')
+    expect(region().contains(alert)).toBe(true) // inside its own region, not across the top of the screen
+    expect(screen.queryByRole('list', { name: QUESTION_LIST })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Loading what your records can answer/)).not.toBeInTheDocument()
+    // The two regions that were here before the battery are untouched by its failure.
+    expect(await screen.findByRole('list', { name: 'Learned merchants' })).toHaveTextContent('Supermercado Ejemplo')
+    expect(await screen.findByRole('list', { name: 'Not worth it, all your records' })).toBeInTheDocument()
   })
 
   it('keeps focus and renders no control that does nothing', async () => {

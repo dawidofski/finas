@@ -115,6 +115,26 @@ describe('shell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: title })).toBeInTheDocument()
     expect(screen.getByText('Not built yet')).toBeInTheDocument()
   })
+  /**
+   * The router is the one place that reads the clock, and it hands down TWO readings of it: the day a screen's figures
+   * are about, and the instant they were computed at, which is stored on every analytics cache row. The two cannot be
+   * derived from one another — a screen working the instant out from the day would stamp every row it writes "midnight
+   * UTC" whatever time it really was, and nothing would fail until someone shows the owner when a figure was computed.
+   * The Intelligence screen is the one asserted here because its battery writes a row for each of the ten questions.
+   */
+  it('hands a screen the instant it read as well as the day, so a stored figure carries the real time', async () => {
+    const AT = Date.UTC(2026, 10, 18, 16, 42, 13) // an afternoon, not midnight
+    await seedDatabase()
+    vi.spyOn(Date, 'now').mockReturnValue(AT)
+    window.location.hash = '#/intelligence'
+    render(<App />)
+    await screen.findByRole('list', { name: 'Each question and what it can say' })
+    const rows = (await db.analyticsCache.toArray()).filter(r => r.key.startsWith('battery'))
+    expect(rows.length).toBeGreaterThan(5)
+    for (const row of rows) expect(row.computedAt, row.key).toBe(AT)
+    expect(rows.map(r => r.computedAt)).not.toContain(Date.UTC(2026, 10, 18)) // not the day it was derived from
+  })
+
   it('persists a theme override to settings and applies it to the document', async () => {
     await seedDatabase()
     render(<App />)

@@ -4,7 +4,7 @@ import { db } from '../../db/db'
 import { monthlyBudget } from '../../budget/month'
 import { cached } from '../../analytics/cache'
 import { moodBreakdown, reasonBreakdown, worthwhileBreakdown, type AnnotatedRow } from '../../analytics/annotated'
-import { afterPayday, smallPurchases, type AfterPayday, type SmallPurchases } from '../../analytics/habits'
+import { SMALL_PURCHASE_CEILING_CENTS, afterPayday, smallPurchases, type AfterPayday, type SmallPurchases } from '../../analytics/habits'
 import { changeFrom, monthSeries, type MonthPoint } from '../../analytics/series'
 import { unusualIn, type UnusualRow } from '../../analytics/unusual'
 import { excludedTransactionIds, treatmentOf } from '../../analysis/income'
@@ -31,8 +31,6 @@ const WINDOW = 6
  * result, in these same words.
  */
 const MIN_SAMPLE = 8
-/** A purchase is small when it is under this, in cents. Printed on the screen. */
-const SMALL_CEILING_CENTS = 1000
 /** Fewer days than this after payday cannot show how spending is spread, so the line is not drawn. */
 const MIN_PAYDAY_DAYS = 14
 /** The categories drawn as bars; the rest are summed in a sentence. */
@@ -270,7 +268,7 @@ function UnusualPanel({ report, title }: { report: UnusualReport; title: string 
 }
 
 function SmallPanel({ small, byMonth, partial, title }: { small: SmallPurchases; byMonth: Array<{ month: string; cents: number }>; partial: boolean; title: string }): ReactNode {
-  const ceiling = formatEur(SMALL_CEILING_CENTS)
+  const ceiling = formatEur(SMALL_PURCHASE_CEILING_CENTS)
   return (
     <Panel id="reports-small" title="Small purchases">
       {byMonth.length >= 2
@@ -349,9 +347,9 @@ export default function Reports({ today, computedAt, month: shown }: { today: st
       if (!current || !current.hasData) return { points, detail: null }
       const run = unbrokenRun(points)
       const [categories, unusual, small, payday, mood, reason, worth, smallRun] = await Promise.all([
-        categorySpend(month, today, computedAt), unusualPurchases(month, computedAt), smallPurchases(month, SMALL_CEILING_CENTS, computedAt),
+        categorySpend(month, today, computedAt), unusualPurchases(month, computedAt), smallPurchases(month, SMALL_PURCHASE_CEILING_CENTS, computedAt),
         afterPayday(month, computedAt), moodBreakdown(month, computedAt), reasonBreakdown(month, computedAt), worthwhileBreakdown(month, computedAt),
-        Promise.all(run.map((p) => smallPurchases(p.month, SMALL_CEILING_CENTS, computedAt))),
+        Promise.all(run.map((p) => smallPurchases(p.month, SMALL_PURCHASE_CEILING_CENTS, computedAt))),
       ])
       const smallByMonth = run.map((p, i) => ({ month: p.month, cents: (smallRun[i] as SmallPurchases).totalCents }))
       return { points, detail: { categories, unusual, small, smallByMonth, payday, mood, reason, worth } }
