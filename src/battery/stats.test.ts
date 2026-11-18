@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CHI_SCALE, chiSquareScaled, cramersVBp, doubledRanks, isqrt, mannWhitneyU, spearmanRhoBp } from './stats'
+import { divRound } from '../lib/money'
+import { CHI_SCALE, chiSquareScaled, cramersVBp, divRoundBig, doubledRanks, isqrt, isqrtBig, mannWhitneyU, spearmanRhoBp } from './stats'
 
 /**
  * U from the rank-sum identity U = R1 - n1(n1+1)/2, doubled throughout so it stays an integer: 2U = R1doubled -
@@ -44,10 +45,51 @@ describe('battery statistics (integer only)', () => {
   })
 
   it('rejects a square root it cannot take exactly, instead of returning a float one', () => {
+    // isqrt refuses on its own terms rather than leaning on isqrtBig's check: the message names isqrt, so this also
+    // pins that the public entry point validates what it was handed.
+    expect(() => isqrt(-1)).toThrow(/^isqrt needs/)
     expect(() => isqrt(-1)).toThrow(RangeError)
     expect(() => isqrt(Number.NaN)).toThrow(RangeError)
     expect(() => isqrt(Number.POSITIVE_INFINITY)).toThrow(RangeError)
     expect(() => isqrt(Number.MAX_SAFE_INTEGER + 2)).toThrow(RangeError) // not a safe integer any more
+    expect(() => isqrtBig(-1n)).toThrow(RangeError)
+  })
+
+  it('takes an exact integer square root far past the safe-integer range, over BigInt', () => {
+    expect(isqrtBig(0n)).toBe(0n)
+    expect(isqrtBig(1n)).toBe(1n)
+    expect(isqrtBig(4n)).toBe(2n)
+    expect(isqrtBig(15n)).toBe(3n)
+    // The two scaled roots Spearman actually takes, where S * ROOT_SCALE^2 is far above 2^53:
+    // 1600 * 10^16 = (4 * 10^9)^2, and 4624 * 10^16 = (6.8 * 10^9)^2.
+    expect(isqrtBig(16000000000000000000n)).toBe(4000000000n)
+    expect(isqrtBig(46240000000000000000n)).toBe(6800000000n)
+    // The definition itself as the oracle: r*r <= n < (r+1)*(r+1). The last two values are beyond any double, so a
+    // float route could not even represent them, let alone floor them correctly.
+    for (const n of [0n, 1n, 2n, 3n, 24n, 25n, 1280n, 4760n, 16000000000000000000n, 12800000000000000000n, 123456789012345678901234567890n]) {
+      const r = isqrtBig(n)
+      expect(r * r <= n).toBe(true)
+      expect((r + 1n) * (r + 1n) > n).toBe(true)
+    }
+    // isqrt is isqrtBig's answer carried back into a Number, so the two must never disagree.
+    for (const n of [0, 1, 2, 15, 100000000, 123456789, Number.MAX_SAFE_INTEGER]) {
+      expect(isqrt(n)).toBe(Number(isqrtBig(BigInt(n))))
+    }
+  })
+
+  it('rounds over BigInt by the same rule money.ts rounds a Number', () => {
+    // Two rounding rules in one app is how two screens come to disagree about a figure, so divRoundBig is held
+    // against divRound itself over the Number range, signs and exact halves included.
+    for (const [n, d] of [[0, 4], [7, 2], [-7, 2], [7, -2], [-7, -2], [5, 3], [-5, 3], [1, 2], [-1, 2], [90000, 210], [650000, 68], [2500000000, 112000]]) {
+      if (n === undefined || d === undefined) throw new Error('bad case')
+      expect(Number(divRoundBig(BigInt(n), BigInt(d)))).toBe(divRound(n, d))
+    }
+    // Halves go away from zero, in both directions - the rule money.ts states.
+    expect(divRoundBig(3n, 2n)).toBe(2n)
+    expect(divRoundBig(-3n, 2n)).toBe(-2n)
+    expect(divRoundBig(1n, 2n)).toBe(1n)
+    // And past the safe-integer range, which is the whole reason it exists: 65 * 10^12 / 6.8 * 10^9 = 9558.82...
+    expect(divRoundBig(65000000000000n, 6800000000n)).toBe(9559n)
   })
 
   it('gives tied values their average rank, doubled so it stays an integer', () => {
@@ -74,14 +116,22 @@ describe('battery statistics (integer only)', () => {
   it('matches a worked Spearman example by hand, with no ties', () => {
     const xs = [10, 20, 30, 40, 50]
     const ys = [20, 10, 50, 30, 40]
-    // Ranks of xs: 1, 2, 3, 4, 5. Ranks of ys (sorted 10, 20, 30, 40, 50): 2, 1, 5, 3, 4.
-    // d          = 1-2, 2-1, 3-5, 4-3, 5-4 = -1, 1, -2, 1, 1
-    // sum(d^2)   = 1 + 1 + 4 + 1 + 1 = 8
-    // rho        = 1 - 6*8 / (5*(25-1)) = 1 - 48/120 = 1 - 2/5 = 3/5 = 0.6
-    // so rho in basis points is 6000, exactly - 48/120 is 4000 bp with nothing to round.
+    // Spearman's rho is Pearson's correlation of the ranks. Doubled ranks, and their mean, which is exactly n+1 = 6:
+    //   doubled rank of xs =  2,  4,  6,  8, 10   ->  a = -4, -2,  0,  2,  4
+    //   doubled rank of ys =  4,  2, 10,  6,  8   ->  b = -2, -4,  4,  0,  2
+    //   sum(a*b) = 8 + 8 + 0 + 0 + 8 = 24 ;  sum(a^2) = 16+4+0+4+16 = 40 ;  sum(b^2) = 4+16+16+0+4 = 40
+    //   rho = 24 / sqrt(40*40) = 24/40 = 3/5 = 0.6   -> 6000 bp, and the root is the integer 40, so nothing rounds.
     expect(spearmanRhoBp(xs, ys)).toBe(6000)
-    // The two ends of the scale, also by hand: identical orders give sum(d^2) = 0, so rho = 1; reversed orders give
-    // sum(d^2) = 4+0+4 = 8 and rho = 1 - 48/(3*8) = 1 - 2 = -1.
+    //
+    // THE CROSS-CHECK ON THE WHOLE IMPLEMENTATION: with no ties the old shortcut 1 - 6*sum(d^2)/(n(n^2-1)) is equal
+    // to Pearson-on-ranks, so it must reach the same 6000 by completely different arithmetic.
+    //   ranks of xs: 1, 2, 3, 4, 5 ; ranks of ys (sorted 10, 20, 30, 40, 50): 2, 1, 5, 3, 4
+    //   d = -1, 1, -2, 1, 1 ; sum(d^2) = 1+1+4+1+1 = 8
+    //   1 - 6*8/(5*(25-1)) = 1 - 48/120 = 1 - 2/5 = 3/5
+    // Two formulas, one answer. A tie correction that quietly moved an untied answer would break this line.
+    //
+    // The two ends of the scale, also by hand: identical rank orders give a = b, so sum(a*b) = sum(a^2) = sum(b^2)
+    // and rho = 1; reversed orders give b = -a, so sum(a*b) = -sum(a^2) and rho = -1.
     expect(spearmanRhoBp([1, 2, 3], [5, 6, 7])).toBe(10000)
     expect(spearmanRhoBp([1, 2, 3], [3, 2, 1])).toBe(-10000)
   })
@@ -95,35 +145,43 @@ describe('battery statistics (integer only)', () => {
     // Pinning those here on purpose: a wrong tie rule changes them, and the rho below with it.
     expect(doubledRanks(xs)).toEqual([2, 5, 5, 8, 10, 12])
     expect(doubledRanks(ys)).toEqual([2, 4, 7, 7, 10, 12])
-    // doubled d  = 0, 1, -2, 1, 0, 0        (each is 2d, so sum((2d)^2) = 4*sum(d^2))
-    // sum((2d)^2) = 0 + 1 + 4 + 1 + 0 + 0 = 6, so sum(d^2) = 6/4 = 1.5
-    // rho        = 1 - 6*1.5 / (6*(36-1)) = 1 - 9/210 = 1 - 3/70
-    // 3/70 in basis points = 30000/70 = 428.571..., which rounds to 429, so rho = 10000 - 429 = 9571.
-    expect(spearmanRhoBp(xs, ys)).toBe(9571)
-    // Break the ties and the answer moves, so the number above is about the tie rule and not about these six pairs:
-    // with xs = 10, 20, 21, 30, 40, 50 the doubled d become 0, 0, -1, 1, 0, 0, sum((2d)^2) = 2, and
-    // rho = 1 - 6*0.5/210 = 1 - 3/210 = 1 - 1/70; 10000/70 = 142.857... -> 143, so 9857.
-    expect(spearmanRhoBp([10, 20, 21, 30, 40, 50], ys)).toBe(9857)
+    // Pearson on those ranks, with mean doubled rank n+1 = 7:
+    //   a = -5, -2, -2,  1,  3,  5   ;  sum(a^2) = 25+4+4+1+9+25 = 68
+    //   b = -5, -3,  0,  0,  3,  5   ;  sum(b^2) = 25+9+0+0+9+25 = 68
+    //   sum(a*b) = 25 + 6 + 0 + 0 + 9 + 25 = 65
+    //   rho = 65 / sqrt(68*68) = 65/68 = 0.95588235...   -> 9559 bp
+    // (10^4 * 65 / 68 = 650000/68 = 9558.82..., which rounds up to 9559.)
+    expect(spearmanRhoBp(xs, ys)).toBe(9559)
+    // For the record, because this number CHANGED: the old shortcut 1 - 6*sum(d^2)/(n(n^2-1)) read 9571 here. Its
+    // doubled d are 0, 1, -2, 1, 0, 0, so sum(d^2) = 6/4 = 1.5 and 1 - 9/210 = 1 - 3/70 = 0.9571428..., 12 bp high.
+    // The shortcut is not Spearman's rho when there are ties, and 12 bp is the small end of how wrong it gets.
+    //
+    // Break the xs tie and the answer moves, so the number above is about the tie rule and not about these six pairs.
+    // With xs = 10, 20, 21, 30, 40, 50 the doubled ranks of xs become 2, 4, 6, 8, 10, 12, so a = -5, -3, -1, 1, 3, 5
+    // and sum(a^2) = 25+9+1+1+9+25 = 70; b is unchanged, so sum(a*b) = 25 + 9 + 0 + 0 + 9 + 25 = 68 and
+    //   rho = 68 / sqrt(70*68) = 68 / sqrt(4760) = 68 / 68.9927532... = 0.98561076...   -> 9856 bp
+    // This one is also why the root is taken scaled: sqrt(4760) floored to 68 would read 68/68 = 10000 bp.
+    expect(spearmanRhoBp([10, 20, 21, 30, 40, 50], ys)).toBe(9856)
     //
     // A heavy tie, which is the shape §12's mood and worthwhile fields actually have:
     const tied = [1, 1, 1, 2, 3]
     const down = [5, 4, 3, 2, 1]
-    //   doubled rank of tied = 4, 4, 4, 8, 10  (three values share ranks 1, 2, 3, average 2 -> doubled 4)
-    //   doubled rank of down = 10, 8, 6, 4, 2
-    //   doubled d            = -6, -4, -2, 4, 8 ; sum((2d)^2) = 36+16+4+16+64 = 136, so sum(d^2) = 34
-    //   rho = 1 - 6*34 / (5*24) = 1 - 204/120 = 1 - 1.7 = -0.7  -> -7000 bp, exactly.
+    //   doubled rank of tied =  4,  4,  4,  8, 10  (three values share ranks 1, 2, 3, average 2 -> doubled 4)
+    //   doubled rank of down = 10,  8,  6,  4,  2
+    // Mean doubled rank n+1 = 6:
+    //   a = -2, -2, -2,  2,  4   ;  sum(a^2) = 4+4+4+4+16 = 32
+    //   b =  4,  2,  0, -2, -4   ;  sum(b^2) = 16+4+0+4+16 = 40
+    //   sum(a*b) = -8 - 4 + 0 - 4 - 16 = -32
+    //   rho = -32 / sqrt(32*40) = -32 / sqrt(1280)
+    // and 1280 = 256*5, so sqrt(1280) = 16*sqrt(5) and rho = -32/(16*sqrt(5)) = -2/sqrt(5) = -2*sqrt(5)/5,
+    //   = -0.8944271909...   -> -8944 bp
     expect(doubledRanks(tied)).toEqual([4, 4, 4, 8, 10])
-    expect(spearmanRhoBp(tied, down)).toBe(-7000)
-    // AND THE POINT OF PINNING IT: -7000 is NOT Spearman's rho for this pair. The formula 1 - 6*sum(d^2)/(n(n^2-1))
-    // is exact only without ties; with ties the definition is Pearson's correlation of the ranks. Here, with mean
-    // doubled rank n+1 = 6:
-    //   a = -2, -2, -2,  2,  4   (doubled ranks of `tied` minus 6)
-    //   b =  4,  2,  0, -2, -4   (doubled ranks of `down` minus 6)
-    //   sum(a*b) = -8 - 4 + 0 - 4 - 16 = -32 ; sum(a^2) = 32 ; sum(b^2) = 40
-    //   rho = -32 / sqrt(32*40) = -32 / sqrt(1280) = -0.894427...  -> -8944 bp
-    // So the implemented formula reports -0.70 where the honest answer is -0.89: a 1944 bp over-report on three tied
-    // values out of five. The -7000 pinned above is therefore a deliberate choice of §12's stated formula, not an
-    // accident, and this comment is where it is recorded.
+    expect(spearmanRhoBp(tied, down)).toBe(-8944)
+    // WHY THIS NUMBER CHANGED, kept legible on purpose: the shortcut read -7000 here. Its doubled d are
+    // -6, -4, -2, 4, 8, so sum((2d)^2) = 36+16+4+16+64 = 136, sum(d^2) = 34, and 1 - 6*34/(5*24) = 1 - 1.7 = -0.7.
+    // That is a 1944 bp over-report produced by three tied values out of five - on exactly the data shape §12's
+    // first two relationships have. The correction is not a tweak: it is the difference between reporting a moderate
+    // association and a near-perfect one.
   })
 
   it('returns null for Spearman when one series has no variance', () => {
@@ -293,12 +351,19 @@ describe('battery statistics (integer only)', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '')
       .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""')
-    expect(code).toMatch(/function divFloor/) // the scan is looking at the real file, stripped but not gutted
-    expect(code).toMatch(/divRound/) // and the rounding divisions do go through money.ts
-    // The single division in the file is the integer floor in divFloor; no other `/` may appear in the code.
-    expect(code.split('\n').filter((l) => l.includes('/')).map((l) => l.trim())).toEqual(['return Math.floor(n / d)'])
+    expect(code).toMatch(/function isqrtBig/) // the scan is looking at the real file, stripped but not gutted
+    expect(code).toMatch(/divRound\(/) // and the rounding divisions do go through money.ts
+    // Every division written in the file, and there are only these two: both are BigInt divisions, which are exact
+    // and truncating rather than floating, and both operate on positive operands only. Every other division in the
+    // module goes through divRound or divRoundBig, whose call sites carry no `/` at all.
+    expect(code.split('\n').filter((l) => l.includes('/')).map((l) => l.trim())).toEqual([
+      'const step = (x: bigint): bigint => (x + n / x) / 2n',
+      'const q = n / d',
+    ])
+    // Stronger than a list of banned functions: the module calls NO Math function at all except Math.min - so no
+    // floor, no round, no ceil, no sqrt, no pow, and nothing added later can slip in under a name nobody listed.
+    expect(code.match(/Math\.\w+/g)).toEqual(['Math.min'])
     expect(code).not.toMatch(/\b(parseFloat|parseInt|Number\.parseFloat|toFixed|toPrecision)\b/)
-    expect(code).not.toMatch(/Math\.(log|log2|log10|exp|pow|sqrt|cbrt|random|fround|hypot|trunc|round|ceil)\b/)
     expect(code).not.toMatch(/\*\*/)
     expect(code).not.toMatch(/\d\.\d|\d\.(?!\w)|(?<![\w.])\.\d/) // no decimal literal
     expect(code).not.toMatch(/\be[+-]?\d/) // no exponent literal either, which the tree-wide guard does not catch

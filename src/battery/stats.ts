@@ -4,8 +4,17 @@
 // §12 chooses non-parametric tests deliberately, because transaction amounts are heavily right-skewed and a mean or a
 // Pearson correlation would be dragged around by the long tail. That choice is what makes integer arithmetic possible:
 // every statistic below is a function of ranks or of counts, never of the amounts themselves, so none of them needs a
-// float. Ranks are integers once doubled (see doubledRanks), rho and rank-biserial r are ratios of integers,
-// chi-square is rational throughout, and Cramer's V needs one square root, which isqrt supplies to the basis point.
+// float. Ranks are integers once doubled (see doubledRanks), rank-biserial r is a ratio of integers, chi-square is
+// rational throughout, and the two statistics that do need a square root - Spearman's rho and Cramer's V - take it
+// from isqrtBig, which is Newton's method over BigInt and exact.
+//
+// BigInt, not float. Spearman's rho needs the product of two sums of squared rank deviations, and that product leaves
+// the safe-integer range at about 660 paired observations. BigInt is exact and unbounded, which is the opposite of a
+// float rather than a relaxation of the rule, and it needs no dependency; src/battery/critical.ts reaches for it for
+// the same class of overflow. So every division written in this file is either a BigInt division - exact, truncating,
+// and only ever on positive operands here - or divRound from src/lib/money.ts, which has no `/` at its call sites.
+// src/battery/stats.test.ts asserts there is no third kind and that the file calls no Math function except Math.min,
+// in the style of src/learning/bayes.test.ts.
 //
 // Effect sizes come back in basis points: 1 bp = 1/10000, so 10000 bp is 1.0 and -10000 bp is -1.0. That is the unit
 // the budget screens already read percentages in. Chi-square comes back multiplied by CHI_SCALE.
@@ -13,9 +22,6 @@
 // Every function returns null where its statistic is undefined - too few values, a series with no variance, a table
 // with an empty row or column - rather than a number that would read as an answer. A rho of 0 and "there is nothing
 // to correlate" are different statements, and only one of them is a number.
-//
-// The one division written in this file is the integer floor inside divFloor, which isqrt needs; everything else
-// divides through divRound. src/battery/stats.test.ts asserts that, in the style of src/learning/bayes.test.ts.
 
 import { divRound } from '../lib/money'
 
@@ -25,36 +31,64 @@ export const CHI_SCALE = 10000
 /** 1.0 in basis points. */
 const BP_ONE = 10000
 
-/** floor(n / d) for integers n >= 0, d > 0. The only division written in this file. */
-function divFloor(n: number, d: number): number {
-  return Math.floor(n / d)
-}
+/**
+ * A square root is taken scaled by this before it is floored, so the flooring is this many times finer than the
+ * basis point reported. See spearmanRhoBp, where an unscaled floor would cost more than a basis point.
+ */
+const ROOT_SCALE = 100000000n
 
 /**
- * floor(sqrt(n)) for a non-negative safe integer n, exactly - no Math.sqrt, so no float can round the answer up to a
- * value whose square exceeds n. Throws on a negative or non-integer argument rather than inventing a root for it.
+ * floor(sqrt(n)) for a non-negative BigInt, exactly. Exported so its answers and its termination can be pinned
+ * directly rather than only through the statistics that use it.
  */
-export function isqrt(n: number): number {
-  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`isqrt needs a non-negative safe integer, got ${String(n)}`)
-  if (n < 2) return n // the loop below needs x >= 1 with floor(n / x) >= 1; 0 and 1 are their own roots anyway
-  // Newton's method on integers: x <- floor((x + floor(n / x)) / 2), started at x = n.
+export function isqrtBig(n: bigint): bigint {
+  if (n < 0n) throw new RangeError(`isqrtBig needs a non-negative integer, got ${String(n)}`)
+  if (n < 2n) return n // the loop below needs x >= 1 with n / x >= 1; 0 and 1 are their own roots anyway
+  // Newton's method on integers: x <- floor((x + floor(n / x)) / 2), started at x = n. BigInt division truncates
+  // toward zero, and every operand here is positive, so it IS the floor.
   //
   // Why it terminates: the loop steps only while the next iterate is strictly smaller than the current one, so the x
   // values form a strictly decreasing sequence. Every x stays a positive integer (x >= 1, and with n >= 2 the term
-  // floor(n / x) is at least 1, so the average of the two is at least 1). A strictly decreasing sequence of positive
+  // n / x is at least 1, so the average of the two is at least 1). A strictly decreasing sequence of positive
   // integers cannot be infinite - it can take at most x steps from its first value - so the loop ends. It is much
   // faster than that bound in practice, because Newton roughly halves the number of wrong digits each step.
   //
   // Why it ends at the right place: for any integer x >= 1 the arithmetic mean of x and n/x is at least sqrt(n)
   // (AM-GM), so no iterate ever drops below floor(sqrt(n)); and the map can still decrease at any x above
   // floor(sqrt(n)). So the first iterate that fails to decrease is floor(sqrt(n)) itself.
+  const step = (x: bigint): bigint => (x + n / x) / 2n
   let x = n
-  let next = divFloor(x + divFloor(n, x), 2)
+  let next = step(x)
   while (next < x) {
     x = next
-    next = divFloor(x + divFloor(n, x), 2)
+    next = step(x)
   }
   return x
+}
+
+/**
+ * round(numerator / denominator) over BigInt, halves away from zero - the same rule divRound applies to Numbers, for
+ * the one place where the numerator is past the safe-integer range. Exported so the test can hold the two rules
+ * against each other: if they drifted apart, two parts of the app would round the same figure differently, which is
+ * the mistake src/lib/stats.ts exists to prevent for the median.
+ */
+export function divRoundBig(numerator: bigint, denominator: bigint): bigint {
+  const sign = numerator < 0n === denominator < 0n ? 1n : -1n
+  const n = numerator < 0n ? -numerator : numerator
+  const d = denominator < 0n ? -denominator : denominator
+  const q = n / d
+  const r = n - q * d
+  return sign * (r * 2n >= d ? q + 1n : q)
+}
+
+/**
+ * floor(sqrt(n)) for a non-negative safe integer n, exactly - no Math.sqrt, so no float can round the answer up to a
+ * value whose square exceeds n. Throws on a negative or non-integer argument rather than inventing a root for it.
+ * The work is isqrtBig's; the root of a safe integer is itself always a safe integer, so the conversion back is lossless.
+ */
+export function isqrt(n: number): number {
+  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`isqrt needs a non-negative safe integer, got ${String(n)}`)
+  return Number(isqrtBig(BigInt(n)))
 }
 
 /**
@@ -103,16 +137,17 @@ function varies(ranks: readonly number[]): boolean {
  * series of different lengths, or a series with no variance at all. Two pairs are excluded because the formula can
  * then only ever return +1 or -1, which is a claim no two points support.
  *
- * rho = 1 - 6 * sum(d^2) / (n(n^2-1)), where d is the difference of the two ranks of a pair. The ranks here are
- * doubled, so each difference is 2d and sum(dd^2) is 4 * sum(d^2) - hence the 4 in the denominator below. Numerator
- * and denominator are both integers, so the basis-point answer is the correctly rounded one.
+ * Spearman's rho IS Pearson's correlation of the ranks, and that is what is computed here - NOT the familiar
+ * shortcut 1 - 6*sum(d^2)/(n(n^2-1)), which equals it only when neither series has ties. §12's primary
+ * relationships (mood valence against amount, reason against worthwhile) put a short ordinal scale against amounts,
+ * so they are tie-heavy, and the shortcut over-reports on them badly: on the five-pair example in stats.test.ts it
+ * reads -0.70 where the honest answer is -0.89, because ties shrink the rank spread and so shrink sum(d^2). Where
+ * there are no ties the two forms agree exactly, which the tests also pin - a correction that quietly moved the
+ * untied answer would be broken.
  *
- * KNOWN LIMITATION, worth stating because §12's first relationship walks straight into it: that formula is Spearman's
- * rho exactly only when neither series has ties. With ties the honest definition is Pearson's correlation of the
- * ranks, and this formula over-reports (ties shrink the rank spread, which shrinks sum(d^2)). On a heavily tied series
- * the gap is large: see the worked example in stats.test.ts, where three tied values out of five move rho from -0.8944
- * to -0.7000. Mood valence and a worthwhile flag are exactly that shape. The test pins both numbers so the choice is
- * visible rather than accidental.
+ * It stays integer arithmetic because the mean of the DOUBLED ranks is exactly n+1 (the mean rank is (n+1)/2, and
+ * doubling clears the half). So every deviation a_i = rank2_i - (n+1) is an integer, and so are sum(a*b), sum(a^2)
+ * and sum(b^2); rho = sum(a*b) / sqrt(sum(a^2) * sum(b^2)), whose product is held as a BigInt and rooted exactly.
  */
 export function spearmanRhoBp(xs: readonly number[], ys: readonly number[]): number | null {
   const n = xs.length
@@ -121,17 +156,27 @@ export function spearmanRhoBp(xs: readonly number[], ys: readonly number[]): num
   const rx = doubledRanks(xs)
   const ry = doubledRanks(ys)
   if (!varies(rx) || !varies(ry)) return null
-  let sumSquaredDoubledDiffs = 0
+  const meanDoubledRank = n + 1
+  let sumAB = 0n
+  let sumAA = 0n
+  let sumBB = 0n
   for (let i = 0; i < n; i++) {
-    const a = rx[i]
-    const b = ry[i]
-    if (a === undefined || b === undefined) return null
-    const d = a - b
-    sumSquaredDoubledDiffs += d * d
+    const rankA = rx[i]
+    const rankB = ry[i]
+    if (rankA === undefined || rankB === undefined) return null
+    const a = BigInt(rankA - meanDoubledRank)
+    const b = BigInt(rankB - meanDoubledRank)
+    sumAB += a * b
+    sumAA += a * a
+    sumBB += b * b
   }
-  const numerator = 6 * BP_ONE * sumSquaredDoubledDiffs
-  if (!Number.isSafeInteger(numerator)) throw new RangeError('Too many pairs for an exact integer Spearman')
-  return BP_ONE - divRound(numerator, 4 * n * (n * n - 1))
+  // The root is taken SCALED, because isqrtBig floors and on a short series a bare floor costs more than a basis
+  // point: for sum(a^2)*sum(b^2) = 4760 the root is 68.9927..., and flooring that to 68 would report 10000 bp where
+  // the answer is 9856. isqrtBig(S * ROOT_SCALE^2) is floor(ROOT_SCALE * sqrt(S)), so the flooring is ROOT_SCALE
+  // times finer than the unit reported - under 10^-4 bp - and the basis point is then the correctly rounded one.
+  // Both varies() checks passed, so sum(a^2) and sum(b^2) are each at least 2 and the root cannot be zero.
+  const root = isqrtBig(sumAA * sumBB * ROOT_SCALE * ROOT_SCALE)
+  return Number(divRoundBig(sumAB * BigInt(BP_ONE) * ROOT_SCALE, root))
 }
 
 /**
