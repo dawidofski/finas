@@ -537,18 +537,42 @@ looks significant.
 | Relationship | Test | Minimum data |
 |---|---|---|
 | Mood → spend amount | Spearman ρ on mood valence vs amount | ≥30 annotated discretionary spends, ≥2 mood groups with ≥10 each |
-| Mood → purchase frequency | Poisson rate comparison by mood day | ≥8 weeks of mood coverage |
+| Mood → purchase frequency | Mann–Whitney U on per-week purchase counts | ≥8 weeks of mood coverage |
 | Stress → discretionary share | Mann–Whitney U | ≥10 stressed and ≥10 non-stressed spends |
 | Boredom → impulse share | Chi-square | ≥20 impulse-tagged spends |
 | Reason → worthwhile | Chi-square + Cramér's V | ≥30 spends with both fields |
 | Weekend effect | Mann–Whitney U | ≥8 weekends observed |
 | Days-after-payday effect | Spearman ρ on days-since-income vs daily spend | ≥3 income events |
 | Small-purchase accumulation | Descriptive aggregation, no test | ≥1 full month |
-| Salary change → lifestyle change | Paired comparison of discretionary share across income tiers | ≥2 distinct income levels, ≥2 months each |
+| Salary change → lifestyle change | Mann–Whitney U on discretionary share across income tiers | ≥2 distinct income levels, ≥2 months each |
 | Category → savings performance | Spearman ρ | ≥4 months |
 
 Non-parametric tests are chosen deliberately: transaction amounts are heavily
 right-skewed, so means and Pearson correlation would mislead.
+
+Two rows above were corrected during Plan 6, because **this table named two
+tests the implementation does not run, and the declarations copied from it
+inherited the error.**
+
+- *Mood → purchase frequency* said **Poisson rate comparison**. No Poisson
+  primitive exists and an exact Poisson test would need a fourth table of
+  hand-entered critical values. Mann–Whitney on per-week counts is also better
+  on the merits: it assumes no distribution, and the Poisson shape is plainly
+  violated because purchases cluster — one shopping trip is several
+  transactions.
+- *Salary change → lifestyle change* said **paired comparison**. The code
+  compares two **disjoint** groups of months, which is the
+  independent-samples test; nothing about it is paired. This one was the more
+  dangerous of the two precisely because it reads plausible, so no one thought
+  to check it. It survived a whole-branch review and was caught only by an
+  implementer re-reading its own declaration against its own code.
+
+The lesson is for this document rather than for the code: a test named here is
+a **claim about what the program does**, and it is the only such claim in this
+spec that no test could contradict, because §12 also requires that the test's
+name never reach the screen. A field nothing displays and nothing checks will
+drift. `battery.test.ts` now ties each declared test to the statistic the
+module actually calls.
 
 Every finding reports: the pattern, number of transactions analysed, the period
 covered, the effect size (ρ, rank-biserial r or Cramér's V), a confidence band,
