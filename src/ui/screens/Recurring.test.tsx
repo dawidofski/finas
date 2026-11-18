@@ -42,8 +42,10 @@ async function payments(merchantId: string, dates: string[], amounts: number | n
   await db.annotations.bulkAdd(rows.map((r) => ann(r.id, merchantId)))
 }
 const on5th = (months: string[]): string[] => months.map((m) => `${m}-05`)
-/** May to October: the last payment was on 5 October, the next is due 5 November, nothing is overdue on TODAY. */
-const LIVE = on5th(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
+/** May to November: the last payment was on 5 November, the next is due about 6 December, nothing is overdue on TODAY. */
+const LIVE = on5th(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11'])
+/** May to October: the payment due on 5 November has not come by TODAY (18 November), but not a whole cycle has passed. */
+const OVERDUE = on5th(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
 /** March to August: more than a whole cycle past the date the next one was due. */
 const STOPPED = on5th(['2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08'])
 
@@ -83,8 +85,8 @@ describe('Recurring screen', () => {
     const row = rowOf('Gimnasio Ejemplo')
     expect(field(row, 'Amount')).toBe(formatEur(3000))
     expect(field(row, 'How often')).toBe('Every month')
-    expect(field(row, 'Last payment')).toBe(formatSpanishDate('2026-10-05'))
-    expect(field(row, 'Expected next payment')).toBe(formatSpanishDate('2026-11-05'))
+    expect(field(row, 'Last payment')).toBe(formatSpanishDate('2026-11-05'))
+    expect(field(row, 'Expected next payment')).toBe(formatSpanishDate('2026-12-06'))
     expect(field(row, 'Cost per month')).toBe(formatEur(3000))
     // The name is the bank's or the owner's text: quoted, so it never reads as the app's sentence.
     expect(within(row).getByRole('heading', { level: 3 }).querySelector('q')?.textContent).toBe('Gimnasio Ejemplo')
@@ -170,7 +172,7 @@ describe('Recurring screen', () => {
     await mount()
     expect(rows()).toHaveLength(1)
     const row = rowOf('Televisión Ejemplo')
-    expect(field(row, 'Price change')).toBe(`It was ${formatEur(1299)}, and the last two payments have been ${formatEur(1390)}.`)
+    expect(field(row, 'Price change')).toBe(`It used to be ${formatEur(1299)}, and the latest payment was ${formatEur(1390)}.`)
     // One payment: no second row for the new price.
     cleanup()
     await db.transactions.clear(); await db.annotations.clear()
@@ -194,6 +196,48 @@ describe('Recurring screen', () => {
     expect(field(rowOf('Gimnasio Ejemplo'), 'Expected next payment')).not.toBeNull()
     expect(text()).toContain(`come to ${formatEur(3000)} a month`)
     expect(text()).not.toContain(formatEur(4200))
+  })
+
+  it('says a payment was expected and has not appeared, never showing a past date as upcoming', async () => {
+    await merchant('m.gym', 'Gimnasio Ejemplo')
+    await payments('m.gym', OVERDUE, 3000)
+    await mount()
+    const row = rowOf('Gimnasio Ejemplo')
+    expect(field(row, 'Expected next payment')).toBeNull()
+    expect(field(row, 'Expected payment')).toBe(`It was expected around ${formatSpanishDate('2026-11-05')} and has not appeared yet.`)
+    expect(row.textContent).not.toContain('seems to have stopped')
+    expect(field(row, 'Cost per month')).toBe(formatEur(3000))
+  })
+
+  it('shows the owner the payments they hid, and shows one again on request', async () => {
+    await merchant('m.gym', 'Gimnasio Ejemplo')
+    await merchant('m.tv', 'Televisión Ejemplo')
+    await payments('m.gym', LIVE, 3000)
+    await payments('m.tv', LIVE, 1299)
+    await mount()
+    expect(screen.queryByRole('heading', { level: 2, name: 'Hidden' })).toBeNull()
+    fireEvent.click(within(rowOf('Gimnasio Ejemplo')).getByRole('button', { name: /not recurring/ }))
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    const hidden = screen.getByRole('list', { name: 'Hidden payments' })
+    expect(hidden.textContent).toContain('Gimnasio Ejemplo')
+    expect(text()).toMatch(/You said one payment is not recurring/)
+    fireEvent.click(within(hidden).getByRole('button', { name: 'Show again: Gimnasio Ejemplo' }))
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(screen.queryByRole('list', { name: 'Hidden payments' })).toBeNull()
+    expect((await db.recurring.toArray()).every((r) => r.dismissed !== true)).toBe(true)
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 3, name: 'Gimnasio Ejemplo' }))
+  })
+
+  it('does not promise yearly bills, and says why', async () => {
+    await mount()
+    expect(text()).not.toMatch(/every year/i)
+    expect(text()).toMatch(/A yearly bill is not found here/)
+  })
+
+  it('describes the regularity by how many payments and a roughly equal interval, not as very even', async () => {
+    expect(regularityIn(VERY_REGULAR_BP)).not.toMatch(/very even/)
+    expect(regularityIn(VERY_REGULAR_BP)).toMatch(/roughly the same interval/)
+    expect(regularityIn(REGULAR_BP)).toMatch(/roughly the same interval/)
   })
 
   it('shows an irregular payment only once confirmed, with no expected date and no monthly figure', async () => {
@@ -333,7 +377,7 @@ describe('Recurring screen', () => {
       await mount()
       const page = appSpoken()
       expect(page).toContain('seems to have stopped')
-      expect(page).toContain('It was')
+      expect(page).toContain('It used to be')
       expect(page).not.toContain('Because Gym')
       for (const list of lists) expect(page, list.name).not.toMatch(list.pattern)
       expect(violations(page)).toEqual([])

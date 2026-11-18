@@ -393,6 +393,8 @@ describe('Learning screen', () => {
     await gymMonthly()
     await mount()
     expect(review().textContent).not.toContain('Not available yet')
+    // Looking at Learning only reads: it wrote no recurring row, so it cannot change what the Recurring screen shows.
+    expect(await db.recurring.toArray()).toEqual([{ id: 'stale' }])
     expect(within(review()).getByRole('link', { name: 'See your recurring payments' })).toHaveAttribute('href', '#/recurring')
   })
 

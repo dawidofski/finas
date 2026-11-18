@@ -3,12 +3,15 @@ import { db } from '../../db/db'
 import { formatSpanishDate } from '../../lib/dates'
 import { formatEur } from '../../lib/money'
 import { MIN_OCCURRENCES, type Frequency } from '../../recurring/detect'
-import { confirmRecurring, dismissRecurring, markCancelled, recurringPayments, type RecurringView } from '../../recurring/store'
+import type { RecurringRow } from '../../db/schema'
+import { confirmRecurring, dismissRecurring, hiddenRecurring, markCancelled, recurringPayments, restoreRecurring, type RecurringView } from '../../recurring/store'
 
 /**
- * How the evidence is put in words. The stored figure (basis points, 0 to 10000) says how well the payments pin the pattern:
- * a steady run of three scores 5000, of four 6000, of six 7143, and a ragged or irregular cluster less. The figure itself is
- * never shown; these two thresholds only choose between three phrases.
+ * How the evidence is put in words. The stored figure (basis points, 0 to 10000) says how many payments there are and what
+ * share of the gaps between them fit the interval: three payments score at most 5000, four 6000, six 7143, and a cluster
+ * where some gaps do not fit scores less. The figure itself is never shown; these two thresholds only choose between three
+ * phrases, and none of them claims more than that: the monthly band is 26 to 35 days, so "roughly the same interval" is the
+ * most the evidence says.
  */
 export const VERY_REGULAR_BP = 7000
 export const REGULAR_BP = 5000
@@ -16,29 +19,29 @@ export const REGULAR_BP = 5000
 const COUNT_WORD: Record<number, string> = { 3: 'three', 4: 'four', 5: 'five' }
 
 export function regularityIn(scoreBp: number): string {
-  if (scoreBp >= VERY_REGULAR_BP) return 'The payments have come at very even intervals, and there have been plenty of them.'
-  if (scoreBp >= REGULAR_BP) return 'The payments have come at even intervals, over a few payments.'
-  return 'There are few payments, or the gaps between them vary, so this is a tentative reading.'
+  if (scoreBp >= VERY_REGULAR_BP) return 'There have been many payments, and they came at roughly the same interval.'
+  if (scoreBp >= REGULAR_BP) return 'There have been a few payments, and they came at roughly the same interval.'
+  return 'There are few payments, or some of the gaps between them do not fit the interval, so this is a tentative reading.'
 }
 
 const FREQUENCY: Record<Frequency, string> = {
   weekly: 'Every week',
   monthly: 'Every month',
   quarterly: 'Every three months',
-  annual: 'Every year',
+  annual: 'Every year',   // a label for a stored row; this screen's window cannot find a yearly bill (see recurringWindow)
   irregular: 'No regular interval',
 }
 
-interface Loaded { views: RecurringView[]; names: Map<string, string>; dismissed: number }
+interface Loaded { views: RecurringView[]; names: Map<string, string>; hidden: RecurringRow[] }
 
 async function load(today: string, computedAt: number): Promise<Loaded> {
   const views = await recurringPayments(today, computedAt)
-  const ids = [...new Set(views.map((v) => v.merchantId))]
+  const hidden = await hiddenRecurring()
+  const ids = [...new Set([...views.map((v) => v.merchantId), ...hidden.map((r) => r.merchantId)])]
   const merchants = await db.merchants.bulkGet(ids)
   const names = new Map<string, string>()
   ids.forEach((id, i) => names.set(id, merchants[i]?.canonicalName ?? id))
-  const dismissed = await db.recurring.filter((r) => r.dismissed === true).count()
-  return { views, names, dismissed }
+  return { views, names, hidden }
 }
 
 /** What the total counts: not cancelled, not stopped, and with a monthly figure of its own (an irregular payment has none). */
@@ -46,7 +49,7 @@ function counted(v: RecurringView): v is RecurringView & { monthlyCostCents: num
   return !v.cancelled && !v.lapsed && v.monthlyCostCents !== null
 }
 
-type Choice = 'confirm' | 'dismiss' | 'cancel'
+type Choice = 'confirm' | 'dismiss' | 'cancel' | 'restore'
 
 function Row({ v, name, onChoose, headingRef }: { v: RecurringView; name: string; onChoose: (c: Choice) => void; headingRef: (el: HTMLHeadingElement | null) => void }): ReactNode {
   return (
@@ -58,17 +61,23 @@ function Row({ v, name, onChoose, headingRef }: { v: RecurringView; name: string
         {v.amountChanged !== null && (
           <>
             <dt>Price change</dt>
-            <dd>It was {formatEur(v.amountChanged.fromCents)}, and the last two payments have been {formatEur(v.amountChanged.toCents)}.</dd>
+            <dd>It used to be {formatEur(v.amountChanged.fromCents)}, and the latest payment was {formatEur(v.amountChanged.toCents)}.</dd>
           </>
         )}
         <dt>How often</dt>
         <dd>{FREQUENCY[v.frequency]}</dd>
         <dt>Last payment</dt>
         <dd>{formatSpanishDate(v.lastSeenDate)}</dd>
-        {!v.cancelled && !v.lapsed && v.expectedNextDate !== null && (
+        {!v.cancelled && !v.lapsed && !v.overdue && v.expectedNextDate !== null && (
           <>
             <dt>Expected next payment</dt>
             <dd>{formatSpanishDate(v.expectedNextDate)}</dd>
+          </>
+        )}
+        {!v.cancelled && !v.lapsed && v.overdue && v.expectedNextDate !== null && (
+          <>
+            <dt>Expected payment</dt>
+            <dd>It was expected around {formatSpanishDate(v.expectedNextDate)} and has not appeared yet.</dd>
           </>
         )}
         <dt>Cost per month</dt>
@@ -143,6 +152,7 @@ export default function Recurring({ today, computedAt }: { today: string; comput
     try {
       if (choice === 'confirm') await confirmRecurring(id)
       else if (choice === 'dismiss') await dismissRecurring(id)
+      else if (choice === 'restore') await restoreRecurring(id)
       else await markCancelled(id)
       const active = data.views.filter((v) => !v.cancelled)
       const at = active.findIndex((v) => v.id === id)
@@ -162,7 +172,8 @@ export default function Recurring({ today, computedAt }: { today: string; comput
   if (error) return <section className="recurring">{heading}<div role="alert" className="notice notice-refusal"><p>{error}</p></div></section>
   if (data === null) return <section className="recurring">{heading}<p role="status">Loading your recurring payments…</p></section>
 
-  const { views, names, dismissed } = data
+  const { views, names, hidden } = data
+  const dismissed = hidden.length
   const open = views.filter((v) => !v.cancelled)
   const cancelled = views.filter((v) => v.cancelled)
   const inTotal = views.filter(counted)
@@ -199,13 +210,13 @@ export default function Recurring({ today, computedAt }: { today: string; comput
           <>
             <h2>Payments found</h2>
             {dismissed > 0
-              ? <p>Nothing is listed now. {dismissed === 1 ? 'You said one payment is not recurring, and it stays out of this list.' : `You said ${dismissed} payments are not recurring, and they stay out of this list.`}</p>
+              ? <p>Nothing is listed now.</p>
               : (
                 <>
                   <p>No recurring payments have been found yet. This is the normal starting point, not a problem with your records.</p>
                   <p>
-                    A payment is found when your records show at least {COUNT_WORD[MIN_OCCURRENCES] ?? String(MIN_OCCURRENCES)} payments to the same merchant at a steady interval, such as every week, every month,
-                    every three months or every year. Payments that have no merchant cannot be grouped. If you have not yet, <a href="#/import">import your bank statements</a>.
+                    A payment is found when your records show at least {COUNT_WORD[MIN_OCCURRENCES] ?? String(MIN_OCCURRENCES)} payments to the same merchant at a steady interval, such as every week, every month
+                    or every three months. A yearly bill is not found here: the records read cover about fourteen months. Payments that have no merchant cannot be grouped. If you have not yet, <a href="#/import">import your bank statements</a>.
                   </p>
                 </>
               )}
@@ -225,6 +236,23 @@ export default function Recurring({ today, computedAt }: { today: string; comput
             )}
           </>
         )}
+      {dismissed > 0 && (
+        <>
+          <h2>Hidden</h2>
+          <p>{dismissed === 1 ? 'You said one payment is not recurring.' : `You said ${dismissed} payments are not recurring.`} {dismissed === 1 ? 'It is' : 'They are'} left out of the list and the total. You can show {dismissed === 1 ? 'it' : 'one'} again.</p>
+          <ul aria-label="Hidden payments" className="recurring-list">
+            {hidden.map((r) => {
+              const name = names.get(r.merchantId) ?? r.merchantId
+              return (
+                <li key={r.id}>
+                  <q>{name}</q>, {formatEur(r.amountCents)}, last paid {formatSpanishDate(r.lastSeenDate)}{' '}
+                  <button type="button" aria-label={`Show again: ${name}`} onClick={() => void choose(r.id, 'restore')}>Show again</button>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
     </section>
   )
 }
