@@ -29,7 +29,7 @@
 
 1. **A fresh install scores nothing.** Every component is unmeasurable on day one; the screen must say the score cannot be given yet and must never render `0`, `NaN`, or an empty ring. → Task 3 test 4, Task 7 test 1.
 2. **One month of data has no trailing baseline.** "Improvement" compares against the owner's own earlier months; with fewer it is *not measured*, which is not the same as *no improvement*. → Task 1 test 5.
-3. **An estimated income basis must not be presented as measured fact.** `MonthSummary.incomeBasis` can be `'trailing-average'` or `'none'`, and two components rest on income. A month whose income was estimated must not silently harden into a score. → Task 1 test 6, Task 2 test 5.
+3. **A month with no records is not a month of zeros.** `MonthPoint.hasData` marks it, and a gap month admitted as zero spending or zero savings invents a month the owner never lived — it drags savings consistency down and the discretionary trend around. This is the trap Plan 5 found and Plan 6 found again in a second form. → Task 1 test 6, Task 2 test 5.
 4. **Excluding a component must not let another dominate.** Weights renormalise over the measured components only; with four of six excluded, the remaining two must still be weighted against each other, not against the original total. → Task 3 tests 2 and 3.
 5. **A suppressed recommendation must stay suppressed.** Its key has to be stable across cycles — a key rebuilt from a changing figure resurfaces the same advice forever and the dismissal never takes. Changed evidence must not reopen it either; that is what separates `suppressed` from `accepted`. → Task 4 tests 3 and 4.
 6. **Evidence can go stale.** A recommendation's transactions may be soft-deleted between generation and display; the evidence list must drop them rather than render a blank row. → Task 5 test 6.
@@ -69,12 +69,14 @@ it('ignores a line with no allocation rather than scoring it as overspent', () =
 it('counts a month as consistent when savings are positive, over months with data', () => {})
 it('withholds savings consistency below three months of data, naming what is short', () => {})
 it('withholds improvement below six months, because there is no baseline to compare against', () => {})
-it('says a month whose income was estimated is not an observation of that month', () => {})
+it('leaves a month with no records out of every component rather than counting it as zero', () => {})
 ```
 
 The first test is the whole point of "weighted by allocation size": a 2000-cent line respected and a 200 000-cent line overspent is a *low* score, and a count-based implementation would call it 50.
 
-The last two are Review Focus 2 and 3. For the income one: a month with `incomeBasis !== 'actual'` must not contribute to a component that rests on income, and the `why` must say so in the owner's words.
+The last two are Review Focus 2 and 3. For the gap month: a `MonthPoint` with `hasData: false` has blanked figures, so admitting it as a zero-savings month drags consistency down and as a zero-spend month distorts the discretionary trend. Write the test so the gap month's inclusion **changes the score**, not the third decimal — otherwise it passes with the bug present.
+
+Note that none of these three components reads income: budget awareness compares allocated against spent, savings consistency reads `savedCents`, and improvement is a ratio of `discretionaryCents` to `spentCents`. `incomeBasis` is therefore not this task's concern, and a component here must not start consulting it.
 
 - [ ] **Step 2: Run the tests and watch each fail for the right reason**
 
@@ -107,7 +109,7 @@ git commit -- src/score/components.ts src/score/components.test.ts -m "feat: the
 ```ts
 export async function spendingAwareness(from: string, to: string): Promise<Component>
 export function goalProgress(goals: readonly SavingsGoalRow[]): Component
-export async function learning(early: readonly RegretCluster[], late: readonly RegretCluster[]): Promise<Component>
+export function learning(early: readonly RegretCluster[], late: readonly RegretCluster[]): Component
 ```
 
 - Consumes: `Component` from Task 1; `annotatedTransactions` and `RegretCluster` from `src/learning/regret.ts`; `SavingsGoalRow` from `src/db/schema.ts`.
@@ -155,8 +157,11 @@ export const WEIGHTS: Readonly<Record<ComponentId, number>> = {
   'budget-awareness': 3, 'savings-consistency': 3, 'improvement': 2,
   'spending-awareness': 2, 'goal-progress': 2, 'learning': 2,
 }
-export function moneyScore(components: readonly ScoredComponent[]): MoneyScore
+/** Takes all six by id; this module owns the labels and the weights, so no caller assembles them. */
+export function moneyScore(components: Readonly<Record<ComponentId, Component>>): MoneyScore
 ```
+
+**Why `moneyScore` takes a record of all six rather than a prepared list:** somebody has to pair each component with its id, its owner-facing label and its weight, and the only other candidate is the screen. Leaving that to the screen would put the labels and the no-dominance property in a `.tsx` file, where a second screen — or a later export — would have to repeat them. This module owns all three, and the screen passes six `Component` values.
 
 **Two decisions the spec left to this plan, with their reasons:**
 
@@ -248,6 +253,8 @@ export interface Recommendation {
   todo: string             // what to do differently
   impactCents: number | null   // estimated financial impact; null when it cannot honestly be estimated
   confidence: 'high' | 'medium' | 'low'
+  /** Digest of `evidence.transactionIds`. Task 4 decides with it whether accepted advice is a fresh occurrence. */
+  evidenceFingerprint: string
 }
 export async function recommendationsFor(month: string, today: string, computedAt: number): Promise<Recommendation[]>
 ```
@@ -307,7 +314,7 @@ it('uses no causal or shaming wording in any note or challenge', () => {})
 it('assumes nothing about what the owner can afford', () => {})
 ```
 
-Test 5 is anti-goal A1 made testable: scan every string for wording that presumes means — "just", "simply", "only", "cut back on luxuries", "you should be able to". Put the list in the test and assert it catches a sentence that violates it, so it cannot pass vacuously.
+Test 5 is anti-goal A1 made testable: scan every string for wording that presumes means — "just", "simply", "only", "cut back on luxuries", "you should be able to". **Add this list to `src/test/bannedWords.ts` beside the three already there, as a new named list, and read it back the way the others are read.** It is a distinct rule, not a copy of an existing one, so it is an addition rather than the fourth duplicate the constraints forbid — and putting it anywhere else would start the drift that module exists to stop. Assert it catches a sentence that violates it, so it cannot pass vacuously.
 
 - [ ] **Steps 2–6 as Task 1**, committing `feat: the six lessons and five challenges, attached to what prompted them`.
 
@@ -315,7 +322,9 @@ Test 5 is anti-goal A1 made testable: scan every string for wording that presume
 
 ### Task 7: The Money Score screen
 
-**Files:** Create `src/ui/screens/Score.tsx`, `src/ui/screens/Score.test.tsx`. Modify `src/ui/routes.tsx`.
+**Files:** Create `src/ui/screens/Score.tsx`, `src/ui/screens/Score.test.tsx`. Modify `src/ui/routes.tsx`, `src/ui/shell.test.tsx`.
+
+**`src/ui/shell.test.tsx` holds a `REAL` list and a `STUBS` list, and asserts the two together equal `ROUTES`.** Move `/score` from `STUBS` to `REAL` in the same commit, or this task's own commit fails that test — it is not Task 8's to do for you.
 
 **Interfaces:**
 - Consumes: `moneyScore`, `WEIGHTS`, the six component functions, and `cached`.
@@ -349,7 +358,7 @@ it('keeps focus and renders no control that does nothing', () => {})
 
 **There is no `Learning.tsx` today** — `/learning` renders the generic `Stub`, exactly as `/score` does. Create it and replace the routes entry.
 
-§15 names this screen "Learning and recommendations": it carries the advice, the note attached to each, and the challenges. **Move `/learning` and `/score` from `STUBS` to `REAL` in `src/ui/shell.test.tsx`** — that table is asserted against `ROUTES`, so the two lists must agree.
+§15 names this screen "Learning and recommendations": it carries the advice, the note attached to each, and the challenges. **Move `/learning` from `STUBS` to `REAL` in `src/ui/shell.test.tsx`** — that table is asserted against `ROUTES`, so the two lists must agree. `/score` was moved by Task 7; leave it alone.
 
 - [ ] **Step 1: Write the failing tests**
 
