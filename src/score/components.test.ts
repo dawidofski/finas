@@ -5,7 +5,7 @@ import type { AnnotationRow, SavingsGoalRow, TransactionRow } from '../db/schema
 import type { RegretCluster } from '../learning/regret'
 import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
-import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness } from './components'
+import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, wholePoints } from './components'
 
 function line(allocatedCents: number, spentCents: number, targetKind: 'category' | 'goal' = 'category'): BudgetLine {
   return {
@@ -135,6 +135,17 @@ describe('savingsConsistency', () => {
   it('does not let a gap month make up the three-month minimum', () => {
     const c = savingsConsistency([point(m(1), { savedCents: 100 }), point(m(2), { savedCents: 100 }), gap(3)])
     expect(c.kind).toBe('not-measured')
+  })
+})
+
+describe('wholePoints', () => {
+  it('rounds, reports 100 only when nothing is short, and refuses 0 of 0', () => {
+    expect(wholePoints(1, 3)).toBe(33)   // 33.3
+    expect(wholePoints(2, 3)).toBe(67)   // 66.7
+    expect(wholePoints(7, 7)).toBe(100)
+    expect(wholePoints(1397, 1400)).toBe(99) // 99.79 rounds to 100 but 3 are short
+    expect(wholePoints(0, 5)).toBe(0)
+    expect(() => wholePoints(0, 0)).toThrow(RangeError)
   })
 })
 

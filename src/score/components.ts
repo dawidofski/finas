@@ -19,7 +19,7 @@ const POINTS_PER_100_BP = 5
 
 const clamp = (n: number): number => Math.max(0, Math.min(100, n))
 /** `part` of `total` as whole points; 100 only when nothing is short, so rounding never awards a full score. */
-const wholePoints = (part: number, total: number): number => {
+export function wholePoints(part: number, total: number): number {
   // 0 of 0 is no measurement, not a full score: every caller guards its denominator, and a missed guard must fail loudly.
   if (total <= 0) throw new RangeError('wholePoints needs a positive total')
   return clamp(part < total ? Math.min(99, divRound(part * 100, total)) : 100)
