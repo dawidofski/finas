@@ -8,11 +8,15 @@
 // rational throughout, and the two statistics that do need a square root - Spearman's rho and Cramer's V - take it
 // from isqrtBig, which is Newton's method over BigInt and exact.
 //
-// BigInt, not float. Spearman's rho needs the product of two sums of squared rank deviations, and that product leaves
-// the safe-integer range at about 660 paired observations. BigInt is exact and unbounded, which is the opposite of a
-// float rather than a relaxation of the rule, and it needs no dependency; src/battery/critical.ts reaches for it for
-// the same class of overflow. So every division written in this file is either a BigInt division - exact, truncating,
-// and only ever on positive operands here - or divRound from src/lib/money.ts, which has no `/` at its call sites.
+// BigInt, not float. Two of these statistics outgrow the safe-integer range on data the owner could really have:
+// Spearman's rho needs the product of two sums of squared rank deviations, which overflows at about 660 paired
+// observations, and chi-square needs CHI_SCALE * O^2 * total, which overflows at around 20000 annotated rows. BigInt
+// is exact and unbounded, which is the opposite of a float rather than a relaxation of the rule, and it needs no
+// dependency; src/battery/critical.ts reaches for it for the same class of overflow. Every intermediate that could
+// overflow is a BigInt and no function here throws on a figure being too large, because a RangeError raised from a
+// §12 relationship is an exception on a screen the owner opened, not a refusal they can act on. So every division
+// written in this file is either a BigInt division - exact, truncating, and only ever on positive operands here - or
+// divRound from src/lib/money.ts, which has no `/` at its call sites.
 // src/battery/stats.test.ts asserts there is no third kind and that the file calls no Math function except Math.min,
 // in the style of src/learning/bayes.test.ts.
 //
@@ -220,13 +224,21 @@ export function mannWhitneyU(a: readonly number[], b: readonly number[]): { uDou
  * count zero, and (O-E)^2/E would be a division by it.
  *
  * chi-square = sum((O-E)^2 / E) with E = row * col / total. Expanding the square and using sum(O) = sum(E) = total
- * gives the identical form used here, which keeps the intermediate products far smaller:
+ * gives the identical form used here, which keeps every intermediate small and makes an independent table land on
+ * exactly zero:
  *
  *     sum((O-E)^2/E) = sum(O^2/E) - 2*total + total = total * sum(O^2 / (row*col)) - total
  *
  * Each cell's term is correctly rounded to one unit of 1/CHI_SCALE and the final subtraction is exact, so the result
  * is within (cells / 2) units of the true chi-square - under 0.001 for any table §12 builds. An exactly independent
  * table gives exactly 0, with no rounding at all, because then O = row*col/total and each term is the integer O.
+ *
+ * The cell terms are accumulated as BigInt. CHI_SCALE * O^2 * total leaves the safe-integer range at around 20000
+ * annotated rows, and a THROWN RangeError there is not a wrong number, it is an exception on the Intelligence screen
+ * reached through a §12 relationship the owner did nothing unusual to trigger. "Unlikely to be reached" is not a
+ * reason to leave a crash in place, so the intermediates are exact and unbounded instead. The RESULT is always a
+ * safe integer and is returned as a Number: it is CHI_SCALE * chi-square, and chi-square cannot exceed
+ * total * min(rows-1, cols-1), so it is bounded by the number of transactions the owner actually has.
  */
 export function chiSquareScaled(table: readonly number[][]): { chiScaled: number; df: number } | null {
   const rows = table.length
@@ -253,33 +265,41 @@ export function chiSquareScaled(table: readonly number[][]): { chiScaled: number
   if (total === 0) return null
   if (rowSums.some((s) => s === 0)) return null
   if (colSums.some((s) => s === 0)) return null
-  let sumScaled = 0
+  const totalBig = BigInt(total)
+  const scaleBig = BigInt(CHI_SCALE)
+  let sumScaled = 0n
   for (const [i, row] of table.entries()) {
     const rowSum = rowSums[i]
     if (rowSum === undefined) return null
     for (const [j, observed] of row.entries()) {
       const colSum = colSums[j]
       if (colSum === undefined) return null
-      const numerator = CHI_SCALE * observed * observed * total
-      if (!Number.isSafeInteger(numerator)) throw new RangeError('Counts too large for an exact integer chi-square')
-      sumScaled += divRound(numerator, rowSum * colSum)
+      const o = BigInt(observed)
+      sumScaled += divRoundBig(scaleBig * o * o * totalBig, BigInt(rowSum) * BigInt(colSum))
     }
   }
-  return { chiScaled: sumScaled - CHI_SCALE * total, df: (rows - 1) * (cols - 1) }
+  return { chiScaled: Number(sumScaled - scaleBig * totalBig), df: (rows - 1) * (cols - 1) }
 }
 
 /**
  * Cramer's V in basis points from a CHI_SCALE-scaled chi-square, or null where there is no V: a negative chi-square,
- * a table with no observations, or fewer than two rows or two columns.
+ * a table with no observations, fewer than two rows or two columns, or a chiScaled or total that is not a safe
+ * integer and so is not a figure this module will compute on at all.
  *
  * V = sqrt(chi-square / (total * k)) with k = min(rows-1, cols-1) - the SMALLER dimension, which is what keeps V
  * inside [0, 1]. In basis points that is sqrt(CHI_SCALE * chiScaled / (total * k)), since the two scalings of 10000
  * (one from the basis points, one from chiScaled) leave a single factor of CHI_SCALE behind.
  *
- * isqrt floors, so V is reported at most one basis point low and never high: an effect size here is never overstated.
+ * The product and the root are taken over BigInt, to match chiSquareScaled, whose output this consumes: the guards
+ * above bound what comes in, and BigInt then bounds nothing on the way to the root, so no input that reaches here
+ * can meet a ceiling. V itself never exceeds 10000 bp, so the answer always returns to a Number.
+ *
+ * isqrtBig floors, so V is reported at most one basis point low and never high: an effect size is never overstated.
  */
 export function cramersVBp(chiScaled: number, total: number, rows: number, cols: number): number | null {
-  if (chiScaled < 0 || total <= 0 || rows < 2 || cols < 2) return null
+  if (!Number.isSafeInteger(chiScaled) || chiScaled < 0) return null
+  if (!Number.isSafeInteger(total) || total <= 0) return null
+  if (rows < 2 || cols < 2) return null
   const k = Math.min(rows - 1, cols - 1)
-  return isqrt(divRound(CHI_SCALE * chiScaled, total * k))
+  return Number(isqrtBig(divRoundBig(BigInt(CHI_SCALE) * BigInt(chiScaled), BigInt(total) * BigInt(k))))
 }

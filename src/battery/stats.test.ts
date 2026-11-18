@@ -295,6 +295,27 @@ describe('battery statistics (integer only)', () => {
     expect(chiSquareScaled([[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]])).toEqual({ chiScaled: 0, df: 6 })
   })
 
+  it('answers a table whose intermediate products are far past the safe-integer range', () => {
+    // The 2x2 above with every count multiplied by 10^5. The top-left cell's numerator is then
+    // CHI_SCALE * O^2 * total = 10^4 * (3*10^6)^2 * 7*10^6 = 6.3 * 10^23, which is about 7*10^7 times
+    // Number.MAX_SAFE_INTEGER: the earlier Number version of this threw a RangeError here, which is a crash on the
+    // Intelligence screen rather than an answer. Rows 4*10^6 and 3*10^6, columns 4*10^6 and 3*10^6, total 7*10^6.
+    //   top-left:     10^4 * (3*10^6)^2 * 7*10^6 / (4*10^6 * 4*10^6) = 6.3*10^23 / 1.6*10^13 = 39375000000  exactly
+    //   top-right:    10^4 * (1*10^6)^2 * 7*10^6 / (4*10^6 * 3*10^6) = 7.0*10^22 / 1.2*10^13 =  5833333333.33 -> ...33
+    //   bottom-left:  the same denominator 3*10^6 * 4*10^6                                    =  5833333333.33 -> ...33
+    //   bottom-right: 10^4 * (2*10^6)^2 * 7*10^6 / (3*10^6 * 3*10^6) = 2.8*10^23 / 9.0*10^12 = 31111111111.11 -> ...11
+    //   sum = 82152777777 ; minus CHI_SCALE*total = 7*10^10 -> 12152777777
+    //
+    // Independently: chi-square scales linearly when a table is multiplied through, because N(ad-bc)^2/(r1r2c1c2)
+    // takes a factor m^1 * m^4 / m^4 = m. So this is 10^5 * 875/72 = 87500000/72 = 1215277.7777..., which is
+    // 12152777777.78 in CHI_SCALE units - and the four cells, each rounded on its own, land 0.78 of a unit below it,
+    // inside the documented bound of cells/2.
+    expect(chiSquareScaled([[3000000, 1000000], [1000000, 2000000]])).toEqual({ chiScaled: 12152777777, df: 1 })
+    // And Cramer's V is scale-invariant, so the same 5/12 comes back from the enlarged table: V_bp is
+    // isqrt(10^4 * 12152777777 / 7*10^6) = isqrt(17361111) and 4166^2 = 17355556 <= 17361111 < 4167^2 = 17363889.
+    expect(cramersVBp(12152777777, 7000000, 2, 2)).toBe(4166)
+  })
+
   it('returns null for chi-square when a row or column is empty', () => {
     expect(chiSquareScaled([[0, 0], [3, 4]])).toBeNull() // empty row: the expected counts in it would be 0
     expect(chiSquareScaled([[3, 4], [0, 0]])).toBeNull()
@@ -340,6 +361,13 @@ describe('battery statistics (integer only)', () => {
     expect(cramersVBp(121527, 70, 1, 2)).toBeNull() // one row: k would be 0
     expect(cramersVBp(121527, 70, 2, 1)).toBeNull()
     expect(cramersVBp(-1, 70, 2, 2)).toBeNull() // not a chi-square
+    // Not a figure this module will compute on: outside the safe-integer range, or not a number at all. It refuses
+    // rather than converting it, which is what keeps the BigInt arithmetic downstream fed only by exact integers.
+    expect(cramersVBp(Number.NaN, 70, 2, 2)).toBeNull()
+    expect(cramersVBp(Number.POSITIVE_INFINITY, 70, 2, 2)).toBeNull()
+    expect(cramersVBp(Number.MAX_SAFE_INTEGER + 2, 70, 2, 2)).toBeNull()
+    expect(cramersVBp(121527, Number.NaN, 2, 2)).toBeNull()
+    expect(cramersVBp(121527, Number.MAX_SAFE_INTEGER + 2, 2, 2)).toBeNull()
     expect(cramersVBp(121527, 70, 2, 2)).not.toBeNull()
   })
 
