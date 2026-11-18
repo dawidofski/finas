@@ -113,7 +113,7 @@ describe('education', () => {
     for (const s of ['You should not have bought it.', 'That was a waste.', 'Money wasted on takeaway.', 'You overspent again.', 'A bad habit.', 'Irresponsible.']) {
       expect(s, s).toMatch(shamingWords)
     }
-    for (const s of ['Only card payments are counted.', 'Prices are just as the bank lists them.', 'Pick one category and set its line.']) {
+    for (const s of ['Only card payments are counted.', 'It is easy to lose track of a month.', 'Prices are just as the bank lists them.', 'Pick one category and set its line.']) {
       expect(s, s).not.toMatch(meansAssumption)
       expect(s, s).not.toMatch(shamingWords)
     }

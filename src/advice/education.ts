@@ -94,7 +94,7 @@ const CHALLENGES: Readonly<Record<ChallengeId, Omit<Challenge, 'available' | 'wh
 const OFFERED: Readonly<Record<RecommendationId, readonly ChallengeId[]>> = {
   'overspent-category': ['reduce-category', 'no-spend-days'],
   'small-purchases-add-up': ['twenty-four-hour-rule', 'subscription-review', 'no-spend-days'],
-  'savings-inconsistent': [],
+  'savings-inconsistent': ['savings-step-up'],
   'unusual-spend': ['twenty-four-hour-rule'],
   'discretionary-rising': ['reduce-category', 'no-spend-days'],
   'regret-cluster': ['twenty-four-hour-rule', 'no-spend-days'],
