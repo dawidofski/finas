@@ -3,6 +3,8 @@ import type { MonthPoint } from '../analytics/series'
 import type { SavingsGoalRow } from '../db/schema'
 import { annotatedTransactions, type RegretCluster } from '../learning/regret'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
+import { loadCategoryKinds, worthAnnotating } from '../analysis/queues'
+import { resolveMany } from '../db/annotations'
 import { divRound, formatBp, formatEur } from '../lib/money'
 
 /** A component is measured, or it is not; it is never a zero standing in for "unknown" (§13.3). */
@@ -17,8 +19,11 @@ const POINTS_PER_100_BP = 5
 
 const clamp = (n: number): number => Math.max(0, Math.min(100, n))
 /** `part` of `total` as whole points; 100 only when nothing is short, so rounding never awards a full score. */
-const wholePoints = (part: number, total: number): number =>
-  clamp(part < total ? Math.min(99, divRound(part * 100, total)) : 100)
+const wholePoints = (part: number, total: number): number => {
+  // 0 of 0 is no measurement, not a full score: every caller guards its denominator, and a missed guard must fail loudly.
+  if (total <= 0) throw new RangeError('wholePoints needs a positive total')
+  return clamp(part < total ? Math.min(99, divRound(part * 100, total)) : 100)
+}
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /**
@@ -26,8 +31,9 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  * all their lines, not an average of monthly scores). Left out: a month with `hasData` false (its lines come from the
  * allocations, so they exist with nothing spent and would all read as respected), a month still in progress
  * (`partial`: a part-month of spending against a whole month's allocation), and any line with no allocation (no ratio,
- * as varianceBp is null for the same reason). A category line is respected when spent does not exceed allocated; a
- * savings-goal line when it is met, spent not below allocated. The score is 100 only when every line was respected.
+ * as varianceBp is null for the same reason). A category line is respected when spent does not exceed allocated.
+ * A savings-goal line is left out too: no transaction is tied to a goal yet, so it carries no evidence either way (see
+ * the filter below). The score is 100 only when every line was respected.
  */
 export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasData: boolean }[]): Component {
   // Two kinds of month are not evidence. A month with no records still has lines (they come from the allocations) with
@@ -75,7 +81,7 @@ export function savingsConsistency(points: readonly MonthPoint[]): Component {
   const positive = observed.filter((p) => p.savedCents > 0).length
   return {
     kind: 'measured',
-    score: clamp(divRound(positive * 100, observed.length)),
+    score: wholePoints(positive, observed.length),
     inputs: `You saved something in ${positive} of ${plural(observed.length, 'recorded month')}.`,
   }
 }
@@ -115,32 +121,35 @@ export function improvement(points: readonly MonthPoint[]): Component {
 }
 
 const MIN_SHARED_CLUSTERS = 2
+/** A pattern needs this many answered spends in each period before its rate is a rate (A2). */
+const MIN_ANSWERED_SPENDS = 3
 
 /**
- * Share of the window's live bank transactions the owner has reviewed. Reviewed means the owner's own `reviewed` flag is
- * set; having an annotation row is not enough (a note alone is not a review). Not measured when the window has no
- * transactions, or when none has been touched at all: an untouched window would score 0, which says the owner
- * did nothing rather than that this has not started. The annotated rows come through `annotatedTransactions`, bounded by the
- * owner's own activity (§39.4); the denominator is a date-bounded read of the window, never the whole ledger.
- * `from` and `to` are inclusive 'YYYY-MM-DD'.
+ * Share of the transactions the app asks the owner to review that they have reviewed. The denominator is the window's live
+ * bank transactions that `worthAnnotating` accepts, the same test the review queue applies: income, internal movements,
+ * round-ups and essentials are never offered, so counting them would cap the score below 100 by rows the owner cannot act
+ * on. Reviewed means the owner's own `reviewed` flag; an annotation row alone (a note) is not a review. Not measured when no
+ * such transaction is in the window, or when none has been touched at all (an untouched window would score 0, which says
+ * the owner did nothing rather than that this has not started). Touched rows come through `annotatedTransactions`,
+ * bounded by the owner's own activity (§39.4); the window is a date-bounded read, never the whole ledger. The window is by
+ * the bank's date, as the regret clusters are. `from` and `to` are inclusive 'YYYY-MM-DD'.
  */
 export async function spendingAwareness(from: string, to: string): Promise<Component> {
-  const inWindow = (valueDate: string): boolean => valueDate >= from && valueDate <= to
-  const live = (await liveTransactionsBetween(from.slice(0, 7), to.slice(0, 7))).filter((t) => inWindow(t.valueDate))
-  if (live.length === 0) {
-    return { kind: 'not-measured', why: 'No transactions are recorded in this period, so there is nothing to have reviewed.' }
+  const live = (await liveTransactionsBetween(from.slice(0, 7), to.slice(0, 7))).filter((t) => t.valueDate >= from && t.valueDate <= to)
+  const [resolved, kinds] = await Promise.all([resolveMany(live), loadCategoryKinds()])
+  const eligible = resolved.filter((t) => worthAnnotating(t, kinds))
+  if (eligible.length === 0) {
+    return { kind: 'not-measured', why: 'No transactions in this period are ones the app asks you to review, so there is nothing to have reviewed.' }
   }
-  const liveIds = new Set(live.map((t) => t.id))
-  const touched = (await annotatedTransactions(() => true)).filter((t) => liveIds.has(t.id))
-  if (touched.length === 0) {
+  const touchedIds = new Set((await annotatedTransactions(() => true)).map((t) => t.id))
+  if (!eligible.some((t) => touchedIds.has(t.id))) {
     return { kind: 'not-measured', why: 'None of the transactions in this period has been reviewed or annotated yet, so there is nothing to measure.' }
   }
-  const reviewedIds = new Set((await annotatedTransactions((a) => a.reviewed)).map((t) => t.id))
-  const reviewed = live.filter((t) => reviewedIds.has(t.id)).length
+  const reviewed = eligible.filter((t) => t.reviewed).length
   return {
     kind: 'measured',
-    score: wholePoints(reviewed, live.length),
-    inputs: `You have reviewed ${reviewed} of ${plural(live.length, 'transaction')} in this period.`,
+    score: wholePoints(reviewed, eligible.length),
+    inputs: `You have reviewed ${reviewed} of ${plural(eligible.length, 'transaction')} the app asks you to review in this period. Income, transfers between your accounts, round-ups and essentials are not counted.`,
   }
 }
 
@@ -169,6 +178,11 @@ export function goalProgress(goals: readonly SavingsGoalRow[]): Component {
       reachedGoals += 1
     }
   }
+  // Completion share only means something once something has completed: before that, 0 would read as "no progress" beside
+  // a goal that may be mostly funded, and this measure cannot see funding.
+  if (reachedGoals === 0) {
+    return { kind: 'not-measured', why: 'None of your savings goals is marked completed yet. This measures completed goals only, so it has nothing to show until one is; partway toward a goal is not measured.' }
+  }
   return {
     kind: 'measured',
     score: wholePoints(reached, total),
@@ -176,13 +190,17 @@ export function goalProgress(goals: readonly SavingsGoalRow[]): Component {
   }
 }
 
-/** Regret rate of a cluster in basis points; null when it holds no answered spend (no denominator). */
-const regretRateBp = (c: RegretCluster): number | null => (c.total > 0 ? divRound(c.regretted * 10000, c.total) : null)
-
 /**
  * Reduction in repeated regret within previously flagged clusters: of the clusters present in both windows (same
- * dimension and key), the share whose regret rate fell, late against early. Equal is not a fall. A cluster seen in only
- * one window has nothing to be compared with and is left out; fewer than 2 in both is too few to call a pattern.
+ * dimension and key) with at least 3 answered spends in each, the share whose regret rate fell, late against early. Equal
+ * is not a fall. A cluster seen in only one window has nothing to be compared with and is left out, as is one with fewer
+ * answered spends (a rate from 1 or 2 spends is not a pattern). The five dimensions overlap (one spend sits in up to five
+ * clusters), so the clusters are not independent evidence; fewer than 2 is too few to call a pattern.
+ *
+ * Bias, stated because the data cannot remove it: `regretClusters` returns only clusters with at least one regret, so a
+ * cluster can count as improved only while it still has some. One whose regret fell to none drops out of the later
+ * period, and absence cannot be told from no purchases there, so it is not compared. The omission falls entirely on the
+ * best outcomes.
  */
 export function learning(early: readonly RegretCluster[], late: readonly RegretCluster[]): Component {
   const lateByKey = new Map(late.map((c) => [JSON.stringify([c.by, c.key]), c]))
@@ -190,22 +208,19 @@ export function learning(early: readonly RegretCluster[], late: readonly RegretC
   let fell = 0
   for (const e of early) {
     const l = lateByKey.get(JSON.stringify([e.by, e.key]))
-    if (l === undefined) continue
-    const before = regretRateBp(e)
-    const after = regretRateBp(l)
-    if (before === null || after === null) continue
+    if (l === undefined || e.total < MIN_ANSWERED_SPENDS || l.total < MIN_ANSWERED_SPENDS) continue
     shared += 1
-    if (after < before) fell += 1
+    if (divRound(l.regretted * 10000, l.total) < divRound(e.regretted * 10000, e.total)) fell += 1
   }
   if (shared < MIN_SHARED_CLUSTERS) {
     return {
       kind: 'not-measured',
-      why: `Not enough repeated patterns yet: this compares the same pattern across two periods, so it needs ${MIN_SHARED_CLUSTERS} patterns in both and there ${shared === 1 ? 'is' : 'are'} ${shared}.`,
+      why: `Not enough repeated patterns yet: this compares the same pattern across two periods, and only patterns with at least ${MIN_ANSWERED_SPENDS} answered spends in each. It needs ${MIN_SHARED_CLUSTERS} such patterns and there ${shared === 1 ? 'is' : 'are'} ${shared}.`,
     }
   }
   return {
     kind: 'measured',
     score: wholePoints(fell, shared),
-    inputs: `Comparing only the patterns of spends marked not worth it that appear in both periods, the share fell in ${fell} of ${plural(shared, 'pattern')}. A pattern with no such spends in the later period does not appear in it, so it is not compared.`,
+    inputs: `In ${fell} of ${plural(shared, 'pattern')}, a smaller share of your spends was marked not worth it in the later period than in the earlier one. Only patterns with at least ${MIN_ANSWERED_SPENDS} answered spends in both periods are compared. Patterns overlap (one spend can belong to several), so they are not independent. A pattern whose regret fell to none no longer appears, so it is left out: this leaves out your best results.`,
   }
 }
