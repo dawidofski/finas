@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { BATTERY, isMet, type BatteryData, type RelationshipId } from './battery'
 
@@ -21,9 +23,63 @@ const AT_MIN: Record<RelationshipId, Partial<BatteryData>> = {
 }
 const ready = (id: RelationshipId, d: BatteryData) => BATTERY.find(r => r.id === id)!.gates(d).every(isMet)
 
-// Reused from src/learning/categorise.test.ts and src/ui/screens/Reports.test.tsx, plus the words this task forbids.
-const causalWords = /\b(because|cause[sd]?|causing|due to|owing to|leads? to|led to|results? in|resulted|as a result|therefore|thus|so that|drives?|driven|explains?|explained|why|makes you|made you|since you|which is why)\b/i
-const jargonWords = /\b(cache|cached|basis|engine|z-score|median|deviation|outlier|percentile|standard|component|net)\b|tier|bayes|classif|posterior|probab|model|algorithm|sample|\bn\b|power|signific/i
+/**
+ * THE BANNED-LANGUAGE LISTS ARE READ OUT OF THE FILES THAT OWN THEM, not copied. This file used to carry its own
+ * copies marked "reused from", and they had already drifted: the jargon copy had four terms the owning list did not.
+ * A drifted copy of a LANGUAGE BAN is the worst kind to have, because it silently permits in one file wording that
+ * another forbids. src/battery/finding.test.ts and src/ui/screens/Intelligence.test.tsx read them the same way.
+ *
+ * The extraction mechanism below is itself a third copy, and that is not by choice: finding.test.ts declares
+ * `regexFrom` as a plain local function, so it cannot be imported -- and importing a .test.ts module would re-register
+ * its describe blocks inside this file's suite, so exporting it from there would not help either. It belongs in a
+ * shared non-test module that all three import. Flagged rather than fixed, since that file is not mine this round.
+ *
+ * The extraction is deliberately brittle: if either line is reworded the read throws here rather than silently
+ * scanning against a stale pattern, and the vacuity guards in the wording test below fail if it returns something
+ * that matches nothing.
+ */
+const SRC = resolve(import.meta.dirname, '..')
+
+function regexFrom(file: string, name: string): RegExp {
+  const text = readFileSync(resolve(SRC, file), 'utf8')
+  const match = new RegExp(`const ${name} = /(.*)/([a-z]*)\\s*$`, 'm').exec(text)
+  const source = match?.[1]
+  if (source === undefined) throw new Error(`no regex named ${name} in src/${file}`)
+  return new RegExp(source, match?.[2] ?? '')
+}
+
+const causalWords = regexFrom('ui/screens/Reports.test.tsx', 'causalWords')
+const jargonWords = regexFrom('ui/screens/Reports.test.tsx', 'jargonWords')
+const noJargon = regexFrom('learning/categorise.test.ts', 'NO_JARGON')
+
+/**
+ * The statistics words THIS module adds, which no owning list carries: they are the ones a battery of significance
+ * tests would leak and the screens would not. Additions, not a copy -- if any of these ever earns a place in a
+ * shared list it should move there and come out of here.
+ */
+const BATTERY_JARGON = /sample|\bn\b|power|signific/i
+
+/**
+ * §12's test column, restated as an oracle the way AT_MIN above restates its minimum-data column, and tied to the
+ * primitive in src/battery/stats.ts that actually computes it.
+ *
+ * This exists because battery.ts declared 'Poisson rate comparison by mood day' for mood-frequency long after the
+ * implementation had become a rank comparison of weekly counts, and nothing caught it: the `test` field must never
+ * render, so the one wrong value in the module was also the only one invisible to the owner, and the only assertion
+ * on it was that the string was truthy. A field nothing displays and nothing checks drifts every time.
+ */
+const STATISTIC: Record<RelationshipId, { readonly names: string; readonly primitive: string } | null> = {
+  'mood-amount': { names: 'Spearman', primitive: 'spearmanRhoBp' },
+  'mood-frequency': { names: 'Mann-Whitney', primitive: 'mannWhitneyU' },
+  'stress-discretionary': { names: 'Mann-Whitney', primitive: 'mannWhitneyU' },
+  'boredom-impulse': { names: 'Chi-square', primitive: 'chiSquareScaled' },
+  'reason-worthwhile': { names: 'Chi-square', primitive: 'chiSquareScaled' },
+  weekend: { names: 'Mann-Whitney', primitive: 'mannWhitneyU' },
+  payday: { names: 'Spearman', primitive: 'spearmanRhoBp' },
+  'small-purchases': null,
+  'salary-lifestyle': { names: 'Mann-Whitney', primitive: 'mannWhitneyU' },
+  'category-savings': { names: 'Spearman', primitive: 'spearmanRhoBp' },
+}
 
 describe('the declared battery', () => {
   it('declares exactly the ten relationships of the spec, in its order', () => {
@@ -70,20 +126,57 @@ describe('the declared battery', () => {
   })
 
   it('says nothing about cause in any question or gate wording, and uses no technical terms', () => {
+    // All four lists go through ONE predicate, because a negative assertion over wording that is already clean
+    // cannot fail if it is deleted -- removing it and removing the rule it enforces look identical. So the predicate
+    // is made to prove itself first, on a word that ONLY ONE of the four lists catches. Drop a list from `violates`
+    // and its control fails; return a vacuous regex from the extraction and all four fail.
+    const violates = (s: string) =>
+      causalWords.test(s) || jargonWords.test(s) || noJargon.test(s) || BATTERY_JARGON.test(s)
+    expect(violates('spending rose owing to the weather')).toBe(true) // causalWords alone: not in the jargon lists
+    expect(violates('your 90th percentile')).toBe(true) // jargonWords alone
+    expect(violates('a bayes estimate')).toBe(true) // noJargon alone
+    expect(violates('a significant result')).toBe(true) // BATTERY_JARGON alone
+    expect(violates('how much you spent on groceries last month')).toBe(false)
+
     const strings: string[] = []
     for (const r of BATTERY) {
       strings.push(r.question)
       for (const d of [ZERO, { ...ZERO, ...AT_MIN[r.id] }]) for (const g of r.gates(d)) strings.push(g.what)
     }
     expect(strings.length).toBeGreaterThanOrEqual(30)
-    for (const s of strings) {
-      expect(s).not.toMatch(causalWords)
-      expect(s).not.toMatch(jargonWords)
-    }
+    // One assertion carries three claims, so that no single edit can quietly drop one: that no declared wording
+    // violates, that the scan really ran over THESE strings, and that it would have caught one that did.
+    const sentinel = 'because your z-score sample is significant'
+    expect([...strings, sentinel].filter(violates)).toEqual([sentinel])
+    // The `test` field is deliberately NOT judged here: it is jargon by nature and never renders, which is exactly
+    // why it needs the separate assertion below instead.
   })
 
-  it('needs no test for small-purchase accumulation, and says so', () => {
-    expect(BATTERY.find(r => r.id === 'small-purchases')!.test).toBeNull()
-    for (const r of BATTERY.filter(r => r.id !== 'small-purchases')) expect(r.test).toBeTruthy()
+  it('declares for each relationship the statistic that actually runs, and no test where there is none', () => {
+    const statsSource = readFileSync(resolve(SRC, 'battery/stats.ts'), 'utf8')
+    expect(statsSource).toMatch(/export function spearmanRhoBp/) // the read is not vacuous
+    const mismatches: string[] = []
+    const missingPrimitive: string[] = []
+    for (const r of BATTERY) {
+      const expected = STATISTIC[r.id]
+      if (expected === null) {
+        expect([r.id, r.test]).toEqual([r.id, null])
+        continue
+      }
+      if (r.test === null || !r.test.includes(expected.names)) {
+        mismatches.push(`${r.id}: declares ${String(r.test)}, but runs ${expected.names}`)
+      }
+      // And the statistic named is one this battery can actually compute. A declared test with no primitive behind
+      // it is what 'Poisson rate comparison by mood day' was for as long as it stood: there is no Poisson anything
+      // in stats.ts, and an exact Poisson test would have needed a fourth table of hand-entered criticals.
+      if (!statsSource.includes(`export function ${expected.primitive}`)) {
+        missingPrimitive.push(`${r.id}: no ${expected.primitive} in battery/stats.ts`)
+      }
+    }
+    expect(mismatches).toEqual([])
+    expect(missingPrimitive).toEqual([])
+    expect(BATTERY.filter(r => r.test === null).map(r => r.id)).toEqual(['small-purchases'])
+    // Nothing may claim a statistic the module has no primitive for, however plausible the words read.
+    expect(BATTERY.map(r => r.test ?? '').join(' ')).not.toMatch(/poisson|paired|t-test|pearson\b/i)
   })
 })

@@ -59,7 +59,9 @@ export const BATTERY: readonly Relationship[] = [
   {
     id: 'mood-frequency',
     question: 'Do you make more purchases on some kinds of mood days than on others?',
-    test: 'Poisson rate comparison by mood day',
+    // NOT a Poisson rate test: purchases cluster (one shopping trip is several transactions), so the Poisson
+    // shape does not hold. src/battery/trend.ts says the same in capitals over moodFrequency, which is what runs.
+    test: 'Mann-Whitney U on weekly purchase counts, low-mood weeks against good-mood weeks',
     gates: d => [gate(d.weeksOfMoodCoverage, 8, 'weeks with a mood recorded', 'week', 'weeks')],
   },
   {
@@ -104,7 +106,10 @@ export const BATTERY: readonly Relationship[] = [
   {
     id: 'salary-lifestyle',
     question: 'When your income steps up or down, does the share you spend on wants change with it?',
-    test: 'Paired comparison of discretionary share across income levels',
+    // §12 words this "paired comparison", but what runs is mannWhitneyU over two DISJOINT groups of months
+    // (src/battery/trend.ts salaryLifestyle), which is the independent-samples test. Nothing here is paired, so the
+    // declaration says what the statistic actually claims.
+    test: 'Mann-Whitney U on monthly discretionary share, higher income levels against lower',
     gates: d => [gate(d.incomeLevelsWithTwoMonths, 2, 'income levels that each last at least 2 months', 'income level', 'income levels')],
   },
   {
