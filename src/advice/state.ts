@@ -24,31 +24,39 @@ async function update(key: string, change: (row: RecommendationStateRow) => void
   })
 }
 
+/**
+ * `suppressed` is terminal: every writer below returns early on it, so no call order (a stale second tab, an
+ * out-of-order screen) can bring back advice the owner rejected twice. Only shownCount/lastShownAt move.
+ */
 export async function recordShown(key: string, fingerprint: string, at: number): Promise<void> {
   await update(key, (row) => {
     row.shownCount += 1
     row.lastShownAt = at
-    if (row.status === 'suppressed') return // showing never un-suppresses, and the owner's evidence marker stays as it was
-    if (row.status === 'accepted') {
-      if (row.evidenceFingerprint === fingerprint) return // the occurrence they already acted on
-      row.status = 'active' // a fresh occurrence
-    } else if (row.status === 'snoozed') {
+    if (row.status === 'suppressed') return // the evidence the owner dismissed stays as it was
+    if (row.status === 'accepted' && row.evidenceFingerprint === fingerprint) return // the occurrence they already acted on
+    if (row.status === 'snoozed') {
       if (row.suppressedUntil !== null && row.suppressedUntil > at) return // still asleep
-      row.status = 'active'
       row.suppressedUntil = null
     }
+    // Back to 'active' (from rejected, a fresh accepted occurrence, an expired snooze): this is what makes a later
+    // rejection count as a separate showing rather than a double-fire.
+    row.status = 'active'
     row.evidenceFingerprint = fingerprint
   })
 }
 
-export async function recordAccepted(key: string, at: number): Promise<void> {
-  void at
-  await update(key, (row) => { row.status = 'accepted'; row.suppressedUntil = null })
+export async function recordAccepted(key: string): Promise<void> {
+  await update(key, (row) => {
+    if (row.status === 'suppressed') return
+    row.status = 'accepted'
+    row.suppressedUntil = null
+  })
 }
 
-export async function recordRejected(key: string, at: number): Promise<void> {
-  void at
+/** Counts once per showing: a call while the row is already 'rejected' is a double-fire and is ignored. Two rejections need two showings. */
+export async function recordRejected(key: string): Promise<void> {
   await update(key, (row) => {
+    if (row.status === 'suppressed' || row.status === 'rejected') return
     row.rejectedCount += 1
     row.suppressedUntil = null
     row.status = row.rejectedCount >= SUPPRESS_AFTER_REJECTIONS ? 'suppressed' : 'rejected'
@@ -56,7 +64,11 @@ export async function recordRejected(key: string, at: number): Promise<void> {
 }
 
 export async function recordSnoozed(key: string, at: number): Promise<void> {
-  await update(key, (row) => { row.status = 'snoozed'; row.suppressedUntil = at + SNOOZE_DAYS * DAY_MS })
+  await update(key, (row) => {
+    if (row.status === 'suppressed') return
+    row.status = 'snoozed'
+    row.suppressedUntil = at + SNOOZE_DAYS * DAY_MS
+  })
 }
 
 /** Keys that must not be offered now, given the clock and each row's own fingerprint. One bulk read, whatever the count. */
@@ -69,14 +81,14 @@ export async function withheldKeys(fingerprints: ReadonlyMap<string, string>, no
     if (!row || key === undefined) return
     switch (row.status) {
       case 'suppressed': out.add(key); break // whatever the fingerprint
-      case 'accepted': {
-        const current = fingerprints.get(key)
-        // Unknown on either side means we cannot show it is a new occurrence, so it stays away.
-        if (current === undefined || row.evidenceFingerprint === null || current === row.evidenceFingerprint) out.add(key)
+      case 'accepted':
+        // A null stored fingerprint (accepted before it was ever shown) cannot prove a fresh occurrence, so it stays away:
+        // re-offering advice the owner just took is a visible error, a silent never-return is not.
+        if (row.evidenceFingerprint === null || fingerprints.get(key) === row.evidenceFingerprint) out.add(key)
         break
-      }
       case 'snoozed':
-        if (row.suppressedUntil === null || row.suppressedUntil > now) out.add(key)
+        // Exactly at suppressedUntil it returns. A null date (recordSnoozed never writes one) counts as expired, as in recordShown.
+        if (row.suppressedUntil !== null && row.suppressedUntil > now) out.add(key)
         break
       default: break // active, rejected once: offered
     }

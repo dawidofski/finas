@@ -11,14 +11,23 @@ const DAY = 86_400_000
 const T0 = 1_000_000_000_000
 const fp = (key: string, f: string) => new Map([[key, f]])
 
+/** Two rejections on two separate showings: the only way to reach 'suppressed'. */
+async function rejectTwice(key: string, f: string): Promise<void> {
+  await recordShown(key, f, T0)
+  await recordRejected(key)
+  await recordShown(key, f, T0 + 1)
+  await recordRejected(key)
+}
+
 describe('recommendation state', () => {
   it('suppresses a recommendation only after it has been rejected twice', async () => {
     expect(SUPPRESS_AFTER_REJECTIONS).toBe(2)
     await recordShown('k', 'f1', T0)
-    await recordRejected('k', T0 + 1)
+    await recordRejected('k')
     expect((await db.recommendationState.get('k'))?.status).toBe('rejected')
     expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(false) // "not now" is not "not this"
-    await recordRejected('k', T0 + 3)
+    await recordShown('k', 'f1', T0 + 3)
+    await recordRejected('k')
     const row = await db.recommendationState.get('k')
     expect(row?.status).toBe('suppressed')
     expect(row?.rejectedCount).toBe(2)
@@ -26,29 +35,22 @@ describe('recommendation state', () => {
   })
 
   it('keeps a rejection across a reload, because it is stored and not held in memory', async () => {
-    await recordRejected('k', T0)
-    await recordRejected('k', T0 + 1)
+    await rejectTwice('k', 'f1')
     db.close()
     await db.open()
     expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(true)
   })
 
-  it('suppresses by a key that does not change when the underlying figure does', async () => {
-    // Keys are produced by a later task; what this module owns is that it keys on exactly the string it is given.
-    const keyFor = (_monthFigureCents: number) => 'cut:Ocio:Bares'
-    expect(keyFor(4_200)).toBe(keyFor(9_900)) // same advice, two months' figures, same string
-    await recordRejected(keyFor(4_200), T0)
-    await recordRejected(keyFor(4_200), T0 + 1)
-    expect((await withheldKeys(fp(keyFor(9_900), 'other'), T0 + 2)).has(keyFor(9_900))).toBe(true)
-    // and it never derives one: a different string is a different recommendation
-    expect((await withheldKeys(fp('cut:Ocio:Bares:9900', 'f'), T0 + 2)).size).toBe(0)
+  it('keys on exactly the string it is given and never derives one', async () => {
+    // Keys come from a later task; what this module owns is that it uses the given string as-is.
+    await rejectTwice('cut:Ocio:Bares', 'f1')
+    expect((await withheldKeys(fp('cut:Ocio:Bares', 'f-next-month'), T0 + 2)).has('cut:Ocio:Bares')).toBe(true)
+    expect((await withheldKeys(fp('cut:Ocio:Bares:9900', 'f1'), T0 + 2)).size).toBe(0)
     expect((await db.recommendationState.toArray()).map(r => r.key)).toEqual(['cut:Ocio:Bares'])
   })
 
   it('keeps a twice-rejected recommendation away even when its evidence has changed', async () => {
-    await recordShown('k', 'f1', T0)
-    await recordRejected('k', T0 + 1)
-    await recordRejected('k', T0 + 2)
+    await rejectTwice('k', 'f1')
     expect((await withheldKeys(fp('k', 'f2-new-transactions'), T0 + 3)).has('k')).toBe(true)
     await recordShown('k', 'f2-new-transactions', T0 + 4)
     const shown = await db.recommendationState.get('k')
@@ -59,10 +61,16 @@ describe('recommendation state', () => {
 
   it('offers accepted advice again only when the evidence is a different occurrence', async () => {
     await recordShown('k', 'f1', T0)
-    await recordAccepted('k', T0 + 1)
+    await recordAccepted('k')
     expect((await withheldKeys(fp('k', 'f1'), T0 + 2)).has('k')).toBe(true)
     expect((await withheldKeys(fp('k', 'f2'), T0 + 2)).has('k')).toBe(false)
     expect((await withheldKeys(new Map(), T0 + 2)).has('k')).toBe(false) // only keys asked about are judged
+  })
+
+  it('withholds accepted advice whose stored fingerprint is null', async () => {
+    await recordAccepted('k') // accepted before it was ever shown
+    expect((await db.recommendationState.get('k'))?.evidenceFingerprint).toBeNull()
+    expect((await withheldKeys(fp('k', 'f1'), T0)).has('k')).toBe(true)
   })
 
   it('returns a snoozed recommendation once its date has passed, and not before', async () => {
@@ -74,6 +82,15 @@ describe('recommendation state', () => {
     expect((await withheldKeys(fp('k', 'f1'), until - 1)).has('k')).toBe(true)
     expect((await withheldKeys(fp('k', 'f1'), until)).has('k')).toBe(false)
     expect((await withheldKeys(fp('k', 'changed'), until - 1)).has('k')).toBe(true) // fingerprint is irrelevant to a snooze
+  })
+
+  it('leaves a still-snoozed row snoozed when it is shown, and wakes an expired one', async () => {
+    await recordSnoozed('k', T0)
+    await recordShown('k', 'f1', T0 + DAY)
+    expect((await db.recommendationState.get('k'))?.status).toBe('snoozed')
+    await recordShown('k', 'f1', T0 + 31 * DAY)
+    const row = await db.recommendationState.get('k')
+    expect([row?.status, row?.suppressedUntil]).toEqual(['active', null])
   })
 
   it('offers active advice and advice with no row', async () => {
@@ -88,10 +105,44 @@ describe('recommendation state', () => {
 
   it('re-activates a fresh occurrence of accepted advice when it is shown', async () => {
     await recordShown('k', 'f1', T0)
-    await recordAccepted('k', T0 + 1)
+    await recordAccepted('k')
     await recordShown('k', 'f2', T0 + 2)
     const row = await db.recommendationState.get('k')
     expect(row?.status).toBe('active')
     expect(row?.evidenceFingerprint).toBe('f2')
+  })
+
+  it('ignores a double-fired rejection but counts one on each of two showings', async () => {
+    await recordShown('k', 'same', T0)
+    await recordRejected('k')
+    await recordRejected('k') // double-click
+    let row = await db.recommendationState.get('k')
+    expect([row?.rejectedCount, row?.status]).toEqual([1, 'rejected'])
+    await recordShown('k', 'same', T0 + 1) // re-offered with unchanged evidence
+    expect((await db.recommendationState.get('k'))?.status).toBe('active')
+    await recordRejected('k')
+    row = await db.recommendationState.get('k')
+    expect([row?.rejectedCount, row?.status]).toEqual([2, 'suppressed'])
+  })
+
+  it('treats suppressed as terminal for every writer', async () => {
+    await rejectTwice('k', 'f1')
+    const before = await db.recommendationState.get('k')
+    await recordAccepted('k')
+    expect(await db.recommendationState.get('k')).toEqual(before)
+    await recordSnoozed('k', T0 + 2)
+    expect(await db.recommendationState.get('k')).toEqual(before)
+    await recordRejected('k')
+    expect(await db.recommendationState.get('k')).toEqual(before)
+    expect((await withheldKeys(fp('k', 'brand-new'), T0 + 40 * DAY)).has('k')).toBe(true)
+  })
+})
+
+describe('recommendation state, malformed rows', () => {
+  it('offers a snoozed row that has no date, and shown wakes it, rather than withholding it forever', async () => {
+    await db.recommendationState.put({ key: 'k', status: 'snoozed', shownCount: 0, rejectedCount: 0, lastShownAt: null, suppressedUntil: null, evidenceFingerprint: null })
+    expect((await withheldKeys(fp('k', 'f'), T0)).has('k')).toBe(false)
+    await recordShown('k', 'f', T0)
+    expect((await db.recommendationState.get('k'))?.status).toBe('active')
   })
 })
