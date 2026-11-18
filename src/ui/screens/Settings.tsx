@@ -5,6 +5,8 @@ import { db } from '../../db/db'
 import { renameAccount, setStoreLast4 } from '../../db/privacy'
 import { getSettings } from '../../db/seed'
 import type { AccountRow } from '../../db/schema'
+import { openEncryptedBackup, readBackupFile } from '../../db/backupFile'
+import type { Envelope } from '../../db/encryptedBackup'
 import { encryptBundle } from '../../db/encryptedBackup'
 import { epochMsToIso } from '../../lib/dates'
 import { newPassphraseProblem, PASSPHRASE_MESSAGES, PASSPHRASE_MIN_CHARS } from '../../lib/passphrase'
@@ -299,13 +301,23 @@ export default function Settings(): ReactNode {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [refused, setRefused] = useState<RestoreReport | null>(null)
   const [done, setDone] = useState<RestoreReport | null>(null)
+  const [locked, setLocked] = useState<Envelope | null>(null) // an encrypted file waiting for its passphrase; never the passphrase
+  const [opening, setOpening] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const passRef = useRef<HTMLInputElement>(null)
+  const passId = useId()
+  useEffect(() => { if (locked) passRef.current?.focus() }, [locked])
   const pickSeq = useRef(0) // a slow read must not overwrite a newer pick
   const modeName = useId()
 
-  function reset() {
+  /** Everything the last pick or open produced goes, and any open still running is told it is out of date. */
+  function clearResults() {
     pickSeq.current++
-    setPreview(null); setRefused(null); setDone(null)
+    setPreview(null); setRefused(null); setDone(null); setLocked(null); setOpening(false)
+  }
+
+  function reset() {
+    clearResults()
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -319,21 +331,8 @@ export default function Settings(): ReactNode {
     }
   }
 
-  async function onPick(file: File | undefined) {
-    const seq = ++pickSeq.current
-    setPreview(null); setRefused(null); setDone(null)
-    if (!file) return
-    let bundle: unknown
-    try {
-      bundle = JSON.parse(await readText(file))
-    } catch (err) {
-      if (seq !== pickSeq.current) return
-      setRefused(err instanceof SyntaxError
-        ? refusal('malformed', 'This file is not valid JSON, so it is not a backup from this app.')
-        : refusal('malformed', 'Could not read this file.'))
-      return
-    }
-    if (seq !== pickSeq.current) return
+  /** The dry run, for a bundle however it was read. Nothing is written. */
+  async function preflight(bundle: unknown, seq: number) {
     setBusy(true)
     try {
       const report = await inspectBundle(bundle, mode)
@@ -342,6 +341,45 @@ export default function Settings(): ReactNode {
       else setRefused(report)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function onPick(file: File | undefined) {
+    clearResults()
+    const seq = pickSeq.current
+    if (!file) return
+    let text: string
+    try {
+      text = await readText(file)
+    } catch {
+      if (seq !== pickSeq.current) return
+      setRefused(refusal('malformed', 'Could not read this file.'))
+      return
+    }
+    if (seq !== pickSeq.current) return
+    const read = readBackupFile(text)
+    if (read.kind === 'refused') setRefused(read.report)
+    else if (read.kind === 'encrypted') setLocked(read.envelope)
+    else await preflight(read.bundle, seq)
+  }
+
+  /**
+   * Opens the encrypted file waiting for its passphrase. The passphrase is read once from the field and the field is emptied
+   * in `finally`; what goes on to the preview is the opened bundle alone. `seq` guards the whole open, because deriving the key
+   * takes about a second and the owner may change the mode or choose another file meanwhile.
+   */
+  async function openLocked() {
+    if (!locked || opening) return
+    const seq = pickSeq.current
+    setRefused(null); setOpening(true)
+    try {
+      const opened = await openEncryptedBackup(locked, passRef.current?.value ?? '')
+      if (seq !== pickSeq.current) return
+      if (!opened.ok) { setRefused(opened.report); passRef.current?.focus(); return }
+      setLocked(null)
+      await preflight(opened.bundle, seq)
+    } finally {
+      if (seq === pickSeq.current) { if (passRef.current) passRef.current.value = ''; setOpening(false) }
     }
   }
 
@@ -415,6 +453,17 @@ export default function Settings(): ReactNode {
              onChange={e => { void onPick(e.target.files?.[0]) }} />
       <p>Choosing a file only checks it. Nothing is written until you confirm.</p>
 
+      {locked && (
+        <form onSubmit={(e) => { e.preventDefault(); void openLocked() }}>
+          <p>This backup is encrypted. Type the passphrase you chose when you made it, then open it to see what restoring would do.</p>
+          <p><label htmlFor={passId}>Passphrase for this backup</label></p>
+          <input id={passId} ref={passRef} type="password" autoComplete="current-password" aria-invalid={refused !== null} />
+          <div className="actions">
+            <button type="submit" className="btn btn-primary" aria-disabled={opening}>{opening ? 'Opening…' : 'Open backup'}</button>
+          </div>
+        </form>
+      )}
+
       {refused && <Refusal report={refused} />}
 
       {preview && (
@@ -440,6 +489,7 @@ export default function Settings(): ReactNode {
           {preview.mode === 'replace' && (
             <p><strong>Replace removes everything on this device that is not in the backup.</strong></p>
           )}
+          <p>If you close this page before the restore finishes, nothing is changed.</p>
           <div className="actions">
             <button type="button" className="btn btn-primary" disabled={busy} onClick={() => { void confirm() }}>
               Confirm {preview.mode}

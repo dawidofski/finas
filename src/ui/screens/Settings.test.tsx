@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent, act, configure } from '@testing-library/react'
 import Settings from './Settings'
 import { db } from '../../db/db'
 import { seedDatabase, getSettings } from '../../db/seed'
@@ -9,8 +9,14 @@ import * as backup from '../../db/backup'
 import { guardWording } from '../../test/wording'
 import { appSpoken } from '../../test/spoken'
 import { violations } from '../../test/bannedWords'
-import { readBackupFile, openEncryptedBackup } from '../../db/backupFile'
+import * as backupFile from '../../db/backupFile'
+import { encryptBundle } from '../../db/encryptedBackup'
 import { PASSPHRASE_MESSAGES } from '../../lib/passphrase'
+
+vi.mock('../../db/backupFile', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../db/backupFile')>()
+  return { ...actual, openEncryptedBackup: vi.fn(actual.openEncryptedBackup) }
+})
 
 // Wrap the real engine in spies: the tests exercise real inspect/restore against the real (fake-indexeddb) database.
 vi.mock('../../db/backup', async importOriginal => {
@@ -25,6 +31,10 @@ const readBlob = (blob: Blob) => new Promise<string>((resolve, reject) => {
   r.readAsText(blob)
 })
 
+// A key derivation takes about a second (the real count, no shortcut), longer when the machine is busy: the default one second
+// for findBy and waitFor would make every test that waits on one pass or fail by the clock.
+configure({ asyncUtilTimeout: 10000 })
+
 const REPORT = { name: /what this restore would do/i }
 
 beforeEach(async () => {
@@ -33,6 +43,7 @@ beforeEach(async () => {
   await seedDatabase()
   vi.mocked(backup.inspectBundle).mockClear()
   vi.mocked(backup.restoreBundle).mockClear()
+  vi.mocked(backupFile.openEncryptedBackup).mockClear()
 })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -45,7 +56,7 @@ async function validBundleText() {
   return JSON.stringify(await backup.exportBundle())
 }
 
-guardWording(30)
+guardWording(40)
 
 describe('Settings backup', () => {
   it('downloads a bundle whose filename carries the date, and revokes the object URL after the click', async () => {
@@ -289,10 +300,10 @@ describe('Settings encrypted backup download', () => {
     const text = await readBlob(seen.blob!)
     expect(text).not.toContain(PASS)
     expect(text).not.toContain('"schemaVersion"') // nothing but the envelope header is in clear
-    const file = readBackupFile(text)
+    const file = backupFile.readBackupFile(text)
     expect(file.kind).toBe('encrypted')
     if (file.kind !== 'encrypted') return
-    const opened = await openEncryptedBackup(file.envelope, PASS)
+    const opened = await backupFile.openEncryptedBackup(file.envelope, PASS)
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
     const bundle = opened.bundle as { tables: Record<string, unknown[]> }
@@ -395,6 +406,215 @@ describe('Settings encrypted backup download', () => {
     expect(Object.keys(states)).toHaveLength(5)
     for (const [state, said] of Object.entries(states)) {
       expect(said, state).toMatch(/passphrase/i) // a scan over a page without the new copy proves nothing
+      expect(violations(said), state).toEqual([])
+      expect(said, state).not.toMatch(/\b(AES|PBKDF2|salt|IV|decrypt\w*|authentication tag)\b/i)
+    }
+  }, 20000)
+})
+
+describe('Settings restore of an encrypted backup', () => {
+  const OPEN_LABEL = /passphrase for this backup/i
+  const OPEN_BUTTON = /open backup/i
+
+  /** The text of an encrypted file made from the current database, the way the download makes it (one derivation). */
+  async function encryptedText(edit?: (bundle: Awaited<ReturnType<typeof backup.exportBundle>>) => void) {
+    const bundle = await backup.exportBundle()
+    edit?.(bundle)
+    return encryptBundle(bundle, PASS)
+  }
+  /** A well-formed envelope that was never sealed with anything: enough to reach the passphrase step with no derivation. */
+  const sealedNothing = (version = 1) => JSON.stringify({
+    format: 'finance-encrypted', version, kdf: 'PBKDF2-SHA-256', iterations: 600000, cipher: 'AES-256-GCM',
+    salt: btoa('0123456789abcdef'), iv: btoa('0123456789ab'), data: btoa('0123456789abcdef0123'),
+  })
+  const reachPassphraseStep = async (text: string) => {
+    pick(fileOf(text))
+    return (await screen.findByLabelText(OPEN_LABEL)) as HTMLInputElement
+  }
+
+  it('asks for a passphrase for an encrypted file, and shows the dry run once it opens', async () => {
+    const text = await encryptedText()
+    render(<Settings />)
+    const input = await reachPassphraseStep(text)
+    expect(input).toHaveAttribute('type', 'password')
+    expect(input).toHaveAttribute('autocomplete', 'current-password')
+    expect(input).not.toHaveAttribute('name')
+    expect(document.activeElement).toBe(input)
+    // Choosing the file opens nothing: no attempt with an empty passphrase, no message, no preview.
+    expect(backupFile.openEncryptedBackup).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(backup.inspectBundle).not.toHaveBeenCalled()
+    fireEvent.change(input, { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    expect(await screen.findByRole('table', REPORT)).toBeTruthy()
+    expect(backupFile.openEncryptedBackup).toHaveBeenCalledTimes(1)
+    expect(backup.inspectBundle).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(backup.inspectBundle).mock.calls[0]![1]).toBe('merge')
+    expect(screen.queryByLabelText(OPEN_LABEL)).toBeNull() // the field is gone once the file is open
+  }, 20000)
+
+  it('writes nothing until confirm, exactly as for a plain file', async () => {
+    const text = await encryptedText()
+    await db.categories.clear() // so the backup has rows this device does not
+    await db.analyticsCache.add({ key: 'k', engineVersion: 1, inputsHash: 'h', computedAt: 1, payload: { shape: 1, value: 'k' } })
+    render(<Settings />)
+    fireEvent.change(await reachPassphraseStep(text), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('table', REPORT)
+    expect(await db.categories.count()).toBe(0)
+    expect(await db.analyticsCache.count()).toBe(1)
+    expect(backup.restoreBundle).not.toHaveBeenCalled()
+    // The preview holds the opened backup and not the passphrase: confirming asks for nothing more and nothing shows it.
+    expect(document.body.innerHTML).not.toContain('quokka')
+    click(/confirm merge/i)
+    expect((await screen.findByRole('status')).textContent).toMatch(/restore finished/i)
+    expect(backup.restoreBundle).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(backup.restoreBundle).mock.calls[0]![0]).toBe(vi.mocked(backup.inspectBundle).mock.calls[0]![0]) // the previewed bundle
+    expect(JSON.stringify(vi.mocked(backup.restoreBundle).mock.calls)).not.toContain('quokka')
+    expect(await db.categories.count()).toBeGreaterThan(0)
+    expect(await db.analyticsCache.count()).toBe(0) // any restore clears the remembered figures
+    expect(document.body.innerHTML).not.toContain('quokka')
+  }, 20000)
+
+  it('shows one message for a wrong passphrase or a damaged file, claims neither, and lets the owner try again', async () => {
+    const text = await encryptedText()
+    render(<Settings />)
+    const input = await reachPassphraseStep(text)
+    fireEvent.change(input, { target: { value: 'not the one that was used' } })
+    click(OPEN_BUTTON)
+    const wrong = (await screen.findByRole('alert')).textContent ?? ''
+    expect(wrong).toMatch(/passphrase may differ/i)
+    expect(wrong).toMatch(/file may have changed or been damaged/i)
+    expect(wrong).toMatch(/cannot tell which/i)
+    expect(wrong).toMatch(/nothing was changed/i)
+    expect(wrong).not.toMatch(/wrong passphrase|corrupt/i)
+    expect(backup.inspectBundle).not.toHaveBeenCalled()
+    // Usable again without choosing the file again.
+    await waitFor(() => expect(screen.getByRole('button', { name: OPEN_BUTTON })).toHaveAttribute('aria-disabled', 'false'))
+    fireEvent.change(screen.getByLabelText(OPEN_LABEL), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('table', REPORT)
+    expect(screen.queryByRole('alert')).toBeNull()
+    // The right passphrase with a changed file gives the very same message: the two cannot be told apart, so none is claimed.
+    const parsed = JSON.parse(text) as { data: string }
+    const changed = JSON.stringify({ ...parsed, data: `${parsed.data[0] === 'A' ? 'B' : 'A'}${parsed.data.slice(1)}` })
+    fireEvent.change(await reachPassphraseStep(changed), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(wrong))
+    expect(screen.queryByRole('table', REPORT)).toBeNull()
+  }, 20000)
+
+  it('asks for no passphrase for a file from a newer version, and says to update the app', async () => {
+    render(<Settings />)
+    pick(fileOf(sealedNothing(2)))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/newer version of the app/i)
+    expect(alert.textContent).toMatch(/update the app/i)
+    expect(alert.textContent).toMatch(/nothing was changed/i)
+    expect(screen.queryByLabelText(OPEN_LABEL)).toBeNull()
+    expect(screen.queryByRole('button', { name: OPEN_BUTTON })).toBeNull()
+    expect(backupFile.openEncryptedBackup).not.toHaveBeenCalled()
+    expect(backup.inspectBundle).not.toHaveBeenCalled()
+  })
+
+  it('refuses a merge of an encrypted backup from another installation, and points to replace', async () => {
+    await getSettings()
+    const text = await encryptedText(bundle => {
+      const rows = bundle.tables['settings'] as Array<{ privacy: { accountSalt: string } }>
+      rows[0]!.privacy.accountSalt = 'a-different-installation'
+    })
+    const before = await db.categories.count()
+    render(<Settings />)
+    fireEvent.change(await reachPassphraseStep(text), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('salt-mismatch')
+    expect(alert.textContent).toMatch(/use replace mode to restore it/i)
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
+    expect(backup.restoreBundle).not.toHaveBeenCalled()
+    expect(await db.categories.count()).toBe(before)
+  }, 20000)
+
+  it('says that closing the page before it finishes changes nothing', async () => {
+    const text = await encryptedText()
+    render(<Settings />)
+    fireEvent.change(await reachPassphraseStep(text), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('table', REPORT)
+    const confirmButton = screen.getByRole('button', { name: /confirm merge/i })
+    const line = confirmButton.parentElement!.previousElementSibling as HTMLElement // the line sits right above the buttons
+    expect(line.textContent).toMatch(/close this page before the restore finishes, nothing is changed/i)
+  }, 20000)
+
+  it('discards an opened backup when the mode changes, so a merge preview never confirms a replace', async () => {
+    // Before it is opened: the file waiting for its passphrase goes away.
+    render(<Settings />)
+    await reachPassphraseStep(sealedNothing())
+    choose(/replace/i)
+    expect(screen.queryByLabelText(OPEN_LABEL)).toBeNull()
+    expect(screen.queryByRole('button', { name: OPEN_BUTTON })).toBeNull()
+    // After it is opened: the preview goes away and nothing can confirm.
+    const bundle = await backup.exportBundle()
+    vi.mocked(backupFile.openEncryptedBackup).mockResolvedValueOnce({ ok: true, bundle })
+    fireEvent.change(await reachPassphraseStep(sealedNothing()), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('table', REPORT)
+    choose(/merge/i)
+    expect(screen.queryByRole('table', REPORT)).toBeNull()
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
+    expect(screen.queryByLabelText(OPEN_LABEL)).toBeNull()
+    expect(backup.restoreBundle).not.toHaveBeenCalled()
+  })
+
+  it('does not show a preview for an open that finishes after the owner has moved on', async () => {
+    let release!: (r: { ok: true; bundle: unknown }) => void
+    vi.mocked(backupFile.openEncryptedBackup).mockImplementationOnce(() => new Promise(r => { release = r }))
+    render(<Settings />)
+    fireEvent.change(await reachPassphraseStep(sealedNothing()), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await waitFor(() => expect(backupFile.openEncryptedBackup).toHaveBeenCalledTimes(1))
+    choose(/replace/i) // the owner moves on while the open is still running
+    await act(async () => { release({ ok: true, bundle: await backup.exportBundle() }) })
+    expect(backup.inspectBundle).not.toHaveBeenCalled()
+    expect(screen.queryByRole('table', REPORT)).toBeNull()
+    expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
+  })
+
+  it('keeps focus on the passphrase field after a failed attempt, and clears it', async () => {
+    render(<Settings />)
+    const input = await reachPassphraseStep(sealedNothing())
+    fireEvent.change(input, { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('alert')
+    await waitFor(() => expect(screen.getByRole('button', { name: OPEN_BUTTON })).toHaveAttribute('aria-disabled', 'false'))
+    expect(screen.getByLabelText(OPEN_LABEL)).toBe(input) // the same field, still there
+    expect(input.value).toBe('')
+    expect(document.activeElement).toBe(input)
+    expect(document.body.innerHTML).not.toContain('quokka')
+  }, 20000)
+
+  it('uses no causal, shaming or jargon wording in the new restore copy, and none of the engine terms', async () => {
+    const states: Record<string, string> = {}
+    const say = () => appSpoken(document.body)
+    render(<Settings />)
+    const input = await reachPassphraseStep(sealedNothing())
+    states['asking for the passphrase'] = say()
+    fireEvent.change(input, { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('alert')
+    states['could not be opened'] = say()
+    pick(fileOf(sealedNothing(2)))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/newer version/i))
+    states['newer version'] = say()
+    const bundle = await backup.exportBundle()
+    vi.mocked(backupFile.openEncryptedBackup).mockResolvedValueOnce({ ok: true, bundle })
+    fireEvent.change(await reachPassphraseStep(sealedNothing()), { target: { value: PASS } })
+    click(OPEN_BUTTON)
+    await screen.findByRole('table', REPORT)
+    states['preview'] = say()
+    expect(states['preview']).toMatch(/close this page before the restore finishes/i)
+    expect(states['asking for the passphrase']).toMatch(/This backup is encrypted/)
+    for (const [state, said] of Object.entries(states)) {
       expect(violations(said), state).toEqual([])
       expect(said, state).not.toMatch(/\b(AES|PBKDF2|salt|IV|decrypt\w*|authentication tag)\b/i)
     }
