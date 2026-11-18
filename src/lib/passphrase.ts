@@ -20,8 +20,21 @@ function characterCount(text: string): number {
   return Array.from(text).length
 }
 
+/**
+ * The characters counted as space at an edge, written out so the set is this file's and not the browser's: the browser
+ * that makes a backup and the one that opens it years later must agree on it exactly, or a file could be written that the
+ * same passphrase no longer opens. Tab, line feed, vertical tab, form feed, carriage return, space, no-break space, and the
+ * Unicode space separators, line and paragraph separators and the byte-order mark.
+ */
+const EDGE = '[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+'
+const EDGES = new RegExp(`^${EDGE}|${EDGE}$`, 'g')
+
+function trimmed(text: string): string {
+  return text.replace(EDGES, '')
+}
+
 function hasEdgeSpace(text: string): boolean {
-  return text !== text.trim()
+  return text !== trimmed(text)
 }
 
 /**
@@ -47,7 +60,7 @@ export function newPassphraseProblem(first: string, second: string): PassphraseP
  * from pasting, and that is safe only because export refuses to make a passphrase that has one.
  */
 export function passphraseBytes(passphrase: string): Uint8Array {
-  return new TextEncoder().encode(joined(passphrase).trim())
+  return new TextEncoder().encode(trimmed(joined(passphrase)))
 }
 
 /** Owner-facing sentence for each problem. */

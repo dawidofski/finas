@@ -1,15 +1,19 @@
 /**
  * Strict standard base64 (RFC 4648 section 4), written with plain integer arithmetic so it behaves the same in every
  * environment: no btoa/atob (atob forgives whitespace and missing padding, which is the opposite of what a damaged
- * backup header needs) and no String.fromCharCode over a whole buffer (that throws on a large one).
+ * backup header needs) and no String.fromCharCode over a whole buffer (that throws on a large one). The text is built in
+ * pieces of a few thousand characters, so a backup of many megabytes does not become an array of millions of one-letter strings.
  */
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 const VALUE_OF: Record<string, number> = {}
 for (let i = 0; i < ALPHABET.length; i++) VALUE_OF[ALPHABET.charAt(i)] = i
 
+const PIECE_CHARS = 8192
+
 export function bytesToBase64(bytes: Uint8Array): string {
   const parts: string[] = []
+  let piece = ''
   const n = bytes.length
   for (let i = 0; i < n; i += 3) {
     const b0 = bytes[i] ?? 0
@@ -17,13 +21,11 @@ export function bytesToBase64(bytes: Uint8Array): string {
     const b2 = bytes[i + 2] ?? 0
     const have = n - i // 1, 2 or more bytes left in this group
     const word = (b0 << 16) | (b1 << 8) | b2
-    parts.push(
-      ALPHABET.charAt((word >> 18) & 63),
-      ALPHABET.charAt((word >> 12) & 63),
-      have > 1 ? ALPHABET.charAt((word >> 6) & 63) : '=',
-      have > 2 ? ALPHABET.charAt(word & 63) : '=',
-    )
+    piece += ALPHABET.charAt((word >> 18) & 63) + ALPHABET.charAt((word >> 12) & 63)
+      + (have > 1 ? ALPHABET.charAt((word >> 6) & 63) : '=') + (have > 2 ? ALPHABET.charAt(word & 63) : '=')
+    if (piece.length >= PIECE_CHARS) { parts.push(piece); piece = '' }
   }
+  parts.push(piece)
   return parts.join('')
 }
 

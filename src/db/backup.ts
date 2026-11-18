@@ -171,7 +171,7 @@ function validate(input: unknown, mode: Mode): Refusal | { ok: true; tables: Map
       }
     }
     if ((out.get('settings') ?? []).length === 0) {
-      return { ok: false, reason: 'malformed', detail: 'The backup has no settings row, and so no account salt. Nothing was changed.' }
+      return { ok: false, reason: 'malformed', detail: 'The backup has no settings row, which every backup from this app has. Nothing was changed.' }
     }
   }
   return { ok: true, tables: out }
@@ -195,7 +195,7 @@ async function plan(incomingTables: Map<string, Row[]>, mode: Mode): Promise<{ r
         writes,
         report: {
           ok: false, refusedReason: 'salt-mismatch', perTable,
-          detail: 'This backup came from a different installation: its account fingerprints use a different salt, so merging would create duplicate accounts that cannot be reconciled. Use replace mode to restore it. Nothing was changed.',
+          detail: 'This backup came from a different installation: each installation marks your accounts in its own way, so merging would create duplicate accounts that cannot be untangled. Use replace mode to restore it. Nothing was changed.',
         },
       }
     }
