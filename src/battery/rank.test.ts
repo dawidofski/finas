@@ -261,6 +261,21 @@ describe('weekend', () => {
     expect(r.period).toEqual({ from: '2026-01-03', to: '2026-02-23' })
   })
 
+  it('leaves out a leg of a transfer between the owners own accounts, but keeps a purchase that was later refunded', async () => {
+    await seedWeekends(false)
+    // A big Saturday outflow the bank filed as a spend but that is one leg of a matched transfer: not a purchase. Left
+    // in, n would be 17 and it would be the top weekend value.
+    await db.transactions.add(tx('xfer.out', { valueDate: '2026-01-10', amountCents: -900000 }))
+    await db.transactions.add(tx('xfer.in', { valueDate: '2026-01-10', amountCents: 900000, kind: 'internal' }))
+    await db.transfers.add({ id: 't1', outTransactionId: 'xfer.out', inTransactionId: 'xfer.in', amountCents: 900000, matchScore: 1, confirmedByUser: true, matchedAt: 1, linkKind: 'internal' })
+    // A purchase that was refunded afterwards. The decision happened, so the purchase STAYS (monthlyBudget would net it).
+    await db.transactions.add(tx('bought', { valueDate: '2026-01-10', amountCents: -5500 }))
+    await db.transactions.add(tx('refund', { valueDate: '2026-01-12', amountCents: 5500, kind: 'income' }))
+    await db.transfers.add({ id: 't2', outTransactionId: 'bought', inTransactionId: 'refund', amountCents: 5500, matchScore: 1, confirmedByUser: true, matchedAt: 1, linkKind: 'refund' })
+    const r = finding(await weekend('2026-01', '2026-03', 1))
+    expect(r.n).toBe(17)
+  })
+
   it('leaves out transactions outside the month range it was asked about', async () => {
     // The same sixteen spends, plus a huge weekday spend in June that a whole-table read would include.
     await seedWeekends(false)

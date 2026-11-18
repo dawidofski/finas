@@ -56,6 +56,14 @@ export interface Spend {
  * `treatmentOf(kind, categoryKind) === 'spending'` (the rule Budget, Reports and payday already show), and the BANK
  * amount must be strictly negative, so a 0,00 row is not a purchase anywhere. A spend sitting in a savings, internal or
  * income category is not one. The kind and category are the owner's (§43); the sign, amount and date are the bank's (§41).
+ *
+ * This is the app's definition (Budget, Reports and payday show it) with ONE DELIBERATE DIVERGENCE and one addition:
+ * - A leg of a matched transfer (internal or round-up) is never a purchase, whatever kind a row carries: moving money
+ *   between the owner's own accounts is not spending under any reading, so those ids are removed here.
+ * - A REFUNDED purchase STAYS. monthlyBudget nets a refund out because it answers "what did this month cost"; the battery
+ *   asks about a decision the owner made, and a refund later does not unmake it: the purchase happened, with a mood and
+ *   a reason attached, and dropping it would delete the very evidence these relationships exist to read. habits.ts
+ *   (payday) does net refunds, because its question is the cost of the days; that difference is chosen, not an oversight.
  */
 export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const byId = new Map(bank.map(t => [t.id, t]))
@@ -63,9 +71,12 @@ export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const [moods, categories] = await Promise.all([db.moods.toArray(), db.categories.toArray()])
   const valence = new Map(moods.map(m => [m.id, m.valence]))
   const kindOf = new Map(categories.map(c => [c.id, c.kind as string]))
+  // Both legs of every transfer that is not a refund link: a refund's purchase leg is deliberately kept (see above).
+  const transferLegs = new Set((await db.transfers.toArray()).filter(l => l.linkKind !== 'refund').flatMap(l => [l.outTransactionId, l.inTransactionId]))
   const out: Spend[] = []
   for (const r of resolved) {
     const t = byId.get(r.id)
+    if (transferLegs.has(r.id)) continue
     const categoryKind = r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null
     if (!t || t.amountCents >= 0 || treatmentOf(r.kind, categoryKind) !== 'spending') continue
     out.push({

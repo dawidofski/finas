@@ -207,16 +207,20 @@ const weekOf = (date: string): string => addDays(date, -(isoWeekday(date) - 1))
  * placed on either side: every weekly value is at least one, and the measure is conditioned on having bought. The
  * finding must be worded "in weeks when you recorded feeling low", never "when you are low".
  *
+ * The week containing `today` is left out entirely, and out of the gate's count: a part of a week holds fewer purchases
+ * because it is a part, not because of the owner's mood, and whichever side it fell on would get a depressed count.
+ *
  * a = the LOW-mood weeks, b = the good-mood weeks: a POSITIVE r means more purchases in weeks of low mood.
  */
-export function moodFrequency(computedAt: number): Promise<MoodFrequencyResult> {
-  return cached('battery.trend.mood-frequency', async (): Promise<MoodFrequencyResult> => {
+export function moodFrequency(computedAt: number, today: string): Promise<MoodFrequencyResult> {
+  return cached(`battery.trend.mood-frequency:${today}`, async (): Promise<MoodFrequencyResult> => {
     // The shared spend loader of rank.ts: one definition of what counts as a spend, bank sign, amount and date.
     const spends = await spendsOf(await annotatedTransactions(a => a.moodId !== null))
     const perWeek = new Map<string, { low: number; good: number; first: string; last: string }>()
     for (const s of spends) {
       if (s.valence === null || s.valence === 0) continue
       const week = weekOf(s.date)
+      if (week >= weekOf(today)) continue // the running week is part of a week: see above
       const w = perWeek.get(week) ?? { low: 0, good: 0, first: s.date, last: s.date }
       if (s.date > w.last) w.last = s.date
       if (s.date < w.first) w.first = s.date

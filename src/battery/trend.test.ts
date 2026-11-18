@@ -194,16 +194,33 @@ describe('moodFrequency', () => {
     // Neutral and "Other" moods have no side to be on: they must add neither weeks nor purchases.
     await tx('n.1', '2026-10-05', -1500); await ann('n.1', { moodId: 'mood.neutral' })
     await tx('o.1', '2026-10-12', -1500); await ann('o.1', { moodId: 'mood.other' })
-    const r = await moodFrequency(1000)
+    const r = await moodFrequency(1000, '2027-01-04')
     expect(r).toEqual({
       effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-06', to: '2026-07-15' },
       lowMood: { weeks: 8, purchases: 39 }, goodMood: { weeks: 20, purchases: 40 }, tiedWeeks: 5,
     })
   })
 
+  it('leaves out the running week, which holds fewer purchases only because it is a part of a week', async () => {
+    await seedWeeks()
+    // Today is Wed 2026-08-26, in the week of Mon Aug 24. One stressed purchase so far this week would be a low-mood
+    // week of total 1, below every good week (2): admitted, low = 9 weeks, wins = 160 of 180 pairs, losses 20,
+    // r = 140/180 = +7778 instead of +10000, n = 29.
+    await tx('run.1', '2026-08-24', -1500); await ann('run.1', { moodId: 'mood.stressed' })
+    const r = await moodFrequency(1000, '2026-08-26')
+    expect(r).toMatchObject({ effectBp: 10000, n: 28, lowMood: { weeks: 8, purchases: 39 }, tiedWeeks: 5 })
+  })
+
+  it('does not count the running week toward the eight weeks of coverage', async () => {
+    for (let w = 0; w < 8; w++) { await tx(`c.${w}`, addDays('2026-01-05', 7 * w), -1500); await ann(`c.${w}`, { moodId: 'mood.happy' }) }
+    // The eighth week, Feb 23..Mar 1, is the running one: seven whole weeks are short of eight.
+    const r = await moodFrequency(1000, '2026-02-25')
+    expect(r).toMatchObject([{ have: 7, need: 8 }])
+  })
+
   it('withholds below eight weeks with a mood recorded, naming what is short', async () => {
     await tx('a', '2026-01-05', -1500); await ann('a', { moodId: 'mood.happy' })
-    const r = await moodFrequency(1000)
+    const r = await moodFrequency(1000, '2027-01-04')
     expect(r).toMatchObject([{ have: 1, need: 8 }])
     expect(JSON.stringify(r)).toContain('7 more weeks are needed')
   })
@@ -268,7 +285,7 @@ describe('every relationship, with nothing recorded', () => {
     const results = [
       [await paydayTrend('2026-01', '2026-03', TODAY, 1), 3, 'payments received'],
       [await salaryLifestyle('2026-01', '2026-03', TODAY, 1), 2, 'income levels'],
-      [await moodFrequency(1), 8, 'weeks with a mood recorded'],
+      [await moodFrequency(1, '2027-01-04'), 8, 'weeks with a mood recorded'],
       [await categorySavings('2026-01', '2026-03', TODAY, 1), 4, 'months of spending'],
     ] as const
     for (const [r, need, what] of results) {
