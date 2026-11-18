@@ -15,7 +15,7 @@ const RANK: Record<Bracket, number> = { none: 0, 'p<0.05': 1, 'p<0.01': 2 }
  */
 // Written out as the floats they are, NOT as Z_BP/10000: an oracle derived from the module's own constant moves with
 // it, and would agree with a module whose critical value had drifted.
-const zCritical = { 'p<0.05': 1.96, 'p<0.01': 2.5758 }
+const zCritical = { 'p<0.05': 1.96, 'p<0.01': 2.5759 }
 const longWayBracket = (z: number): Bracket => {
   const abs = Math.abs(z)
   if (abs >= zCritical['p<0.01']) return 'p<0.01'
@@ -23,9 +23,20 @@ const longWayBracket = (z: number): Bracket => {
   return 'none'
 }
 const spearmanZ = (rhoBp: number, n: number): number => (rhoBp / 10000) * Math.sqrt(n - 1)
-// uDoubled is 2U, as mannWhitneyU hands it over, so U is uDoubled/2 — a division a test may do and the module may not.
-const mannWhitneyZ = (uDoubled: number, n1: number, n2: number): number =>
-  (uDoubled / 2 - (n1 * n2) / 2) / Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12)
+/**
+ * uDoubled is 2U, as mannWhitneyU hands it over, so U is uDoubled/2 — a division a test may do and the module may not.
+ *
+ * This is the CONTINUITY-CORRECTED z the module implements, written the ordinary way: the deviation of U from its
+ * null mean, shortened by half a unit of U, clamped at zero so a U sitting on the mean cannot come out negative, and
+ * divided by a σ from a real square root. Returned as a magnitude, since the correction makes it one.
+ *
+ * The tie correction to the variance is deliberately absent here as well as in the module: ties shrink the true
+ * variance, so the untied σ is the larger one and the bracket it yields is the weaker one.
+ */
+const mannWhitneyZ = (uDoubled: number, n1: number, n2: number): number => {
+  const deviation = Math.abs(uDoubled / 2 - (n1 * n2) / 2) - 0.5
+  return Math.max(0, deviation) / Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12)
+}
 
 describe('critical: significance as a squared integer comparison', () => {
   it('brackets Spearman by the squared comparison, either side of the 0.05 line', () => {
@@ -41,9 +52,9 @@ describe('critical: significance as a squared integer comparison', () => {
   })
 
   it('brackets Spearman at the stricter line only when the statistic clears it', () => {
-    // At n = 20 against 25758² = 663 474 564:
-    //   5909² · 19 = 34 916 281 · 19 = 663 409 339  <  663 474 564  → p<0.05 and no further
-    //   5910² · 19 = 34 928 100 · 19 = 663 633 900  ≥  663 474 564  → p<0.01
+    // At n = 20 against 25759² = 663 526 081:
+    //   5909² · 19 = 34 916 281 · 19 = 663 409 339  <  663 526 081  → p<0.05 and no further
+    //   5910² · 19 = 34 928 100 · 19 = 663 633 900  ≥  663 526 081  → p<0.01
     expect(spearmanBracket(5909, 20)).toBe('p<0.05')
     expect(spearmanBracket(5910, 20)).toBe('p<0.01')
     expect(spearmanBracket(-5910, 20)).toBe('p<0.01')
@@ -53,20 +64,26 @@ describe('critical: significance as a squared integer comparison', () => {
 
   it('brackets Mann-Whitney two-tailed, symmetrically above and below the midpoint', () => {
     // Every u here is 2U, the doubled form mannWhitneyU produces, so the null midpoint is uDoubled = n₁n₂ = 100 and
-    // D = uDoubled − 100. With n₁ = n₂ = 10, V = 100 · 21 = 2100 and the test is 3 · 10⁸ · D² ≥ Z_BP² · 2100.
+    // D = uDoubled − 100. With n₁ = n₂ = 10, V = 100 · 21 = 2100, and with the continuity correction shortening the
+    // deviation by one in doubled units, the test is 3 · 10⁸ · C² ≥ Z_BP² · 2100 for C = max(0, |D| − 1).
     //   0.05: 19600² · 2100 = 384 160 000 · 2100 = 806 736 000 000
-    //     2U = 150 (U = 75) → 50² · 3 · 10⁸ = 2500 · 3 · 10⁸ =   750 000 000 000  <    806 736 000 000  → none
-    //     2U = 152 (U = 76) → 52² · 3 · 10⁸ = 2704 · 3 · 10⁸ =   811 200 000 000  ≥    806 736 000 000  → p<0.05
-    //   0.01: 25758² · 2100 = 663 474 564 · 2100 = 1 393 296 584 400
-    //     2U = 168 (U = 84) → 68² · 3 · 10⁸ = 4624 · 3 · 10⁸ = 1 387 200 000 000  <  1 393 296 584 400  → p<0.05
-    //     2U = 170 (U = 85) → 70² · 3 · 10⁸ = 4900 · 3 · 10⁸ = 1 470 000 000 000  ≥  1 393 296 584 400  → p<0.01
+    //     2U = 152 (U = 76)   → C = 51 → 2601 · 3 · 10⁸ =   780 300 000 000  <    806 736 000 000  → none
+    //     2U = 153 (U = 76.5) → C = 52 → 2704 · 3 · 10⁸ =   811 200 000 000  ≥    806 736 000 000  → p<0.05
+    //     2U = 154 (U = 77)   → C = 53 → 2809 · 3 · 10⁸ =   842 700 000 000  ≥    806 736 000 000  → p<0.05
+    //   0.01: 25759² · 2100 = 663 526 081 · 2100 = 1 393 404 770 100
+    //     2U = 168 (U = 84)   → C = 67 → 4489 · 3 · 10⁸ = 1 346 700 000 000  <  1 393 404 770 100  → p<0.05
+    //     2U = 170 (U = 85)   → C = 69 → 4761 · 3 · 10⁸ = 1 428 300 000 000  ≥  1 393 404 770 100  → p<0.01
     expect(mannWhitneyBracket(150, 10, 10)).toBe('none')
-    expect(mannWhitneyBracket(152, 10, 10)).toBe('p<0.05')
+    expect(mannWhitneyBracket(152, 10, 10)).toBe('none')
+    expect(mannWhitneyBracket(153, 10, 10)).toBe('p<0.05') // reachable only with a tie, and exactly on the line
+    expect(mannWhitneyBracket(154, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(168, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(170, 10, 10)).toBe('p<0.01')
     // The mirror of each about the midpoint: uDoubled and 2n₁n₂ − uDoubled are the same distance out.
     expect(mannWhitneyBracket(50, 10, 10)).toBe('none')
-    expect(mannWhitneyBracket(48, 10, 10)).toBe('p<0.05')
+    expect(mannWhitneyBracket(48, 10, 10)).toBe('none')
+    expect(mannWhitneyBracket(47, 10, 10)).toBe('p<0.05')
+    expect(mannWhitneyBracket(46, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(32, 10, 10)).toBe('p<0.05')
     expect(mannWhitneyBracket(30, 10, 10)).toBe('p<0.01')
     // Symmetry over the whole range, not only at the four boundaries, and for unequal groups too.
@@ -98,6 +115,16 @@ describe('critical: significance as a squared integer comparison', () => {
     // The two rows are not the same row: more degrees of freedom demands a larger statistic for the same certainty.
     expect(chiSquareBracket(38415, 2)).toBe('none')
     expect(chiSquareBracket(66349, 2)).toBe('p<0.05')
+    // And the rows past the first six, which reason × worthwhile reaches as soon as the owner has several purchase
+    // reasons. df 14: 23.6847913 and 29.1412377. df 20, the last row: 31.4104328 and 37.5662348.
+    expect(chiSquareBracket(236847, 14)).toBe('none')
+    expect(chiSquareBracket(236848, 14)).toBe('p<0.05')
+    expect(chiSquareBracket(291412, 14)).toBe('p<0.05')
+    expect(chiSquareBracket(291413, 14)).toBe('p<0.01')
+    expect(chiSquareBracket(314104, 20)).toBe('none')
+    expect(chiSquareBracket(314105, 20)).toBe('p<0.05')
+    expect(chiSquareBracket(375662, 20)).toBe('p<0.05')
+    expect(chiSquareBracket(375663, 20)).toBe('p<0.01')
   })
 
   it('returns none for a statistic below the weakest line', () => {
@@ -153,30 +180,36 @@ describe('critical: significance as a squared integer comparison', () => {
       rising(`mann-whitney above the midpoint at ${n1}v${n2}`, above)
       rising(`mann-whitney below the midpoint at ${n1}v${n2}`, below)
     }
-    // Chi-square: rising in the statistic.
-    for (let df = 1; df <= 6; df += 1) {
+    // Chi-square: rising in the statistic, over every row of the table.
+    for (let df = 1; df <= 20; df += 1) {
       const ranks: number[] = []
-      for (let chiScaled = 0; chiScaled <= 200000; chiScaled += 7) ranks.push(RANK[chiSquareBracket(chiScaled, df)])
+      for (let chiScaled = 0; chiScaled <= 400000; chiScaled += 7) ranks.push(RANK[chiSquareBracket(chiScaled, df)])
       rising(`chi-square statistic at df=${df}`, ranks)
     }
     expect(backwards).toEqual([])
     // And falling in the degrees of freedom the same statistic has to pay for.
     const cheaper: string[] = []
-    for (const chiScaled of [0, 38415, 66349, 92104, 150863, 400000]) {
-      for (let df = 2; df <= 6; df += 1) {
+    for (const chiScaled of [0, 38415, 66349, 92104, 150863, 291413, 375663, 600000]) {
+      for (let df = 2; df <= 20; df += 1) {
         const before = RANK[chiSquareBracket(chiScaled, df - 1)]
         const after = RANK[chiSquareBracket(chiScaled, df)]
         if (after > before) cheaper.push(`chi-square ${chiScaled} at df ${df}: ${before} then ${after}`)
       }
     }
     expect(cheaper).toEqual([])
+    // The clamp in C = max(0, |D| − 1) is the other half of that guard, and it is the one rule here no test can
+    // kill: without it a |D| of 0 squares to 1, and 3 · 10⁸ · 1 is still far below the smallest right-hand side the
+    // group floor admits, so the verdict cannot change. What IS assertable is the inequality that makes it so — and
+    // if the floor is ever lowered to where the clamp bites, this is what fails and names the reason.
+    expect(3 * 100000000).toBeLessThan(19600 * 19600 * (8 * 8 * (8 + 8 + 1)))
+    expect(8 * 8 * (8 + 8 + 1)).toBe(1088) // the smallest V two groups at the floor can produce
     // The sweeps must actually cross the lines they are walking over, or there is nothing monotonic about them.
     expect(RANK[spearmanBracket(10000, 400)]).toBe(2)
     expect(RANK[spearmanBracket(0, 400)]).toBe(0)
     expect(RANK[mannWhitneyBracket(128, 8, 8)]).toBe(2)
     expect(RANK[mannWhitneyBracket(64, 8, 8)]).toBe(0)
-    expect(RANK[chiSquareBracket(200000, 6)]).toBe(2)
-    expect(RANK[chiSquareBracket(0, 6)]).toBe(0)
+    expect(RANK[chiSquareBracket(400000, 20)]).toBe(2)
+    expect(RANK[chiSquareBracket(0, 20)]).toBe(0)
   })
 
   it('agrees with a worked example computed the long way, with a square root', () => {
@@ -186,16 +219,21 @@ describe('critical: significance as a squared integer comparison', () => {
     expect(spearmanZ(4497, 20)).toBeGreaterThanOrEqual(zCritical['p<0.05'])
     expect(spearmanBracket(4496, 20)).toBe(longWayBracket(spearmanZ(4496, 20)))
     expect(spearmanBracket(4497, 20)).toBe(longWayBracket(spearmanZ(4497, 20)))
-    // Mann-Whitney at 10 against 10, either side of the same line, computed here as (U − n₁n₂/2)/√(V/12).
-    //   σ = √(2100/12) = √175 = 13.2287566, so (75 − 50)/σ = 1.8898 < 1.96 and (76 − 50)/σ = 1.9654 ≥ 1.96.
-    expect(mannWhitneyZ(150, 10, 10)).toBeLessThan(zCritical['p<0.05'])
-    expect(mannWhitneyZ(152, 10, 10)).toBeGreaterThanOrEqual(zCritical['p<0.05'])
-    expect(mannWhitneyBracket(150, 10, 10)).toBe(longWayBracket(mannWhitneyZ(150, 10, 10)))
+    // Mann-Whitney at 10 against 10, either side of the same line, computed here as (|U − n₁n₂/2| − 0.5)/√(V/12).
+    //   σ = √(2100/12) = √175 = 13.2287566, so (26 − 0.5)/σ = 1.9276 < 1.96 and (26.5 − 0.5)/σ = 1.9654 ≥ 1.96 —
+    //   which is the correction doing its work: U = 76 was significant without it and is not with it.
+    expect(mannWhitneyZ(152, 10, 10)).toBeLessThan(zCritical['p<0.05'])
+    expect(mannWhitneyZ(153, 10, 10)).toBeGreaterThanOrEqual(zCritical['p<0.05'])
     expect(mannWhitneyBracket(152, 10, 10)).toBe(longWayBracket(mannWhitneyZ(152, 10, 10)))
+    expect(mannWhitneyBracket(153, 10, 10)).toBe(longWayBracket(mannWhitneyZ(153, 10, 10)))
     // And the stricter line, where a rearrangement that was right at one threshold could still be wrong.
     expect(mannWhitneyZ(168, 10, 10)).toBeLessThan(zCritical['p<0.01'])
     expect(mannWhitneyZ(170, 10, 10)).toBeGreaterThanOrEqual(zCritical['p<0.01'])
     expect(mannWhitneyBracket(170, 10, 10)).toBe(longWayBracket(mannWhitneyZ(170, 10, 10)))
+    // A result sitting exactly on the null midpoint: the correction shortens a deviation of zero, and the clamp is
+    // what stops that from squaring into evidence.
+    expect(mannWhitneyZ(100, 10, 10)).toBe(0)
+    expect(mannWhitneyBracket(100, 10, 10)).toBe(longWayBracket(mannWhitneyZ(100, 10, 10)))
 
     // Four boundaries are four chances to be lucky, so: every value of each statistic at several sample sizes,
     // against the square root, with the crossings counted so a sweep that never reached a threshold cannot pass.
@@ -249,13 +287,13 @@ describe('critical: significance as a squared integer comparison', () => {
   })
 
   it('refuses a degrees of freedom its table does not carry, rather than quietly reporting none', () => {
-    // 'none' means the evidence is too weak to call. A df of 7 is not weak evidence, it is a missing constant, and
+    // 'none' means the evidence is too weak to call. A df of 21 is not weak evidence, it is a missing constant, and
     // returning 'none' for it would bury a whole relationship of the battery as permanently unremarkable.
-    expect(() => chiSquareBracket(500000, 7)).toThrow(/df 1 to 6/)
-    expect(() => chiSquareBracket(500000, 14)).toThrow(/df 1 to 6/)
-    expect(() => chiSquareBracket(500000, 0)).toThrow(/df 1 to 6/)
-    expect(() => chiSquareBracket(500000, -1)).toThrow(/df 1 to 6/)
-    expect(chiSquareBracket(500000, 6)).toBe('p<0.01') // the last row the table does carry still answers
+    expect(() => chiSquareBracket(500000, 21)).toThrow(/df 1 to 20/)
+    expect(() => chiSquareBracket(500000, 40)).toThrow(/df 1 to 20/)
+    expect(() => chiSquareBracket(500000, 0)).toThrow(/df 1 to 20/)
+    expect(() => chiSquareBracket(500000, -1)).toThrow(/df 1 to 20/)
+    expect(chiSquareBracket(500000, 20)).toBe('p<0.01') // the last row the table does carry still answers
   })
 
   it('refuses a statistic it cannot compare exactly', () => {
@@ -275,7 +313,10 @@ describe('critical: significance as a squared integer comparison', () => {
   })
 
   it('pins the constants a reviewer is meant to check by hand', () => {
-    expect(Z_BP).toEqual({ 'p<0.05': 19600, 'p<0.01': 25758 }) // 1.96 and 2.5758, in basis points
+    // 1.96 and 2.5759, in basis points: both rounded UP from the true critical, so both can only withhold.
+    expect(Z_BP).toEqual({ 'p<0.05': 19600, 'p<0.01': 25759 })
+    expect(Z_BP['p<0.05']).toBeGreaterThan(1.959963984540054 * 10000)
+    expect(Z_BP['p<0.01']).toBeGreaterThan(2.5758293035489004 * 10000)
     // Which is what the long-way oracle above compares against, written there as floats so the two are independent.
     expect([Z_BP['p<0.05'] / 10000, Z_BP['p<0.01'] / 10000]).toEqual([zCritical['p<0.05'], zCritical['p<0.01']])
     expect(ALPHA_BP).toEqual({ 'p<0.01': 100, 'p<0.05': 500 }) // 0.01 and 0.05, each bracket's upper bound

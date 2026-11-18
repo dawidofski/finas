@@ -30,15 +30,16 @@ export const ALPHA_BP = { 'p<0.01': 100, 'p<0.05': 500 } as const
  * The two-tailed normal criticals, in basis points — ten-thousandths — because a decimal literal is banned in src/:
  * 1.96 is float arithmetic waiting to happen, 19600 is a count.
  *
- * Which way each one leans, stated so nobody has to work it out later:
- * - 19600 is 1.96, just ABOVE the true 1.9599640, so the 0.05 bracket asks for a hair more than it strictly must.
- * - 25758 is 2.5758, just BELOW the true 2.5758293, so the 0.01 bracket is lenient by about one part in 100 000.
- *   That is the one constant here that errs toward claiming rather than withholding. It is far inside the error of
- *   the normal approximation it is a critical value for, and 25759 would remove even that, but the value is part of
- *   this module's published interface and other tasks compare against it, so it stays as declared and leans in
- *   writing instead of silently.
+ * Both are rounded UP from the true critical value, so both ask for a hair more than they strictly must and both can
+ * only withhold a finding, never invent one:
+ * - 19600 is 1.96, just above the true 1.9599640.
+ * - 25759 is 2.5759, just above the true 2.5758293. It was 25758 at first, which was BELOW the true value and so
+ *   leant toward claiming — the only constant in the module that did. The cost of the change is one part in 100 000,
+ *   far inside the error of the normal approximation these are critical values for, and what it buys is a property
+ *   a reader can verify by inspection: every constant here errs toward silence. "All but one do" is a footnote
+ *   nobody reads.
  */
-export const Z_BP = { 'p<0.05': 19600, 'p<0.01': 25758 } as const
+export const Z_BP = { 'p<0.05': 19600, 'p<0.01': 25759 } as const
 
 /**
  * Below this many paired observations spearmanBracket returns 'none' rather than a bracket.
@@ -64,12 +65,9 @@ const SPEARMAN_MIN_N = 10
  * approximation and the exact test agree on the verdict. Below it they come apart, and §12's weekend gate (≥ 8
  * weekends observed) sits precisely here, so the floor and the gate are the same line.
  *
- * Two deliberate omissions, both of which err toward silence rather than toward a finding:
- * - No tie correction in the variance. Ties make the true variance SMALLER, so using the untied variance makes |z|
- *   smaller and the bracket weaker than it could be.
- * - No continuity correction. This one leans the other way — a corrected test asks for |2U − n₁n₂| − 1 rather than
- *   |2U − n₁n₂|, which is exactly expressible here and would be strictly more conservative — but the z this module
- *   is required to agree with is the uncorrected one, and the two must not drift apart.
+ * The variance carries NO tie correction, deliberately. Ties make the true variance SMALLER, so using the untied
+ * variance makes |z| smaller and the bracket weaker than it could be — the omission errs toward silence, which is
+ * the direction this application errs in everywhere, so it stays.
  */
 const MW_MIN_GROUP = 8
 
@@ -82,18 +80,44 @@ const MW_MIN_GROUP = 8
  * Each entry is the critical value rounded UP at the fourth decimal, so a statistic that reaches a stored entry has
  * genuinely reached the critical value: the rounding can withhold a finding, never invent one.
  *
+ * Unlike a table of rank criticals per sample size, which is why those were rejected, these are standard textbook
+ * rows and a reviewer can check any ONE of them against any statistics table without reading the others. Each row
+ * names the unrounded value it was rounded up from, and the three-decimal figure in a printed table is that value
+ * to three decimals.
+ *
  * The first two rows check against the rest of this file rather than against a table. At df 1 the critical is z²,
- * the square of the Z_BP constants above (1.9599640² = 3.8414588 and 2.5758293² = 6.6348966); at df 2 it is −2·ln α
- * exactly (−2·ln 0.05 = 5.9914645 and −2·ln 0.01 = 9.2103404). Rows 3 to 6 are the textbook values, and each row
- * names the unrounded number it came from so a reviewer checks one line at a time.
+ * the square of the true two-tailed normal criticals that Z_BP above rounds (1.9599640² = 3.8414588 and
+ * 2.5758293² = 6.6348966); at df 2 it is −2·ln α exactly (−2·ln 0.05 = 5.9914645, −2·ln 0.01 = 9.2103404). Every
+ * row was computed twice before it was written down: once from the regularized incomplete gamma function by
+ * bisection, and once — for the even rows — from the closed-form even-df survival function in exact decimal
+ * arithmetic. The two agreed to ten decimals on every entry they share, which is what caught df 18 at 0.05 sitting
+ * at 28.8692994 rather than just over 28.8693, where the fourth-decimal ceiling differs.
+ *
+ * The table stops at df 20 and chiSquareBracket throws beyond it, rather than growing without limit: §12's widest
+ * contingency relationship is reason × worthwhile, and the owner would need twenty-one purchase reasons against
+ * three hindsight answers to pass this.
  */
 const CHI_CRIT: readonly { readonly p05: number; readonly p01: number }[] = [
-  { p05: 38415, p01: 66349 }, //  df 1:  3.8414588,  6.6348966
-  { p05: 59915, p01: 92104 }, //  df 2:  5.9914645,  9.2103404
-  { p05: 78148, p01: 113449 }, // df 3:  7.8147279, 11.3448667
-  { p05: 94878, p01: 132768 }, // df 4:  9.4877290, 13.2767041
-  { p05: 110705, p01: 150863 }, // df 5: 11.0704977, 15.0862724
+  { p05: 38415, p01: 66349 }, //   df 1:  3.8414588,  6.6348966
+  { p05: 59915, p01: 92104 }, //   df 2:  5.9914645,  9.2103404
+  { p05: 78148, p01: 113449 }, //  df 3:  7.8147279, 11.3448667
+  { p05: 94878, p01: 132768 }, //  df 4:  9.4877290, 13.2767041
+  { p05: 110705, p01: 150863 }, // df 5: 11.0704977, 15.0862725
   { p05: 125916, p01: 168119 }, // df 6: 12.5915872, 16.8118938
+  { p05: 140672, p01: 184754 }, // df 7: 14.0671404, 18.4753069
+  { p05: 155074, p01: 200903 }, // df 8: 15.5073131, 20.0902350
+  { p05: 169190, p01: 216660 }, // df 9: 16.9189776, 21.6659943
+  { p05: 183071, p01: 232093 }, // df 10: 18.3070381, 23.2092512
+  { p05: 196752, p01: 247250 }, // df 11: 19.6751376, 24.7249703
+  { p05: 210261, p01: 262170 }, // df 12: 21.0260698, 26.2169673
+  { p05: 223621, p01: 276883 }, // df 13: 22.3620325, 27.6882496
+  { p05: 236848, p01: 291413 }, // df 14: 23.6847913, 29.1412377
+  { p05: 249958, p01: 305780 }, // df 15: 24.9957901, 30.5779142
+  { p05: 262963, p01: 320000 }, // df 16: 26.2962276, 31.9999269
+  { p05: 275872, p01: 334087 }, // df 17: 27.5871116, 33.4086636
+  { p05: 288693, p01: 348054 }, // df 18: 28.8692994, 34.8053057
+  { p05: 301436, p01: 361909 }, // df 19: 30.1435272, 36.1908691
+  { p05: 314105, p01: 375663 }, // df 20: 31.4104328, 37.5662348
 ]
 
 /**
@@ -148,23 +172,33 @@ export function spearmanBracket(rhoBp: number, n: number): Bracket {
  * checker and wrong in silence for about half the inputs; the name is the whole guard, so it says uDoubled.
  *
  * Derivation, from the z this is required to agree with. Write V = n₁n₂(n₁+n₂+1), so σ = √(V/12), and let
- * D = 2U − n₁n₂ = uDoubled − n₁n₂, an integer, and twice the deviation of U from its null mean n₁n₂/2.
+ * D = 2U − n₁n₂ = uDoubled − n₁n₂, an integer, and twice the deviation of U from its null mean n₁n₂/2. The test is
+ * the continuity-corrected one, which shortens the deviation by half a unit of U before dividing by σ, because U is
+ * discrete and the normal curve it is read against is not. The correction can only weaken a bracket.
  *
- *   z = (U − n₁n₂/2) / √(V/12)                                   the statistic, as stated
- *   significant at α   ⟺   |z| ≥ z_α
- *                      ⟺   |U − n₁n₂/2| ≥ z_α·√(V/12)            σ > 0 for n₁, n₂ ≥ 1, so this is safe
- *                      ⟺   |D|/2 ≥ z_α·√(V/12)                   U − n₁n₂/2 = D/2
- *                      ⟺   |D| ≥ z_α·√(4V/12) = z_α·√(V/3)       the 2 goes under the root as a 4
- *                      ⟺   D² ≥ z_α²·V/3                         both sides non-negative, so squaring is faithful
- *                      ⟺   3·D² ≥ z_α²·V
- *                      ⟺   3·D² ≥ Z_BP²·V/10⁸                    z_α = Z_BP/10⁴, so z_α² = Z_BP²/10⁸
- *                      ⟺   3·10⁸·D² ≥ Z_BP²·V                    and now every term is an integer
+ *   z = (|U − n₁n₂/2| − 1/2) / √(V/12)                           the statistic, corrected, as a magnitude
+ *   significant at α   ⟺   |U − n₁n₂/2| − 1/2 ≥ z_α·√(V/12)      σ > 0 for n₁, n₂ ≥ 1, so this is safe
+ *                      ⟺   |D|/2 − 1/2 ≥ z_α·√(V/12)             U − n₁n₂/2 = D/2
+ *                      ⟺   (|D| − 1)/2 ≥ z_α·√(V/12)             and |D| − 1 is an integer, so C = max(0, |D| − 1)
+ *                      ⟺   C ≥ z_α·√(4V/12) = z_α·√(V/3)         the 2 goes under the root as a 4
+ *                      ⟺   C² ≥ z_α²·V/3                         both sides non-negative, so squaring is faithful
+ *                      ⟺   3·C² ≥ z_α²·V
+ *                      ⟺   3·C² ≥ Z_BP²·V/10⁸                    z_α = Z_BP/10⁴, so z_α² = Z_BP²/10⁸
+ *                      ⟺   3·10⁸·C² ≥ Z_BP²·V                    and now every term is an integer
  *
  * The last step is what makes it exact. The dividing-by-10⁸ form one line above is algebraically the same test but
  * is not an integer one, so the 10⁸ moves to the left-hand side rather than staying as a divisor.
  *
- * D² is why this is two-tailed with nothing extra: squaring loses the direction, so uDoubled and 2n₁n₂ − uDoubled —
- * a result as far above the null midpoint as the other is below it — can only ever bracket the same.
+ * The max(0, …) in C keeps the expression faithful to the derivation: squaring is what makes this two-tailed, and
+ * squaring is also what would turn a |D| of 0 — a result sitting exactly on the null midpoint — into a positive C²
+ * of 1 if the clamp were missing. It is defence in depth and NOT currently observable, which is worth saying plainly
+ * rather than claiming a test for: without it the left side at |D| = 0 would be 3·10⁸, and the smallest right side
+ * MW_MIN_GROUP admits is Z_BP²·V at n₁ = n₂ = 8, which is 384 160 000 · 1088 = 417 966 080 000. The verdict cannot
+ * change, so no test can kill the clamp, and critical.test.ts asserts that inequality instead — if the group floor
+ * is ever lowered far enough for the clamp to matter, that assertion is what fails and sends the reader here.
+ *
+ * C² is why this is two-tailed with nothing extra: C depends on |D|, so uDoubled and 2n₁n₂ − uDoubled — a result as
+ * far above the null midpoint as the other is below it — can only ever bracket the same.
  */
 export function mannWhitneyBracket(uDoubled: number, n1: number, n2: number): Bracket {
   assertInt(uDoubled, 'uDoubled')
@@ -177,7 +211,9 @@ export function mannWhitneyBracket(uDoubled: number, n1: number, n2: number): Br
   }
   if (n1 < MW_MIN_GROUP || n2 < MW_MIN_GROUP) return 'none'
   const dBig = BigInt(uDoubled - pairs)
-  const left = VARIANCE_DIVISOR_AFTER_DOUBLING * BASIS_POINTS_SQUARED * dBig * dBig
+  const dAbs = dBig < 0n ? -dBig : dBig
+  const c = dAbs > 0n ? dAbs - 1n : 0n // C = max(0, |D| − 1): the continuity correction, clamped
+  const left = VARIANCE_DIVISOR_AFTER_DOUBLING * BASIS_POINTS_SQUARED * c * c
   const v = BigInt(n1) * BigInt(n2) * BigInt(n1 + n2 + 1)
   const z01 = BigInt(Z_BP['p<0.01'])
   if (left >= z01 * z01 * v) return 'p<0.01'
@@ -194,10 +230,10 @@ export function mannWhitneyBracket(uDoubled: number, n1: number, n2: number): Br
  * about 5, and that is the caller's gate to enforce (§12 asks for ≥ 20 impulse-tagged spends and ≥ 30 spends with
  * both fields); nothing here can stand in for it.
  *
- * A df the table does not carry THROWS rather than returning 'none'. 'none' means "the evidence is too weak to call",
- * and a df of 9 is not weak evidence — it is a missing constant, and returning 'none' would bury a whole
- * relationship of §12's battery as permanently unremarkable. Reason → worthwhile can reach df well above 6 as soon
- * as the owner has several purchase reasons, so this is a live case and not a theoretical one.
+ * A df the table does not carry THROWS rather than returning 'none'. 'none' means "the evidence is too weak to
+ * call", and a df of 21 is not weak evidence — it is a missing constant, and returning 'none' would bury a whole
+ * relationship of §12's battery as permanently unremarkable, which is the same silent corruption a per-sample-size
+ * table of rank criticals was rejected for.
  */
 export function chiSquareBracket(chiScaled: number, df: number): Bracket {
   assertInt(chiScaled, 'chiScaled')
