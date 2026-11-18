@@ -1,7 +1,16 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { ALPHA_BP, type Bracket, MW_MIN_GROUP, Z_BP, chiSquareBracket, mannWhitneyBracket, spearmanBracket } from './critical'
+import {
+  ALPHA_BP,
+  type Bracket,
+  CHI_TABLE_MAX_DF,
+  MW_MIN_GROUP,
+  Z_BP,
+  chiSquareBracket,
+  mannWhitneyBracket,
+  spearmanBracket,
+} from './critical'
 import { CHI_SCALE } from './stats'
 
 // How much a bracket claims, so "never weaker than" is something a test can assert.
@@ -353,6 +362,15 @@ describe('critical: significance as a squared integer comparison', () => {
     expect(() => chiSquareBracket(500000, 0)).toThrow(/df 1 to 20/)
     expect(() => chiSquareBracket(500000, -1)).toThrow(/df 1 to 20/)
     expect(chiSquareBracket(500000, 20)).toBe('p<0.001') // the last row the table does carry still answers
+    // CHI_TABLE_MAX_DF is what lets a caller refuse a too-wide table instead of being thrown at, so it has to be a
+    // VIEW of the table and not a third place the number lives. Pinned from both sides through the only window this
+    // module offers: the ceiling must answer and one past it must throw. A constant that drifted above the rows
+    // would make the second line pass where it should throw; one that drifted below would make the first line
+    // throw. The row count and the export therefore cannot disagree without reddening this.
+    expect(CHI_TABLE_MAX_DF).toBe(20)
+    expect(chiSquareBracket(500000, CHI_TABLE_MAX_DF)).toBe('p<0.001')
+    expect(() => chiSquareBracket(500000, CHI_TABLE_MAX_DF + 1)).toThrow(RangeError)
+    expect(() => chiSquareBracket(500000, CHI_TABLE_MAX_DF + 1)).toThrow(`df 1 to ${CHI_TABLE_MAX_DF}`)
   })
 
   it('refuses a statistic it cannot compare exactly', () => {

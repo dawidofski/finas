@@ -158,6 +158,18 @@ const CHI_CRIT: readonly { readonly p001: number; readonly p01: number; readonly
 ]
 
 /**
+ * The largest df the table carries, READ OFF the table rather than written down again — so extending CHI_CRIT moves
+ * this with it and no caller can go on refusing at an old ceiling.
+ *
+ * It exists because chiSquareBracket throws above the ceiling by design, and a caller that would rather say "too
+ * many categories" on the screen than throw needs to know where the ceiling is BEFORE it calls. contingency.ts is
+ * that caller, and it had declared its own CHI_TABLE_MAX_DF = 20 — precisely the kind of copy that goes stale in
+ * silence, and it had already proved it: a ceiling of 19 first survived that module's own mutation testing. Import
+ * this rather than restate it.
+ */
+export const CHI_TABLE_MAX_DF = CHI_CRIT.length
+
+/**
  * BigInt, not Number, for the Mann–Whitney comparison only. Its left side is 3·10⁸·(2U − n₁n₂)², which passes
  * Number.MAX_SAFE_INTEGER at about n₁n₂ = 11 000 — two groups of a hundred annotated spends each, well inside what a
  * year of real data gives. Throwing there would make the module useless on the owner's own history, and rounding
@@ -290,7 +302,7 @@ export function chiSquareBracket(chiScaled: number, df: number): Bracket {
   }
   const row = CHI_CRIT[df - 1]
   if (row === undefined) {
-    throw new RangeError(`no chi-square critical for df ${df}: the table carries df 1 to ${CHI_CRIT.length}`)
+    throw new RangeError(`no chi-square critical for df ${df}: the table carries df 1 to ${CHI_TABLE_MAX_DF}`)
   }
   if (chiScaled >= row.p001) return 'p<0.001'
   if (chiScaled >= row.p01) return 'p<0.01'
