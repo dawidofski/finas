@@ -245,7 +245,8 @@ describe('amount clustering edges', () => {
   // an amount joins a cluster when within max(100 cents, 5% of the cluster median), integer arithmetic
   const joined = (base: number, other: number) => {
     const r = detectRecurring([...series('m', 30, 3, -base), row('m', addDays('2026-01-01', 90), -other)])
-    return r.length === 1 && r[0]?.occurrences === 4
+    // joined, not chained as a price change: a chained outlier would also make 4 occurrences but reports a change
+    return r.length === 1 && r[0]?.occurrences === 4 && r[0]?.amountChanged === null
   }
 
   it('joins an amount exactly 100 cents from a 10,00 payment, not 101', () => {
@@ -269,5 +270,50 @@ describe('amount clustering edges', () => {
     const r = detectRecurring([...series('m', 30, 3, -1000), row('m', '2026-04-10', -9000)])
     expect(r).toHaveLength(1)
     expect(r[0]).toMatchObject({ occurrences: 3, amountCents: 1000 })
+  })
+
+  describe('a price change is one payment, not a stopped one and a new one', () => {
+    it('chains a 30% rise into one series: the amount is the new one and the change is reported', () => {
+      // Four payments at 9,99, then two at 12,99, all 30 days apart.
+      const rows = [...series('m', 30, 4, -999), ...series('m', 30, 2, -1299, '2026-05-01')]
+      const r = detectRecurring(rows)
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({
+        occurrences: 6, frequency: 'monthly', amountCents: 1299, amountChanged: { fromCents: 999, toCents: 1299 }, lastSeenDate: '2026-05-31',
+      })
+    })
+
+    it('needs no minimum of its own for the later part: one payment at the new price is enough', () => {
+      const rows = [...series('m', 30, 3, -999), row('m', '2026-04-01', -1299)]
+      const r = detectRecurring(rows)
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ occurrences: 4, amountCents: 1299, amountChanged: { fromCents: 999, toCents: 1299 } })
+    })
+
+    it('keeps two subscriptions that run at the same time at one merchant separate', () => {
+      const rows = [...series('m', 30, 4, -999), ...series('m', 30, 4, -1299, '2026-01-10')]
+      const r = detectRecurring(rows)
+      expect(r.map((d) => d.amountCents)).toEqual([999, 1299])
+      expect(r.every((d) => d.occurrences === 4 && d.amountChanged === null)).toBe(true)
+    })
+
+    it('does not chain when the first payment at the new price is not where the cadence puts it', () => {
+      const rows = [...series('m', 30, 3, -999), row('m', '2026-06-01', -1299)]
+      const r = detectRecurring(rows)
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ occurrences: 3, amountCents: 999 })
+    })
+
+    it('chains a rise followed by a real stop, and the last payment is the true last one', () => {
+      const rows = [...series('m', 30, 3, -999), ...series('m', 30, 2, -1299, '2026-04-01')]
+      const r = detectRecurring(rows)
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ occurrences: 5, lastSeenDate: '2026-05-01', amountCents: 1299, expectedNextDate: '2026-05-31' })
+    })
+
+    it('reports the latest amount as the amount after a sustained change within one cluster', () => {
+      const r = one([...series('m', 30, 4, -1000), row('m', '2026-05-01', -1090), row('m', '2026-05-31', -1090)])
+      expect(r).toMatchObject({ amountCents: 1090, amountChanged: { fromCents: 1000, toCents: 1090 } })
+    })
   })
 })

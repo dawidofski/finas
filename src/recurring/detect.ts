@@ -86,6 +86,45 @@ function sustainedChange(amounts: readonly number[]): { fromCents: number; toCen
   return up || down ? { fromCents: m, toCents: last } : null
 }
 
+interface Cluster { merchantId: string; payments: Payment[]; median: number }
+
+/**
+ * Groups clusters into series. Two clusters at one merchant are ONE payment whose price changed when they do not overlap in time
+ * (every payment of the earlier is before every payment of the later) and the gap from the earlier series' last payment to the
+ * later cluster's first fits the earlier series' own cadence band, so the later one is where the cadence says the next payment
+ * would fall. The earlier series needs at least two payments to have a cadence at all; the later part needs no minimum of its
+ * own, because the series carries the occurrences. Two subscriptions that run at the same time overlap in time and stay
+ * separate. Clusters are taken in order of their first payment, and each joins the open series with the smallest such gap.
+ */
+function seriesOf(clusters: readonly Cluster[]): Cluster[][] {
+  const out: Cluster[][] = []
+  const byMerchant = new Map<string, Cluster[]>()
+  for (const c of clusters) byMerchant.set(c.merchantId, [...(byMerchant.get(c.merchantId) ?? []), c])
+  for (const list of byMerchant.values()) {
+    const ordered = [...list].sort((a, b) => ((a.payments[0] as Payment).date < (b.payments[0] as Payment).date ? -1 : (a.payments[0] as Payment).date > (b.payments[0] as Payment).date ? 1 : a.median - b.median))
+    const open: Cluster[][] = []
+    for (const c of ordered) {
+      const first = (c.payments[0] as Payment).date
+      let best: Cluster[] | null = null
+      let bestGap = 0
+      for (const s of open) {
+        const pays = s.flatMap((x) => x.payments)
+        const lastDate = (pays[pays.length - 1] as Payment).date
+        if (pays.length < 2 || lastDate >= first) continue
+        const gaps: number[] = []
+        for (let i = 1; i < pays.length; i++) gaps.push(daysBetween((pays[i - 1] as Payment).date, (pays[i] as Payment).date))
+        const { frequency } = classify(gaps, medianOf(gaps) ?? 0)
+        const band = BANDS.find((b) => b.frequency === frequency)
+        const gap = daysBetween(lastDate, first)
+        if (band && gap >= band.lo && gap <= band.hi && (best === null || gap < bestGap)) { best = s; bestGap = gap }
+      }
+      if (best) best.push(c)
+      else { const s = [c]; open.push(s); out.push(s) }
+    }
+  }
+  return out
+}
+
 /**
  * Finds recurring payments from the gaps between payments to one merchant. Pure: no database, no clock.
  *
@@ -106,12 +145,12 @@ export function detectRecurring(rows: readonly { merchantId: string; valueDate: 
     .map((r) => ({ merchantId: r.merchantId, date: r.valueDate, amount: Math.abs(r.amountCents) }))
     .sort((a, b) => (a.merchantId < b.merchantId ? -1 : a.merchantId > b.merchantId ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : a.amount - b.amount))
 
-  const clusters: { merchantId: string; payments: Payment[]; median: number }[] = []
-  const open = new Map<string, typeof clusters>()
+  const clusters: Cluster[] = []
+  const open = new Map<string, Cluster[]>()
   for (const r of sorted) {
     let list = open.get(r.merchantId)
     if (!list) { list = []; open.set(r.merchantId, list) }
-    let best: (typeof clusters)[number] | null = null
+    let best: Cluster | null = null
     let bestDistance = 0
     for (const c of list) {
       const distance = Math.abs(r.amount - c.median)
@@ -127,25 +166,33 @@ export function detectRecurring(rows: readonly { merchantId: string; valueDate: 
     }
   }
 
+  // A price change that leaves the amount tolerance starts a new cluster. Chain such clusters into one series: see seriesOf.
   const out: Detected[] = []
-  for (const c of clusters) {
-    const n = c.payments.length
-    const last = c.payments[n - 1]
+  for (const series of seriesOf(clusters)) {
+    const payments = series.flatMap((c) => c.payments)
+    const n = payments.length
+    const last = payments[n - 1]
     if (n < MIN_OCCURRENCES || !last) continue
     const gaps: number[] = []
-    for (let i = 1; i < n; i++) gaps.push(daysBetween((c.payments[i - 1] as Payment).date, (c.payments[i] as Payment).date))
+    for (let i = 1; i < n; i++) gaps.push(daysBetween((payments[i - 1] as Payment).date, (payments[i] as Payment).date))
     const medianGap = medianOf(gaps) ?? 0
     const { frequency, inBand } = classify(gaps, medianGap)
+    const tail = series[series.length - 1] as Cluster
+    const before = series[series.length - 2]
+    // Chained: the typical amount of the earlier part against the later part. Within one cluster: the sustained-change rule.
+    const change = before ? { fromCents: before.median, toCents: tail.median } : sustainedChange(payments.map((p) => p.amount))
+    // After a change the current amount is the new one, so a cost per month is never worked out from the old price.
+    const amountCents = change ? change.toCents : tail.median
     out.push({
-      merchantId: c.merchantId,
-      amountCents: c.median,
-      toleranceCents: toleranceOf(c.median),
+      merchantId: tail.merchantId,
+      amountCents,
+      toleranceCents: toleranceOf(amountCents),
       frequency,
       occurrences: n,
       lastSeenDate: last.date,
       expectedNextDate: frequency === 'irregular' ? null : addDays(last.date, medianGap),
       matchScoreBp: frequency === 'irregular' ? 0 : matchScoreBp(inBand, gaps.length, n),
-      amountChanged: sustainedChange(c.payments.map((p) => p.amount)),
+      amountChanged: change,
     })
   }
   return out.sort((a, b) =>
