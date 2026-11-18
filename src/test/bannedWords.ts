@@ -69,6 +69,25 @@ export const BANNED_LISTS: readonly BannedList[] = [
 ]
 
 /**
+ * Wording that presumes what the owner can afford (anti-goal A1). "just" and "only" are ordinary words, so this list
+ * matches the PRESUMING usages ("just stop", "you only need to", "simply", "cut back on luxuries"), not the words.
+ * OWNED HERE, unlike the three above: no test file carries this rule, so a copy elsewhere would be the first drift.
+ */
+export const meansAssumption = /\b(simply|just (stop|skip|cut|drop|save|put|set|use|say|try|don'?t|stick|spend less)|(you|you'?ll) (only|just) (need|have)|only (need|have) to|cut back on (the )?luxur\w*|should be able to|(it'?s|is) easy to|easily (afford|save|cut))\b/i
+/** Judging wording (anti-goal A1): the app describes what happened, it does not grade the person who did it. */
+export const shamingWords = /\b(should(n'?t)?|waste[ds]?|wasteful|overspen[dt]\w*|bad (habit|decision|choice)s?|irresponsible|reckless|guilty|lazy|careless|splurg\w*|blew)\b/i
+
+/**
+ * The owner-facing wording rules owned in THIS file. Kept apart from BANNED_LISTS, which names the three lists read
+ * out of test files (and which src/battery/finding.test.ts pins at three), so adding a rule here changes no count
+ * that file asserts. Probed on import exactly like BANNED_LISTS.
+ */
+export const WORDING_LISTS: readonly BannedList[] = [
+  { name: 'meansAssumption', pattern: meansAssumption, forbids: 'you only need to', allows: 'Only the card payments are counted, just as the bank lists them' },
+  { name: 'shamingWords', pattern: shamingWords, forbids: 'a wasted month', allows: 'a plain sentence about your own money' },
+]
+
+/**
  * Throws unless every list still matches a word it exists to forbid and still leaves ordinary wording alone.
  *
  * A pattern matching NOTHING would make every assertion in every importer pass on any wording at all; one matching
@@ -101,3 +120,5 @@ export function assertNotVacuous(lists: readonly BannedList[]): void {
  * single loop at import and the failure it prevents is a whole file of assertions that silently pass on anything.
  */
 assertNotVacuous(BANNED_LISTS)
+
+assertNotVacuous(WORDING_LISTS)
