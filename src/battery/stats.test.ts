@@ -201,6 +201,28 @@ describe('battery statistics (integer only)', () => {
     expect(spearmanRhoBp([1, 2, 3, 4], [1, 2, 3])).toBeNull()
   })
 
+  it('returns null from the rank tests given a value that is not an integer, rather than ranking it', () => {
+    // NaN is the dangerous one, and it fails differently in each test. Ranking: NaN compares false against
+    // everything, so it sorts into a tie group of its own and rho comes back as a confident number computed over
+    // nonsense ranks. Pairwise: NaN is neither greater nor less than anything, so it scores as a TIE against every
+    // value it meets. Both of those read as answers, which is the one thing this module exists not to do.
+    expect(spearmanRhoBp([1, 2, Number.NaN], [1, 2, 3])).toBeNull()
+    expect(spearmanRhoBp([1, 2, 3], [1, Number.NaN, 3])).toBeNull()
+    expect(mannWhitneyU([1, Number.NaN], [2, 3])).toBeNull()
+    expect(mannWhitneyU([1, 2], [Number.NaN, 3])).toBeNull()
+    // And the other two classes, for the reason cramersVBp already checks them: an Infinity, a fraction and a value
+    // past the safe-integer range all sail through any bounds comparison.
+    expect(spearmanRhoBp([1, 2, Number.POSITIVE_INFINITY], [1, 2, 3])).toBeNull()
+    expect(spearmanRhoBp([1, 2, 5 / 2], [1, 2, 3])).toBeNull()
+    expect(spearmanRhoBp([1, 2, Number.MAX_SAFE_INTEGER + 2], [1, 2, 3])).toBeNull()
+    expect(mannWhitneyU([1, Number.POSITIVE_INFINITY], [2, 3])).toBeNull()
+    expect(mannWhitneyU([1, 5 / 2], [2, 3])).toBeNull()
+    expect(mannWhitneyU([1, Number.MAX_SAFE_INTEGER + 2], [2, 3])).toBeNull()
+    // The neighbouring integer series still answer, so the nulls above are the check and not a broken call.
+    expect(spearmanRhoBp([1, 2, 3], [1, 2, 3])).toBe(10000)
+    expect(mannWhitneyU([1, 2], [2, 3])).toEqual({ uDoubled: 1, rBp: -7500 })
+  })
+
   it('counts Mann-Whitney U as pairwise wins, and agrees with the rank-sum identity', () => {
     const a = [3, 5, 9]
     const b = [1, 4, 6, 8]
@@ -314,6 +336,39 @@ describe('battery statistics (integer only)', () => {
     expect(cramersVBp(12152777777, 7000000, 2, 2)).toBe(4166)
   })
 
+  it('floors each chi-square cell, so the statistic is never overstated', () => {
+    // [[1,2],[3,4]]: rows 3 and 7, columns 4 and 6, total 10. Each cell is CHI_SCALE * O^2 * total / (row*col):
+    //   (0,0) 10000 *  1 * 10 / (3*4) =  100000/12 =  8333.333 -> floor  8333
+    //   (0,1) 10000 *  4 * 10 / (3*6) =  400000/18 = 22222.222 -> floor 22222
+    //   (1,0) 10000 *  9 * 10 / (7*4) =  900000/28 = 32142.857 -> floor 32142  (to NEAREST this is 32143)
+    //   (1,1) 10000 * 16 * 10 / (7*6) = 1600000/42 = 38095.238 -> floor 38095
+    //   sum = 100792 ; minus CHI_SCALE*total = 100000 -> 792
+    //
+    // Independently, the 2x2 closed form: total*(ad-bc)^2 / (r1*r2*c1*c2) = 10*(1*4 - 2*3)^2 / (3*7*4*6)
+    //   = 10*4/504 = 5/63 = 0.0793650793..., which is 793.65 in CHI_SCALE units.
+    // Flooring four cells loses 1.65 of a unit and lands BELOW the truth, at 792; rounding to nearest lands at 793.
+    // The point is the direction, not the 1 unit: 792 < 793.65, and a chi-square can never be handed to
+    // chiSquareBracket larger than it really is.
+    expect(chiSquareScaled([[1, 2], [3, 4]])).toEqual({ chiScaled: 792, df: 1 })
+  })
+
+  it('clamps a chi-square at zero rather than reporting the negative that flooring can produce', () => {
+    // [[34,21],[21,13]] is about as close to independent as a 2x2 of this size reaches: ad - bc = 34*13 - 21*21 = 1.
+    // Rows 55 and 34, columns 55 and 34, total 89, and r1*r2*c1*c2 = 55^2 * 34^2 = 3025 * 1156 = 3496900, so
+    //   chi-square = 89 * 1^2 / 3496900 = 0.00002545..., which is 0.2545 in CHI_SCALE units.
+    // The four cells lose more than that between them when floored:
+    //   (0,0) 1028840000/3025 = 340112.3967 -> 340112   (loses 0.3967)
+    //   (0,1)  392490000/1870 = 209887.7005 -> 209887   (loses 0.7005)
+    //   (1,0)  392490000/1870 = 209887.7005 -> 209887   (loses 0.7005)
+    //   (1,1)  150410000/1156 = 130112.4567 -> 130112   (loses 0.4567)
+    //   sum = 889998 ; minus CHI_SCALE*total = 890000 -> -2
+    // 0.2545 of chi-square less 2.2544 of flooring loss is -2 exactly. A negative chi-square does not exist, and
+    // chiSquareBracket throws on one rather than bracketing it, so it is clamped: zero is the honest floor here and
+    // the conservative answer, and it is what an independent table reports too.
+    expect(chiSquareScaled([[34, 21], [21, 13]])).toEqual({ chiScaled: 0, df: 1 })
+    expect(cramersVBp(0, 89, 2, 2)).toBe(0)
+  })
+
   it('returns null for chi-square when a row or column is empty', () => {
     expect(chiSquareScaled([[0, 0], [3, 4]])).toBeNull() // empty row: the expected counts in it would be 0
     expect(chiSquareScaled([[3, 4], [0, 0]])).toBeNull()
@@ -351,6 +406,21 @@ describe('battery statistics (integer only)', () => {
     const independent = chiSquareScaled([[2, 4], [3, 6]])
     expect(independent).toEqual({ chiScaled: 0, df: 1 })
     expect(cramersVBp(independent?.chiScaled ?? -1, 15, 2, 2)).toBe(0)
+  })
+
+  it('floors the ratio as well as the root, so Cramers V is never reported high', () => {
+    // chiScaled 1 on 20000 observations with k = 1. The ratio is CHI_SCALE * 1 / (20000 * 1) = 10000/20000 = 1/2,
+    // exactly a half. Rounded to nearest that is 1, and isqrt(1) = 1, so V read 1 bp. The truth is
+    //   sqrt((1/CHI_SCALE) / 20000) = sqrt(5 * 10^-9) = 0.0000707106..., which is 0.70711 bp
+    // so 1 bp was ABOVE it. Floored, the ratio is 0 and V reads 0 bp, below the truth as every figure here must be.
+    // The root alone could not fix this: sqrt(y + 1/2) - sqrt(y) grows as y falls, to 0.29289... at y = 0, so half a
+    // unit under the root is always worth a fraction of a basis point. Small, and the wrong direction.
+    expect(cramersVBp(1, 20000, 2, 2)).toBe(0)
+    // The worked examples are untouched by the flooring, because none of their ratios carried a fraction at all:
+    expect(cramersVBp(121527, 70, 2, 2)).toBe(4166) // 1215270000/70 = 17361000 exactly; 4166^2 <= it < 4167^2
+    // And one that does carry a fraction, from the floored table above: V = 2/sqrt(504) = 0.0890872... = 890.87 bp,
+    // and 7920000/10 = 792000 with 889^2 = 790321 <= 792000 < 890^2 = 792100, so 889 - below 890.87, as promised.
+    expect(cramersVBp(792, 10, 2, 2)).toBe(889)
   })
 
   it('returns null for Cramers V where there is no V to report', () => {
@@ -398,6 +468,7 @@ describe('battery statistics (integer only)', () => {
     expect(code.split('\n').filter((l) => l.includes('/')).map((l) => l.trim())).toEqual([
       'const step = (x: bigint): bigint => (x + n / x) / 2n',
       'const q = n / d',
+      'return numerator / denominator',
     ])
     // Stronger than a list of banned functions: the module calls NO Math function at all except Math.min - so no
     // floor, no round, no ceil, no sqrt, no pow, and nothing added later can slip in under a name nobody listed.

@@ -93,6 +93,23 @@ export function divRoundBig(numerator: bigint, denominator: bigint): bigint {
 }
 
 /**
+ * floor(numerator / denominator) for a NON-NEGATIVE numerator and a POSITIVE denominator - BigInt division truncates
+ * toward zero, which is the floor only on those operands, and both callers hand it counts or sums of squares.
+ *
+ * Rounding to nearest is wrong in the two places this is used, and not by a hair of accuracy: rounding UP a
+ * chi-square or a Cramer's V can overstate an effect or tip a statistic over a critical value, and a figure declared
+ * significant when it is not is the one thing §12's design exists to prevent. Flooring can only ever understate.
+ */
+function divFloorBig(numerator: bigint, denominator: bigint): bigint {
+  return numerator / denominator
+}
+
+/** Whether every value is a safe integer: the statistics refuse a NaN, an Infinity or a fraction rather than ranking it. */
+function allIntegers(values: readonly number[]): boolean {
+  return values.every((v) => Number.isSafeInteger(v))
+}
+
+/**
  * floor(sqrt(n)) for a non-negative safe integer n, exactly - no Math.sqrt, so no float can round the answer up to a
  * value whose square exceeds n. Throws on a negative or non-integer argument rather than inventing a root for it.
  * The work is isqrtBig's; the root of a safe integer is itself always a safe integer, so the conversion back is lossless.
@@ -164,6 +181,8 @@ export function spearmanRhoBp(xs: readonly number[], ys: readonly number[]): num
   const n = xs.length
   if (n !== ys.length) return null
   if (n < 3) return null
+  // A NaN sorts into a group of its own, so an unchecked NaN would come back as a confident rho over nonsense ranks.
+  if (!allIntegers(xs) || !allIntegers(ys)) return null
   const rx = doubledRanks(xs)
   const ry = doubledRanks(ys)
   if (!varies(rx) || !varies(ry)) return null
@@ -210,6 +229,8 @@ export function mannWhitneyU(a: readonly number[], b: readonly number[]): { uDou
   const n1 = a.length
   const n2 = b.length
   if (n1 === 0 || n2 === 0) return null
+  // A NaN compares false both ways, so an unchecked NaN would silently score as a tie against every value it met.
+  if (!allIntegers(a) || !allIntegers(b)) return null
   let wins = 0
   let losses = 0
   for (const x of a) {
@@ -236,9 +257,21 @@ export function mannWhitneyU(a: readonly number[], b: readonly number[]): { uDou
  *
  *     sum((O-E)^2/E) = sum(O^2/E) - 2*total + total = total * sum(O^2 / (row*col)) - total
  *
- * Each cell's term is correctly rounded to one unit of 1/CHI_SCALE and the final subtraction is exact, so the result
- * is within (cells / 2) units of the true chi-square - under 0.001 for any table §12 builds. An exactly independent
- * table gives exactly 0, with no rounding at all, because then O = row*col/total and each term is the integer O.
+ * Each cell's term is FLOORED to a unit of 1/CHI_SCALE and the final subtraction is exact, so the result is never
+ * above the true chi-square and is below it by less than `cells` units. The widest table §12 builds is the
+ * reason-against-worthwhile one: a 2-value worthwhile column against up to 21 reason rows, which is the df-20 shape
+ * critical.ts's table of criticals tops out at, so 42 cells - under 42 / CHI_SCALE = 0.0042 of a chi-square.
+ *
+ * Flooring rather than rounding to nearest doubles that worst case and is still the right trade, because it makes
+ * the error ONE-SIDED. Rounding to nearest could overstate chi-square by up to cells/2 units, and critical.ts rounds
+ * its criticals up by at most one unit, so a statistic a little under its critical value could be bracketed as
+ * significant. A microscopic understatement costs a finding that was never there; a microscopic overstatement
+ * manufactures one.
+ *
+ * An exactly independent table still gives exactly 0, with no rounding at all, because then O = row*col/total and
+ * each term is the integer O. Going the other way, the floored terms can sum BELOW CHI_SCALE * total when the true
+ * chi-square is smaller than the flooring loss, so the result is clamped at zero: a negative chi-square does not
+ * exist, chiSquareBracket throws on one, and zero is both the honest floor and the conservative answer.
  *
  * The cell terms are accumulated as BigInt. CHI_SCALE * O^2 * total leaves the safe-integer range at around 20000
  * annotated rows, and a THROWN RangeError there is not a wrong number, it is an exception on the Intelligence screen
@@ -282,10 +315,11 @@ export function chiSquareScaled(table: readonly number[][]): { chiScaled: number
       const colSum = colSums[j]
       if (colSum === undefined) return null
       const o = BigInt(observed)
-      sumScaled += divRoundBig(scaleBig * o * o * totalBig, BigInt(rowSum) * BigInt(colSum))
+      sumScaled += divFloorBig(scaleBig * o * o * totalBig, BigInt(rowSum) * BigInt(colSum))
     }
   }
-  return { chiScaled: Number(sumScaled - scaleBig * totalBig), df: (rows - 1) * (cols - 1) }
+  const chiScaled = sumScaled - scaleBig * totalBig
+  return { chiScaled: chiScaled < 0n ? 0 : Number(chiScaled), df: (rows - 1) * (cols - 1) }
 }
 
 /**
@@ -301,7 +335,14 @@ export function chiSquareScaled(table: readonly number[][]): { chiScaled: number
  * above bound what comes in, and BigInt then bounds nothing on the way to the root, so no input that reaches here
  * can meet a ceiling. V itself never exceeds 10000 bp, so the answer always returns to a Number.
  *
- * isqrtBig floors, so V is reported at most one basis point low and never high: an effect size is never overstated.
+ * BOTH steps floor - the ratio as well as the root - so the reported V is NEVER ABOVE the true V. The root alone was
+ * not enough: rounding the ratio to nearest could add half a unit under the root, and sqrt(y + 1/2) - sqrt(y) peaks
+ * at 0.2929 as y goes to zero, so cramersVBp(1, 20000, 2, 2) reported 1 bp where the truth is 0.7071. That is tiny
+ * and it is the wrong direction, and owner-facing copy states this figure is rounded down, so the claim has to hold
+ * rather than be softened to fit: floor(sqrt(floor(Q))) <= sqrt(Q) for every Q, which is the whole argument.
+ *
+ * The understatement is under one basis point from the root, plus what flooring the ratio costs under it - about
+ * 1/(2*V) of a basis point, so below 0.005 bp once V is past 100 bp. V is never overstated.
  */
 export function cramersVBp(chiScaled: number, total: number, rows: number, cols: number): number | null {
   if (!Number.isSafeInteger(chiScaled) || chiScaled < 0) return null
@@ -311,5 +352,5 @@ export function cramersVBp(chiScaled: number, total: number, rows: number, cols:
   if (!Number.isSafeInteger(rows) || rows < 2) return null
   if (!Number.isSafeInteger(cols) || cols < 2) return null
   const k = Math.min(rows - 1, cols - 1)
-  return Number(isqrtBig(divRoundBig(BigInt(CHI_SCALE) * BigInt(chiScaled), BigInt(total) * BigInt(k))))
+  return Number(isqrtBig(divFloorBig(BigInt(CHI_SCALE) * BigInt(chiScaled), BigInt(total) * BigInt(k))))
 }
