@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BANNED_LISTS, WORDING_LISTS, assertNotVacuous, causalWords, jargonWords, meansAssumption, noJargon, shamingWords } from '../test/bannedWords'
 import { ALL_CHALLENGE_IDS, ALL_RECOMMENDATION_IDS, challengesFor, noteFor } from './education'
@@ -116,6 +118,57 @@ describe('education', () => {
     for (const s of ['Only card payments are counted.', 'It is easy to lose track of a month.', 'Prices are just as the bank lists them.', 'Pick one category and set its line.']) {
       expect(s, s).not.toMatch(meansAssumption)
       expect(s, s).not.toMatch(shamingWords)
+    }
+  })
+
+  it('makes no claim about people in general, since the app knows one person\'s records', () => {
+    for (const { where, text } of everyString()) {
+      expect(text, where).not.toMatch(/\b(people|most|often|usually|typically|tend|tends|rarely|generally|everyone|normally|commonly)\b/i)
+    }
+  })
+
+  it('speaks of the regret note in the owner\'s own terms, asks rather than asserts, and counts nothing', () => {
+    const body = noteFor('regret-cluster')?.body ?? ''
+    expect(body).toMatch(/not worth it/)
+    expect(body).not.toMatch(/regret/i)
+    expect(body).not.toMatch(/\b(several|many|few|multiple|couple|all)\b/i)
+    expect(body).toMatch(/whether any of these were bought quickly/)
+    expect(noteFor('regret-cluster')?.topic).toBe('impulse-spending')
+  })
+
+  it('does not presume an unusual payment was a choice', () => {
+    const body = noteFor('unusual-spend')?.body ?? ''
+    expect(body).toMatch(/not choices/)
+    expect(body).not.toMatch(/\b(would choose|choose to)\b/i)
+  })
+
+  it('probes the lists it owns when bannedWords is imported, as its own comment says', () => {
+    // The probe runs at import and is not otherwise observable, so the call is read out of the source.
+    const source = readFileSync(resolve(import.meta.dirname, '../test/bannedWords.ts'), 'utf8')
+    expect(source).toMatch(/^assertNotVacuous\(WORDING_LISTS\)$/m)
+  })
+
+  it('fits each challenge to the purchase it follows', () => {
+    // An unusual payment has already happened and may not have been a want.
+    expect(challengesFor('unusual-spend', true).map((c) => c.id)).not.toContain('twenty-four-hour-rule')
+    expect(challengesFor('regret-cluster', true).map((c) => c.id)).toContain('twenty-four-hour-rule')
+    const nsd = challengesFor('overspent-category', true).find((c) => c.id === 'no-spend-days')
+    expect(nsd?.body).toMatch(/groceries/)
+    // Says what is true now, not what is coming.
+    const why = challengesFor('small-purchases-add-up', false).find((c) => c.id === 'subscription-review')?.why ?? ''
+    expect(why).not.toMatch(/\b(will|soon|later|once|yet to|coming)\b/i)
+    expect(why).toMatch(/cannot list subscriptions/)
+  })
+
+  it('catches the wording the review probed, curly apostrophes included', () => {
+    for (const s of ['You ought to cut back.', 'Just buy less.', 'Why not just stop?', 'All you need to do is save.', 'It’s simple to save.', 'If you can spare it.', 'Merely a habit.', 'You can afford it.', 'Just don’t buy it.']) {
+      expect(s, s).toMatch(meansAssumption)
+    }
+    for (const s of ['You ought to know better.', 'A poorly judged buy.', 'Foolish.', 'Indulgent.', 'Extravagant.', 'Frivolous.', 'You are wasting money.', 'Squandered.', 'Excessive.', 'Too much on takeaway.', 'A lack of control.', 'A bad purchase.', 'You regret it.', 'You shouldn’t.']) {
+      expect(s, s).toMatch(shamingWords)
+    }
+    for (const s of ['It is easy to lose track of a month.', 'Just as the bank lists them.', 'Only the card payments are counted.']) {
+      expect(s, s).not.toMatch(meansAssumption)
     }
   })
 })

@@ -73,18 +73,18 @@ export const BANNED_LISTS: readonly BannedList[] = [
  * matches the PRESUMING usages ("just stop", "you only need to", "simply", "cut back on luxuries"), not the words.
  * OWNED HERE, unlike the three above: no test file carries this rule, so a copy elsewhere would be the first drift.
  */
-export const meansAssumption = /\b(simply|just (stop|skip|cut|drop|save|put|set|use|say|try|don'?t|stick|spend less)|(you|you'?ll) (only|just) (need|have)|only (need|have) to|cut back on (the )?luxur\w*|should be able to|(it'?s|is) easy to (save|cut|stop|skip|afford)|easily (afford|save|cut))\b/i
+export const meansAssumption = /\b(simply|merely|just (stop|skip|cut|drop|save|put|set|use|say|try|buy|spend|don['’]?t|stick)|why not just|(you|you['’]ll) (only|just) (need|have)|only (need|have) to|all you need to do|cut back on (the )?luxur\w*|(should be able|ought) to|(it['’]?s|is) (easy|simple) to (save|cut|stop|skip|afford|fix)|easily (afford|save|cut)|if you can spare|you can afford)\b/i
 /** Judging wording (anti-goal A1): the app describes what happened, it does not grade the person who did it. */
-export const shamingWords = /\b(should(n'?t)?|waste[ds]?|wasteful|overspen[dt]\w*|bad (habit|decision|choice)s?|irresponsible|reckless|guilty|lazy|careless|splurg\w*|blew)\b/i
+export const shamingWords = /\b(should(n['’]?t)?|ought to|wast(e[ds]?|ing|eful)|squander\w*|overspen[dt]\w*|bad (habit|decision|choice|purchase)s?|irresponsible|reckless|guilty|lazy|careless|splurg\w*|blew|poorly|foolish|indulgent|extravagant|frivolous|excessive|too much|lack of control|regret\w*)\b/i
 
 /**
  * The owner-facing wording rules owned in THIS file. Kept apart from BANNED_LISTS, which names the three lists read
  * out of test files (and which src/battery/finding.test.ts pins at three), so adding a rule here changes no count
- * that file asserts. Probed on import exactly like BANNED_LISTS.
+ * that file asserts. Probed on import by the `assertNotVacuous(WORDING_LISTS)` call at the foot of this file.
  */
 export const WORDING_LISTS: readonly BannedList[] = [
-  { name: 'meansAssumption', pattern: meansAssumption, forbids: 'you only need to', allows: 'Only the card payments are counted, just as the bank lists them' },
-  { name: 'shamingWords', pattern: shamingWords, forbids: 'a wasted month', allows: 'a plain sentence about your own money' },
+  { name: 'meansAssumption', pattern: meansAssumption, forbids: 'you only need to', allows: 'Only the card payments are counted, just as the bank lists them, and it is easy to lose track of a month' },
+  { name: 'shamingWords', pattern: shamingWords, forbids: 'a wasted month', allows: 'This spending went up over recent months, and the total is shown beside each purchase' },
 ]
 
 /**
@@ -121,4 +121,5 @@ export function assertNotVacuous(lists: readonly BannedList[]): void {
  */
 assertNotVacuous(BANNED_LISTS)
 
-
+/** The same probe for the lists owned here, so the comment on WORDING_LISTS is true. */
+assertNotVacuous(WORDING_LISTS)

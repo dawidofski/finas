@@ -30,32 +30,32 @@ const NOTES: Readonly<Record<RecommendationId, Note>> = {
   'overspent-category': {
     topic: 'opportunity-cost',
     title: 'What the same money could have done',
-    body: 'Every amount spent in one place is an amount that was not spent or saved somewhere else. Economists call that the opportunity cost. A line running over is a moment to look at what that money was standing in for, and to decide whether this is the trade you wanted to make. Either answer is fine.',
+    body: 'Money spent in one place is money that is not available for something else. That trade-off is called an opportunity cost. A line running over shows where it appears in your own figures, and whether the mix of what you spent on matches what matters to you is yours to say.',
   },
   'small-purchases-add-up': {
     topic: 'small-purchase-accumulation',
-    title: 'Small amounts are still amounts',
-    body: 'A single small purchase rarely gets a second look. Added together over a month they can be a noticeable part of what you spend. The total is shown so you can see the whole of it at once, and decide whether it matches what those purchases are worth to you.',
+    title: 'Small amounts and their total',
+    body: 'Each small purchase is a small amount, and the total across a month is a different figure. The total is shown here beside the individual amounts, so you can compare it with what those purchases are worth to you.',
   },
   'savings-inconsistent': {
     topic: 'savings-consistency',
-    title: 'Regular beats large',
-    body: 'Savings tend to grow most reliably when a similar amount is set aside on a similar schedule, whatever its size. Months where nothing was set aside are not a verdict. They show where a routine could be added, at whatever amount suits your situation.',
+    title: 'Saving on a schedule',
+    body: 'Saving regularly means setting aside an amount on a repeating schedule, whatever its size. Months with nothing set aside are not a verdict. In your records they mark where a routine could start, at an amount that suits your situation.',
   },
   'discretionary-rising': {
     topic: 'lifestyle-inflation',
-    title: 'When spending drifts upward',
-    body: 'Spending on wants can creep up gradually as income or habits shift, often without a single decision marking the change. Seeing it laid out over several months makes the drift visible. Whether it reflects what you want from your money is yours to judge.',
+    title: 'Spending on wants over time',
+    body: 'Lifestyle inflation is the name for spending on wants rising over time. In your records this spending has gone up over recent months, and the months are laid out so you can see by how much. Whether that matches what you want from your money is yours to judge.',
   },
   'regret-cluster': {
     topic: 'impulse-spending',
-    title: 'A pause between wanting and buying',
-    body: 'You marked several of these purchases as ones you regretted, and they share something in common. Purchases made on the spur of the moment are often the ones that look different a day later. A short pause before buying gives the wish time to settle or fade.',
+    title: 'Wanting and buying',
+    body: 'You marked some of these purchases as not worth it, and they have something in common. An impulse purchase is one made quickly, with little time between wanting and buying. A question you can ask of your own purchases is whether any of these were bought quickly. If so, a pause before buying gives you time to see whether the wish stays.',
   },
   'unusual-spend': {
     topic: 'value-of-money',
-    title: 'What an amount is worth to you',
-    body: 'The same amount can be well spent for one person and poorly spent for another. What matters is what it gave you in return. An unusual payment is a chance to ask what it bought, and whether that is how you would choose to use that amount again.',
+    title: 'What an amount gave you',
+    body: 'Value for money means what an amount gave you in return, as you measure it. An unusual payment is a chance to look at what it was for: a bill, a one-off cost, or something you chose. Whether it was worth it is for you to say, and some payments are not choices at all.',
   },
 }
 
@@ -72,7 +72,7 @@ const CHALLENGES: Readonly<Record<ChallengeId, Omit<Challenge, 'available' | 'wh
   'no-spend-days': {
     id: 'no-spend-days',
     title: 'Days with no spending',
-    body: 'Choose a few days this month on which you buy nothing beyond what is already committed. You pick how many and which days. Afterwards, you can look at how those days compare with the others.',
+    body: 'Choose a few days this month on which you buy nothing beyond essentials such as groceries, rent, bills and transport. You pick how many and which days. Afterwards, you can look at how those days compare with the others.',
   },
   'twenty-four-hour-rule': {
     id: 'twenty-four-hour-rule',
@@ -95,13 +95,13 @@ const OFFERED: Readonly<Record<RecommendationId, readonly ChallengeId[]>> = {
   'overspent-category': ['reduce-category', 'no-spend-days'],
   'small-purchases-add-up': ['twenty-four-hour-rule', 'subscription-review', 'no-spend-days'],
   'savings-inconsistent': ['savings-step-up'],
-  'unusual-spend': ['twenty-four-hour-rule'],
+  'unusual-spend': [],
   'discretionary-rising': ['reduce-category', 'no-spend-days'],
   'regret-cluster': ['twenty-four-hour-rule', 'no-spend-days'],
 }
 
 /** Said in place of silence, so a challenge that cannot run yet never reads as a bug. */
-const NEEDS_RECURRING = 'The app cannot list subscriptions yet, so it cannot show which payments repeat. This challenge will become available once it can.'
+const NEEDS_RECURRING = 'The app cannot list subscriptions yet, so it cannot show which payments repeat.'
 
 /**
  * The challenges that go with a recommendation. `subscription-review` is returned wherever it applies: with
