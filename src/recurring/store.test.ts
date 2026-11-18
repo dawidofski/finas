@@ -260,12 +260,12 @@ describe('recurring store', () => {
     await pay('m.gym', every('2026-05-01', 30, 5), 3000)
     const [v] = await recurringPayments('2026-10-20', 1)
     const read = db.recurring.toArray.bind(db.recurring)
-    const spy = vi.spyOn(db.recurring, 'toArray').mockImplementationOnce(async () => {
+    const spy = vi.spyOn(db.recurring, 'toArray').mockImplementationOnce((async () => {
       const rows = await read()
       // The owner presses "not recurring" now: after the rows were read, before the detection writes them back.
-      void Dexie.ignoreTransaction(() => dismissRecurring(v!.id))
+      void Dexie.ignoreTransaction(() => db.recurring.update(v!.id, { dismissed: true, confirmedByUser: false }))
       return rows
-    })
+    }) as never)
     await recurringPayments('2026-10-20', 2)
     spy.mockRestore()
     await new Promise((r) => setTimeout(r, 50))
