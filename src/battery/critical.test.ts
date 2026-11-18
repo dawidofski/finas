@@ -48,6 +48,92 @@ const mannWhitneyZ = (uDoubled: number, n1: number, n2: number): number => {
   return Math.max(0, deviation) / Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12)
 }
 
+/**
+ * A chi-square quantile, in floating point, so that CHI_CRIT is tied to the mathematics rather than to the care that
+ * went into typing it. The module may not do this; a test may, exactly as the long-way z oracle above does.
+ *
+ * Why it is worth the thirty lines: the table holds sixty hand-entered constants. Their CORRECTNESS is settled --
+ * three independent routes when they were computed, an independent reviewer's recomputation at 50-to-60 digits, and
+ * an audit of all sixty row comments after one was found wrong. But correctness and regression protection are
+ * different things. Six of the twenty rows had boundary tests, and the monotonic sweeps only catch an error that
+ * breaks ordering, so an off-by-one in any other row was invisible. This pins all sixty, and it pins the DIRECTION
+ * of the rounding as a property rather than as sixty literals: a row rounded to nearest instead of up fails here
+ * even though its value would be almost right.
+ *
+ * lnGamma is Lanczos (g = 7, nine coefficients); the upper tail Q(a, x) is the Numerical Recipes continued
+ * fraction, which is the branch every quantile here lands in since x > a + 1 at all three levels, so Q comes out
+ * directly rather than as 1 - P. That is a choice for margin rather than a necessity, stated honestly: forcing the
+ * series branch instead, so that Q is computed by cancellation, still reproduces all sixty entries. The series
+ * branch below is therefore unreachable for anything this test asks, and it stays only so that upperGammaQ is a
+ * correct function rather than one that happens to work over the range used here.
+ *
+ * The tightest row is df 18 at 0.05, whose true critical sits 5.7e-7 below an exact ten-thousandth; the oracle
+ * agrees with exact decimal arithmetic to about 1e-13, so there are roughly six orders of magnitude of headroom
+ * where it is thinnest.
+ */
+const LANCZOS = [
+  0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+  12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+] as const
+
+// Only ever called with a = df/2, so z >= 0.5 for every df >= 1 and the usual reflection for small z is dead
+// code here. It was in this helper until mutating its threshold changed nothing, which is how it was noticed.
+function lnGamma(z: number): number {
+  const w = z - 1
+  let x = 0
+  for (const [i, coefficient] of LANCZOS.entries()) x += i === 0 ? coefficient : coefficient / (w + i)
+  const t = w + 7.5
+  return 0.5 * Math.log(2 * Math.PI) + (w + 0.5) * Math.log(t) - t + Math.log(x)
+}
+
+/** The regularized UPPER incomplete gamma Q(a, x) = 1 - P(a, x), computed directly in the branch that matters. */
+function upperGammaQ(a: number, x: number): number {
+  if (x <= 0) return 1
+  const lnPrefix = -x + a * Math.log(x) - lnGamma(a)
+  if (x < a + 1) {
+    let term = 1 / a
+    let sum = term
+    let ap = a
+    for (let i = 0; i < 100000; i += 1) {
+      ap += 1
+      term *= x / ap
+      sum += term
+      if (Math.abs(term) < Math.abs(sum) * 1e-17) break
+    }
+    return 1 - sum * Math.exp(lnPrefix)
+  }
+  const tiny = 1e-300
+  let b = x + 1 - a
+  let c = 1e300
+  let d = 1 / b
+  let h = d
+  for (let i = 1; i < 100000; i += 1) {
+    const an = -i * (i - a)
+    b += 2
+    d = an * d + b
+    if (Math.abs(d) < tiny) d = tiny
+    c = b + an / c
+    if (Math.abs(c) < tiny) c = tiny
+    d = 1 / d
+    const delta = d * c
+    h *= delta
+    if (Math.abs(delta - 1) < 1e-17) break
+  }
+  return Math.exp(lnPrefix) * h
+}
+
+/** The alpha-level chi-square critical for df, by bisection on the upper tail. */
+function chiSquareCritical(df: number, alpha: number): number {
+  let lo = 0
+  let hi = 1000
+  for (let i = 0; i < 200; i += 1) {
+    const mid = (lo + hi) / 2
+    if (upperGammaQ(df / 2, mid / 2) > alpha) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
 describe('critical: significance as a squared integer comparison', () => {
   it('brackets Spearman by the squared comparison, either side of the 0.05 line', () => {
     // The test is rhoBp² · (n − 1) ≥ Z_BP², and at n = 20 that is a comparison against 19600² = 384 160 000:
@@ -172,6 +258,56 @@ describe('critical: significance as a squared integer comparison', () => {
     expect(chiSquareBracket(314105, 20)).toBe('p<0.05')
     expect(chiSquareBracket(375662, 20)).toBe('p<0.05')
     expect(chiSquareBracket(375663, 20)).toBe('p<0.01')
+  })
+
+  it('holds every entry of the chi-square table against a quantile computed the long way', () => {
+    // The oracle proves itself first, on the two rows that have closed forms independent of any gamma function:
+    // at df 1 the critical is z squared, and at df 2 it is -2 ln(alpha) exactly.
+    expect(chiSquareCritical(1, 0.05)).toBeCloseTo(1.959963984540054 * 1.959963984540054, 9)
+    expect(chiSquareCritical(1, 0.01)).toBeCloseTo(2.5758293035489004 * 2.5758293035489004, 9)
+    expect(chiSquareCritical(1, 0.001)).toBeCloseTo(3.2905267314918945 * 3.2905267314918945, 9)
+    expect(chiSquareCritical(2, 0.05)).toBeCloseTo(-2 * Math.log(0.05), 9)
+    expect(chiSquareCritical(2, 0.01)).toBeCloseTo(-2 * Math.log(0.01), 9)
+    expect(chiSquareCritical(2, 0.001)).toBeCloseTo(-2 * Math.log(0.001), 9)
+    // And it is not returning something constant or absurd: criticals rise with df and with strictness.
+    expect(chiSquareCritical(20, 0.05)).toBeGreaterThan(chiSquareCritical(1, 0.05))
+    expect(chiSquareCritical(7, 0.001)).toBeGreaterThan(chiSquareCritical(7, 0.05))
+
+    // CHI_CRIT is private, so each stored integer is read back THROUGH the public interface rather than restated
+    // here -- a second copy of the table would be the duplication this repository has removed eleven of. The
+    // comparison is `chiScaled >= stored`, so the smallest statistic that earns a bracket IS that bracket's stored
+    // critical, and the monotonicity test above is what makes this binary search valid.
+    const storedCritical = (df: number, target: Bracket): number => {
+      let lo = 0
+      let hi = 2000000
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2)
+        if (RANK[chiSquareBracket(mid, df)] >= RANK[target]) hi = mid
+        else lo = mid + 1
+      }
+      return lo
+    }
+    expect(storedCritical(1, 'p<0.05')).toBe(38415) // the probe really does recover a known entry
+    expect(storedCritical(18, 'p<0.05')).toBe(288693)
+
+    const wrong: string[] = []
+    for (let df = 1; df <= CHI_TABLE_MAX_DF; df += 1) {
+      for (const [alpha, bracket] of [
+        [0.001, 'p<0.001'],
+        [0.01, 'p<0.01'],
+        [0.05, 'p<0.05'],
+      ] as const) {
+        const stored = storedCritical(df, bracket)
+        // Rounded UP at the fourth decimal: a statistic that reaches a stored entry has genuinely reached the
+        // critical value, so the rounding can withhold a finding and never invent one. Math.ceil is what pins that
+        // direction -- Math.round would pass for a value and fail for the property.
+        const want = Math.ceil(chiSquareCritical(df, alpha) * 10000)
+        if (stored !== want) wrong.push(`df ${df} at ${alpha}: table has ${stored}, quantile gives ${want}`)
+      }
+    }
+    expect(wrong).toEqual([])
+    // Twenty rows at three levels, and the loop really ran over all of them.
+    expect(CHI_TABLE_MAX_DF * 3).toBe(60)
   })
 
   it('returns none for a statistic below the weakest line', () => {
