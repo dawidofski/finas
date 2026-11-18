@@ -33,9 +33,19 @@ deployment ritual.
 
 ## 2. Goals
 
-- **G1.** Import ING Spain account statements (XLSX primary, PDF fallback,
-  CSV lower priority) entirely in the browser, with a preview and correction
+- **G1.** Import ING Spain account statements (XLSX primary, ~~PDF fallback,
+  CSV lower priority~~) entirely in the browser, with a preview and correction
   step before anything is saved.
+
+  > **Withdrawn by the owner on 2026-11-18: the PDF fallback and CSV import are
+  > not wanted and will not be built.** XLSX is the only import format. This
+  > strikes item 14 of the build order, the `pdf.js` dependency in §16, and the
+  > PDF branch of the format detection in §9; the importer's existing refusal of
+  > PDF and CSV with an explanation is now the final behaviour rather than a
+  > placeholder. Recorded here rather than left as a silent gap, because a goal
+  > that no plan will ever implement otherwise reads as work outstanding, and
+  > three of this project's worst defects came from a document that no longer
+  > described the program.
 - **G2.** Never create a duplicate transaction when statements overlap, and
   never silently merge or delete when a match is uncertain — ask instead.
 - **G3.** Hold the full financial history locally, with schema versioning,
