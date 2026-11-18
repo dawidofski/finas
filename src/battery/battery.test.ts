@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../test/bannedWords'
 import { BATTERY, isMet, type BatteryData, type RelationshipId } from './battery'
 
 const ZERO: BatteryData = {
@@ -27,30 +28,21 @@ const ready = (id: RelationshipId, d: BatteryData) => BATTERY.find(r => r.id ===
  * THE BANNED-LANGUAGE LISTS ARE READ OUT OF THE FILES THAT OWN THEM, not copied. This file used to carry its own
  * copies marked "reused from", and they had already drifted: the jargon copy had four terms the owning list did not.
  * A drifted copy of a LANGUAGE BAN is the worst kind to have, because it silently permits in one file wording that
- * another forbids. src/battery/finding.test.ts and src/ui/screens/Intelligence.test.tsx read them the same way.
+ * another forbids.
  *
- * The extraction mechanism below is itself a third copy, and that is not by choice: finding.test.ts declares
- * `regexFrom` as a plain local function, so it cannot be imported -- and importing a .test.ts module would re-register
- * its describe blocks inside this file's suite, so exporting it from there would not help either. It belongs in a
- * shared non-test module that all three import. Flagged rather than fixed, since that file is not mine this round.
+ * The extraction now lives in src/test/bannedWords.ts and all three readers import it: this file,
+ * src/battery/finding.test.ts and src/ui/screens/Intelligence.test.tsx. It had been a local function in each of
+ * them, which is three copies of the very mechanism that exists to prevent copies. It cannot live in one of the
+ * test files and be imported by the others, because importing a .test.ts module re-registers its describe blocks
+ * inside the importing file's suite, so every file would run that file's tests too. Hence a plain module.
  *
- * The extraction is deliberately brittle: if either line is reworded the read throws here rather than silently
- * scanning against a stale pattern, and the vacuity guards in the wording test below fail if it returns something
- * that matches nothing.
+ * It is still deliberately brittle -- a reworded owning line makes it throw rather than scan a stale pattern -- and
+ * it still probes each list against a word that list exists to forbid, now on import as well as in the wording
+ * test below, so a pattern that matches nothing cannot pass silently in any of the three.
  */
+
+/** This file's own source reads: the §12 test-column oracle below checks battery.ts against src/battery/stats.ts. */
 const SRC = resolve(import.meta.dirname, '..')
-
-function regexFrom(file: string, name: string): RegExp {
-  const text = readFileSync(resolve(SRC, file), 'utf8')
-  const match = new RegExp(`const ${name} = /(.*)/([a-z]*)\\s*$`, 'm').exec(text)
-  const source = match?.[1]
-  if (source === undefined) throw new Error(`no regex named ${name} in src/${file}`)
-  return new RegExp(source, match?.[2] ?? '')
-}
-
-const causalWords = regexFrom('ui/screens/Reports.test.tsx', 'causalWords')
-const jargonWords = regexFrom('ui/screens/Reports.test.tsx', 'jargonWords')
-const noJargon = regexFrom('learning/categorise.test.ts', 'NO_JARGON')
 
 /**
  * The statistics words THIS module adds, which no owning list carries: they are the ones a battery of significance
@@ -132,6 +124,11 @@ describe('the declared battery', () => {
     // and its control fails; return a vacuous regex from the extraction and all four fail.
     const violates = (s: string) =>
       causalWords.test(s) || jargonWords.test(s) || noJargon.test(s) || BATTERY_JARGON.test(s)
+    // Each shared list is probed against a word it forbids; bannedWords.ts does the same on import and throws.
+    for (const list of BANNED_LISTS) {
+      expect(list.forbids, list.name).toMatch(list.pattern)
+      expect(list.allows, list.name).not.toMatch(list.pattern)
+    }
     expect(violates('spending rose owing to the weather')).toBe(true) // causalWords alone: not in the jargon lists
     expect(violates('your 90th percentile')).toBe(true) // jargonWords alone
     expect(violates('a bayes estimate')).toBe(true) // noJargon alone

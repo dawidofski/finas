@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { BANNED_LISTS, assertNotVacuous, causalWords, jargonWords, noJargon } from '../test/bannedWords'
 import { BATTERY, type RelationshipId } from './battery'
 import type { Bracket } from './critical'
 import type { ContingencyResult, ContingencyRow } from './contingency'
@@ -10,24 +11,13 @@ import { findingFor, formatEffect, type BatteryResults, type CorrectionVerdict, 
  * The wording of §12's eight fields. Every assertion here is about a sentence a person reads about their own money, so
  * the tests are about the copy and not about the arithmetic behind it.
  *
- * THE BANNED-LANGUAGE LISTS ARE READ OUT OF THE TWO TEST FILES THAT ALREADY OWN THEM, not restated. Two lists that
- * drift apart is this repository's most repeated defect, and a third copy of these regexes would be exactly that. The
- * extraction is deliberately brittle: if either line is reworded the read throws here rather than silently scanning
- * against a stale pattern.
+ * THE BANNED-LANGUAGE LISTS COME FROM src/test/bannedWords.ts, which reads them out of the two test files that
+ * already own them. Neither the lists nor the extraction is restated here: the extraction began as a local function
+ * in this file and was then copied into two others, which made three copies of the very mechanism that exists to
+ * prevent copies. It still throws if an owning line is reworded, rather than scanning a stale pattern, and it still
+ * probes each list against a word that list exists to forbid.
  */
 const SRC = resolve(import.meta.dirname, '..')
-
-function regexFrom(file: string, name: string): RegExp {
-  const text = readFileSync(resolve(SRC, file), 'utf8')
-  const match = new RegExp(`const ${name} = /(.*)/([a-z]*)\\s*$`, 'm').exec(text)
-  const source = match?.[1]
-  if (source === undefined) throw new Error(`no regex named ${name} in src/${file}`)
-  return new RegExp(source, match?.[2] ?? '')
-}
-
-const causalWords = regexFrom('ui/screens/Reports.test.tsx', 'causalWords')
-const jargonWords = regexFrom('ui/screens/Reports.test.tsx', 'jargonWords')
-const noJargon = regexFrom('learning/categorise.test.ts', 'NO_JARGON')
 
 /**
  * The screens that exist, read out of the router rather than listed here: `screen(path, title)` is the stub factory, so
@@ -148,13 +138,24 @@ function everyFinding(): { id: RelationshipId; finding: Finding }[] {
 
 describe('the eight fields a finding carries', () => {
   it('reads its banned-language lists out of the two files that own them', () => {
-    // A vacuous extraction would make every language test below pass on anything, so the patterns are checked first.
-    expect('because').toMatch(causalWords)
+    // A vacuous extraction would make every language test below pass on anything, so each list is probed against a
+    // word it exists to forbid and wording it must leave alone. bannedWords.ts runs the same probes on import and
+    // throws, so this is the visible half of a guard no reader of the lists can skip.
+    expect(BANNED_LISTS).toHaveLength(3)
+    for (const list of BANNED_LISTS) {
+      expect(list.forbids, list.name).toMatch(list.pattern)
+      expect(list.allows, list.name).not.toMatch(list.pattern)
+    }
     expect('therefore').toMatch(causalWords)
     expect('cache').toMatch(jargonWords)
-    expect('percentile').toMatch(jargonWords)
     expect('bayes').toMatch(noJargon)
-    expect('a happy sentence about your money').not.toMatch(causalWords)
+    // And the probe itself, directly: a version that never threw would look exactly like a passing one from here.
+    expect(() => assertNotVacuous(BANNED_LISTS)).not.toThrow()
+    expect(() => assertNotVacuous([{ name: 'matches nothing', pattern: /(?!)/, forbids: 'because', allows: 'ordinary wording' }]))
+      .toThrow(/no longer matches because/)
+    // `new RegExp('')` and not an empty literal: `//` opens a comment.
+    expect(() => assertNotVacuous([{ name: 'matches everything', pattern: new RegExp(''), forbids: 'because', allows: 'ordinary wording' }]))
+      .toThrow(/matches ordinary wording/)
     expect(unbuiltScreens).toContain('AI coach')
     expect(unbuiltScreens.length).toBeGreaterThanOrEqual(5)
     expect(everyScreen).toContain('Dashboard')

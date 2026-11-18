@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BANNED_LISTS, causalWords, jargonWords, noJargon } from '../../test/bannedWords'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Intelligence, { MIN_ANSWERED, MIN_REGRETTED, isFinding } from './Intelligence'
 import { db } from '../../db/db'
@@ -643,24 +642,14 @@ describe('Intelligence screen: the ten questions', () => {
   it('uses no causal or statistical wording anywhere on the page', async () => {
     await seedAll()
     await mountBattery()
-    // The two lists that already own these words, read by name out of the files that own them rather than copied: a
-    // fourth copy of a rule is how the first three drift apart. src/battery/finding.test.ts reads them the same way.
-    const SRC = resolve(import.meta.dirname, '../..')
-    const regexFrom = (file: string, name: string): RegExp => {
-      const text = readFileSync(resolve(SRC, file), 'utf8')
-      const match = new RegExp(`const ${name} = /(.*)/([a-z]*)\\s*$`, 'm').exec(text)
-      const source = match?.[1]
-      if (source === undefined) throw new Error(`no regex named ${name} in src/${file}`)
-      return new RegExp(source, match?.[2] ?? '')
+    // The lists come from src/test/bannedWords.ts, which reads them by name out of the files that maintain them.
+    // Nothing is copied here, and neither is the extraction: it was a local function in three files, which made
+    // three copies of the mechanism that exists to prevent copies.
+    // A vacuous extraction would make the assertions below pass on anything, so each list is probed first.
+    for (const list of BANNED_LISTS) {
+      expect(list.forbids, list.name).toMatch(list.pattern)
+      expect(list.allows, list.name).not.toMatch(list.pattern)
     }
-    const causalWords = regexFrom('ui/screens/Reports.test.tsx', 'causalWords')
-    const jargonWords = regexFrom('ui/screens/Reports.test.tsx', 'jargonWords')
-    const noJargon = regexFrom('learning/categorise.test.ts', 'NO_JARGON')
-    // A vacuous extraction would make the assertions below pass on anything.
-    expect('because').toMatch(causalWords)
-    expect('percentile').toMatch(jargonWords)
-    expect('bayes').toMatch(noJargon)
-    expect('a plain sentence about your own money').not.toMatch(causalWords)
 
     // The APP's words. What the owner wrote is quoted as theirs and is not the app speaking: this fixture's own reason
     // is "Because I was tired", which the app may repeat but may not be judged on.
