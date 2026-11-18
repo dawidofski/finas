@@ -66,5 +66,8 @@ export default defineConfig({
     globals: true,
     // build.test.ts inspects dist/, so it runs via `npm run verify:dist` after a build.
     exclude: [...configDefaults.exclude, 'src/build.test.ts'],
+    // The backup tests derive real keys (about a second each, on every core they can get), so a screen test that
+    // finishes in a second alone can pass the default 5 s when the whole suite runs. Slow under load, not wrong.
+    testTimeout: 15000,
   },
 })

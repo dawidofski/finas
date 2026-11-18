@@ -16,11 +16,15 @@ type Mode = 'merge' | 'replace'
 /** A preview is pinned to the mode and the exact bundle it was computed for; confirm reuses both. */
 type Preview = { mode: Mode; bundle: unknown; report: RestoreReport }
 
-/** A refusal the owner can read. Reason and detail are shown as the engine wrote them. */
+/**
+ * A refusal the owner can read. The engine's sentence says why; its short reason code (some are engine words, such as
+ * salt-mismatch) is kept as an attribute for diagnosis and is not shown. Most engine sentences end by saying nothing was
+ * changed, but not every one does, so the heading adds it whenever the sentence has not said it.
+ */
 function Refusal({ report }: { report: Pick<RestoreReport, 'refusedReason' | 'detail' | 'blockedIds'> }) {
   return (
-    <div role="alert" className="notice notice-refusal">
-      <p><strong>Refused ({report.refusedReason ?? 'unknown'}).</strong> Nothing was changed.</p>
+    <div role="alert" className="notice notice-refusal" data-reason={report.refusedReason ?? 'unknown'}>
+      <p><strong>The backup was not restored.</strong>{report.detail?.endsWith('Nothing was changed.') ? '' : ' Nothing was changed.'}</p>
       {report.detail && <p>{report.detail}</p>}
       {report.blockedIds && report.blockedIds.length > 0 && (
         <>
@@ -244,14 +248,15 @@ function EncryptedBackup() {
     setProblem(null); setFailed(false); setSaved(false)
     const first = firstRef.current?.value ?? ''
     const second = secondRef.current?.value ?? ''
-    const found = newPassphraseProblem(first, second)
-    if (found !== null) {
-      setProblem(PASSPHRASE_MESSAGES[found])
-      ;(found === 'mismatch' ? secondRef : firstRef).current?.focus()
-      return
-    }
     setBusy(true)
     try {
+      const found = newPassphraseProblem(first, second)
+      if (found !== null) {
+        // Both fields are emptied below, as on every path, so the owner starts again from the first one.
+        setProblem(PASSPHRASE_MESSAGES[found])
+        firstRef.current?.focus()
+        return
+      }
       offerFile(await encryptBundle(await exportBundle(), first), `finance-backup-${today()}-encrypted.json`)
       setSaved(true)
     } catch {
@@ -289,7 +294,7 @@ function EncryptedBackup() {
           <p>The encrypted backup could not be created. Nothing on this device was changed. Try again, and if it keeps failing, reload the page first.</p>
         </div>
       )}
-      {saved && <p role="status">Your encrypted backup was downloaded. Keep the passphrase somewhere safe: without it the file cannot be opened.</p>}
+      {saved && <p role="status">Your encrypted backup is ready and your browser is saving it. Check that the file arrived. Keep the passphrase somewhere safe: without it the file cannot be opened.</p>}
     </form>
   )
 }
@@ -303,6 +308,7 @@ export default function Settings(): ReactNode {
   const [done, setDone] = useState<RestoreReport | null>(null)
   const [locked, setLocked] = useState<Envelope | null>(null) // an encrypted file waiting for its passphrase; never the passphrase
   const [opening, setOpening] = useState(false)
+  const [needPass, setNeedPass] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const passRef = useRef<HTMLInputElement>(null)
   const passId = useId()
@@ -313,7 +319,7 @@ export default function Settings(): ReactNode {
   /** Everything the last pick or open produced goes, and any open still running is told it is out of date. */
   function clearResults() {
     pickSeq.current++
-    setPreview(null); setRefused(null); setDone(null); setLocked(null); setOpening(false)
+    setPreview(null); setRefused(null); setDone(null); setLocked(null); setOpening(false); setNeedPass(false)
   }
 
   function reset() {
@@ -371,7 +377,9 @@ export default function Settings(): ReactNode {
   async function openLocked() {
     if (!locked || opening) return
     const seq = pickSeq.current
-    setRefused(null); setOpening(true)
+    setRefused(null); setNeedPass(false)
+    if ((passRef.current?.value ?? '') === '') { setNeedPass(true); passRef.current?.focus(); return }
+    setOpening(true)
     try {
       const opened = await openEncryptedBackup(locked, passRef.current?.value ?? '')
       if (seq !== pickSeq.current) return
@@ -461,6 +469,7 @@ export default function Settings(): ReactNode {
           <div className="actions">
             <button type="submit" className="btn btn-primary" aria-disabled={opening}>{opening ? 'Opening…' : 'Open backup'}</button>
           </div>
+          {needPass && <div role="alert" className="notice notice-refusal"><p>Type the passphrase for this backup first.</p></div>}
         </form>
       )}
 
@@ -489,7 +498,7 @@ export default function Settings(): ReactNode {
           {preview.mode === 'replace' && (
             <p><strong>Replace removes everything on this device that is not in the backup.</strong></p>
           )}
-          <p>If you close this page before the restore finishes, nothing is changed.</p>
+          <p>If you close this page during a restore, this device is left either exactly as it was or fully restored, never part-way.</p>
           <div className="actions">
             <button type="button" className="btn btn-primary" disabled={busy} onClick={() => { void confirm() }}>
               Confirm {preview.mode}

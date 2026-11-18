@@ -62,12 +62,14 @@ To install on Android Chrome: open the address, open the Chrome menu, choose **A
 
 **Backup works from the app: open Settings.** Nothing is saved anywhere else, so a backup file is the only copy that survives losing this browser's data. Take one before you rely on the app for anything you cannot recreate, and again after you have made corrections you care about.
 
-- **Download backup** saves one plain JSON file, `finance-backup-YYYY-MM-DD.json`, containing every table. It is readable, **not encrypted**: keep it somewhere private.
+- **Download encrypted backup** is the one to use. You choose a passphrase of at least 12 characters and type it twice, and the app saves one file, `finance-backup-YYYY-MM-DD-encrypted.json`, containing every table, locked with that passphrase. **The passphrase cannot be recovered by anyone.** The app does not keep it, so if you forget it that backup cannot be opened, by you or by the app. Check that the file arrived where your browser saves downloads.
+- What someone holding the encrypted file can see without the passphrase: that it is an encrypted backup from this app, the settings needed to open it, and roughly how large it is. None of your transactions, names, amounts or dates.
+- **Download plain backup (not encrypted)** is still there, for reading your data somewhere else. It saves `finance-backup-YYYY-MM-DD.json`, readable by anyone who has the file: keep it somewhere private.
 - **Restore** is three steps: choose merge or replace, choose the file, then read the report and confirm. Choosing a file only checks it; nothing is written until you press the confirm button. The report shows, for each table, how many rows are in the backup, how many are new to this device, and how many conflict. It also lists what the check **could not** verify, so "no conflicts" is never a promise it cannot keep. Changing the mode after the check discards the report, so the plan you confirmed is always the plan that runs.
 - A file that is not a backup, is damaged, or comes from a newer version of the app is refused, with the reason shown in full and nothing changed.
 - **Two restore modes.** *Replace* makes this device match the backup: anything here that is not in the backup is removed. *Merge* only adds rows this device does not have and never overwrites one it already has. If the same transaction has differing annotations in both, merge keeps your local one and lists the conflict rather than choosing for you.
 - **Merging a backup from a different installation is refused, on purpose.** Each installation fingerprints your accounts with its own random salt. Two installations therefore describe the same account differently, and merging them would create duplicate accounts that cannot be untangled. To restore such a backup, use **replace**.
-- **Encrypted backup is not built yet.** Only the plain export exists.
+- **Restore takes either kind of backup** and tells them apart from the file itself, not its name. For an encrypted one it asks for the passphrase first, then shows the same report and waits for the same confirm. If the file does not open, the app says the passphrase may differ from the one used or the file may have been changed or damaged; it cannot tell which of the two happened. A file that was cut short is reported as damaged or incomplete.
 
 ## What stays on your device
 

@@ -162,7 +162,8 @@ describe('Settings backup', () => {
     pick(fileOf(JSON.stringify(newer)))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain(expected.detail!)
-    expect(alert.textContent).toContain('newer-schema')
+    expect(alert.getAttribute('data-reason')).toBe('newer-schema')
+    expect(alert.textContent).toContain('Nothing was changed.')
     expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
     expect(backup.restoreBundle).not.toHaveBeenCalled()
     expect(await db.categories.count()).toBe(before)
@@ -198,7 +199,9 @@ describe('Settings backup', () => {
     pick(fileOf(JSON.stringify(bundle)))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain(expected.detail!)
-    expect(alert.textContent).toContain('salt-mismatch')
+    // The engine's reason code is kept for diagnosis and is not put in front of the owner.
+    expect(alert.getAttribute('data-reason')).toBe('salt-mismatch')
+    expect(alert.textContent).not.toMatch(/salt|Refused \(/i)
   })
 
   it('warns that replace overwrites, and offers merge', () => {
@@ -278,13 +281,16 @@ describe('Settings encrypted backup download', () => {
       click(DOWNLOAD_ENCRYPTED)
       await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(PASSPHRASE_MESSAGES[why]))
       expect(field(PASS_LABEL)).toHaveAttribute('aria-invalid', 'true')
-      expect(document.activeElement).toBe(why === 'mismatch' ? field(AGAIN_LABEL) : field(PASS_LABEL))
+      // A refused passphrase is not left sitting in the fields: both are emptied and the owner starts again from the first.
+      expect((field(PASS_LABEL) as HTMLInputElement).value).toBe('')
+      expect((field(AGAIN_LABEL) as HTMLInputElement).value).toBe('')
+      expect(document.activeElement).toBe(field(PASS_LABEL))
       expect(backup.exportBundle).not.toHaveBeenCalled()
       expect(seen.created).toBe(0)
     }
     type(PASS_LABEL, PASS); type(AGAIN_LABEL, PASS)
     click(DOWNLOAD_ENCRYPTED)
-    expect(await screen.findByRole('status')).toHaveTextContent(/encrypted backup was downloaded/i)
+    expect(await screen.findByRole('status')).toHaveTextContent(/your browser is saving it\. Check that the file arrived/i)
     expect(seen.created).toBe(1)
     expect(screen.queryByRole('alert')).toBeNull()
   }, 20000)
@@ -528,7 +534,9 @@ describe('Settings restore of an encrypted backup', () => {
     fireEvent.change(await reachPassphraseStep(text), { target: { value: PASS } })
     click(OPEN_BUTTON)
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('salt-mismatch')
+    // The engine's reason code is kept for diagnosis and is not put in front of the owner.
+    expect(alert.getAttribute('data-reason')).toBe('salt-mismatch')
+    expect(alert.textContent).not.toMatch(/salt|Refused \(/i)
     expect(alert.textContent).toMatch(/use replace mode to restore it/i)
     expect(screen.queryByRole('button', { name: /confirm/i })).toBeNull()
     expect(backup.restoreBundle).not.toHaveBeenCalled()
@@ -543,7 +551,7 @@ describe('Settings restore of an encrypted backup', () => {
     await screen.findByRole('table', REPORT)
     const confirmButton = screen.getByRole('button', { name: /confirm merge/i })
     const line = confirmButton.parentElement!.previousElementSibling as HTMLElement // the line sits right above the buttons
-    expect(line.textContent).toMatch(/close this page before the restore finishes, nothing is changed/i)
+    expect(line.textContent).toMatch(/close this page during a restore, this device is left either exactly as it was or fully restored, never part-way/i)
   }, 20000)
 
   it('discards an opened backup when the mode changes, so a merge preview never confirms a replace', async () => {
@@ -612,7 +620,7 @@ describe('Settings restore of an encrypted backup', () => {
     click(OPEN_BUTTON)
     await screen.findByRole('table', REPORT)
     states['preview'] = say()
-    expect(states['preview']).toMatch(/close this page before the restore finishes/i)
+    expect(states['preview']).toMatch(/close this page during a restore/i)
     expect(states['asking for the passphrase']).toMatch(/This backup is encrypted/)
     for (const [state, said] of Object.entries(states)) {
       expect(violations(said), state).toEqual([])
