@@ -3,6 +3,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { CHI_SCALE } from './stats'
+import { chiSquareBracket } from './critical'
 import { boredomImpulse, reasonWorthwhile, type ContingencyResult, type Withheld } from './contingency'
 
 // Every expected figure below is worked by hand, with real arithmetic, in the comment above it. Tests may use floats;
@@ -29,6 +30,7 @@ interface Group {
   mood?: string | null
   worthwhile?: boolean | null
   amountCents?: number
+  kind?: TransactionRow['kind']
   annotate?: boolean
 }
 /** Adds `n` spends per group, each with the annotation the group describes. */
@@ -38,7 +40,7 @@ async function put(groups: Group[]): Promise<void> {
   for (const g of groups) {
     for (let i = 0; i < g.n; i++) {
       const id = `t${(seq += 1)}`
-      txs.push(tx(id, { amountCents: g.amountCents ?? -1000 }))
+      txs.push(tx(id, { amountCents: g.amountCents ?? -1000, kind: g.kind ?? 'spend' }))
       if (g.annotate === false) continue
       anns.push(ann(id, { purchaseReasonId: g.reason ?? null, moodId: g.mood ?? null, worthwhile: g.worthwhile ?? null }))
     }
@@ -74,6 +76,8 @@ describe('reasonWorthwhile', () => {
       // None of these may touch the table or the count: no hindsight answer, no reason, no annotation at all, and money in.
       { n: 3, reason: I, worthwhile: null }, { n: 2, reason: null, worthwhile: true }, { n: 4, annotate: false },
       { n: 2, reason: E, worthwhile: false, amountCents: 2500 },
+      // Money out but not a spend (a transfer the owner answered by mistake): not a purchase, so not in the table.
+      { n: 3, reason: E, worthwhile: false, kind: 'income' },
     ])
     const r = asResult(await reasonWorthwhile(1))
     // Rows essential [12 yes, 3 no] (15) and impulse [5, 12] (17); columns yes 17, no 15; N = 32; df = 1.
@@ -81,20 +85,20 @@ describe('reasonWorthwhile', () => {
     // For a 2x2, chi-square = N(ad - bc)^2 / (r1 r2 c1 c2) = 32 * (12*12 - 3*5)^2 / (15*17*17*15)
     //   = 32 * 129^2 / 65025 = 532512 / 65025 = 8.189343.
     // V = sqrt(8.189343 / (32 * 1)) = sqrt(0.255917) = 0.50588, so 5058 bp.
-    // 8.189343 is above the df-1 critical 6.6349, so the bracket is p<0.01.
+    // df-1 criticals: 3.8415 (p<0.05), 6.6349 (p<0.01), 10.8276 (p<0.001). 8.189343 is between the last two: p<0.01 exactly.
     expect(r.n).toBe(32)
     expect(counts(r)).toEqual({ [E]: [12, 3], [I]: [5, 12] })
     expect(r.df).toBe(1)
     expect(Math.abs(r.chiScaled - Math.round(8.189343 * CHI_SCALE))).toBeLessThanOrEqual(2)
     expect(Math.abs(r.vBp - 5058)).toBeLessThanOrEqual(1)
     expect(r.bracket).toBe('p<0.01')
-    expect(r.sparse).toBe(false)
+    expect(r.verdict).toBe('tested')
   })
 
   it('reports Cramers V beside the bracket, so strength and certainty are separate', async () => {
     // Certain and tiny: 2000 spends, essential [535 yes, 465 no], impulse [465, 535]. Every expected count is 500.
     // chi-square = 2000 * (535*535 - 465*465)^2 / 1000^4 = 2000 * 70000^2 / 10^12 = 2000 * 4.9e9 / 1e12 = 9.8, above the
-    // df-1 critical 6.6349, so p<0.01. V = sqrt(9.8 / 2000) = sqrt(0.0049) = 0.07, so exactly 700 bp: a relationship the
+    // df-1 critical 6.6349 and below 10.8276, so exactly p<0.01. V = sqrt(9.8 / 2000) = sqrt(0.0049) = 0.07, so exactly 700 bp: a relationship the
     // owner can be sure of that barely matters.
     await put([
       { n: 535, reason: E, worthwhile: true }, { n: 465, reason: E, worthwhile: false },
@@ -193,7 +197,7 @@ describe('reasonWorthwhile', () => {
     expect(r.df).toBe(5)
     expect(r.chiScaled).toBe(300000)
     expect(r.vBp).toBe(10000)
-    expect(r.sparse).toBe(true)
+    expect(r.verdict).toBe('sparse')
     expect(r.bracket).toBe('none')
   })
 
@@ -220,15 +224,61 @@ describe('reasonWorthwhile', () => {
     expect(r.n).toBe(96)
     expect(r.df).toBe(5)
     expect(Math.abs(r.chiScaled - Math.round(31.83965 * CHI_SCALE))).toBeLessThanOrEqual(10)
-    expect(r.sparse).toBe(true)
+    expect(r.verdict).toBe('sparse')
     expect(r.bracket).toBe('none')
+  })
+
+  it('pins the p<0.001 rung: a strong, certain table', async () => {
+    // Essential [20 yes, 5 no], impulse [5, 20]; N = 50, every expected count 12.5; df 1.
+    // chi-square = 50 * (20*20 - 5*5)^2 / 25^4 = 50 * 375^2 / 390625 = 50 * 140625 / 390625 = 18.0, above the df-1
+    // p<0.001 critical 10.8276. V = sqrt(18 / 50) = sqrt(0.36) = 0.6, exactly 6000 bp.
+    await put([
+      { n: 20, reason: E, worthwhile: true }, { n: 5, reason: E, worthwhile: false },
+      { n: 5, reason: I, worthwhile: true }, { n: 20, reason: I, worthwhile: false },
+    ])
+    const r = asResult(await reasonWorthwhile(1))
+    expect(r.chiScaled).toBe(180000)
+    expect(r.vBp).toBe(6000)
+    expect(r.bracket).toBe('p<0.001')
+    expect(r.verdict).toBe('tested')
+  })
+
+  it('still tests at df 20, the widest the critical table carries', async () => {
+    // Twenty-one reasons, ten worthwhile and ten not each: N = 420, every row 20, columns 210 and 210, every expected
+    // count 20*210/420 = 10 and every observed count 10, so chi-square is exactly 0 and V is 0. df = 20 is the last the
+    // table answers, so this is tested (a real, unremarkable absence), not refused.
+    const ids = Array.from({ length: 21 }, (_, i) => `reason.gone-${i}`)
+    await put(ids.flatMap((reason) => [{ n: 10, reason, worthwhile: true }, { n: 10, reason, worthwhile: false }]))
+    const r = asResult(await reasonWorthwhile(1))
+    expect(r.df).toBe(20)
+    expect(r.chiScaled).toBe(0)
+    expect(r.verdict).toBe('tested')
+    expect(r.bracket).toBe('none')
+  })
+
+  it('refuses past the critical table instead of throwing or calling it unremarkable', async () => {
+    // Twenty-two distinct reasons (the seed has eight; fourteen are removed ids), two answered spends each: one worthwhile,
+    // one not. N = 44, df = 21, one more than the table carries. Every column sum is 22 and every row sum 2, so every
+    // expected count is 2*22/44 = 1, and every cell is O = 1 against E = 1: chi-square is exactly 0 and V is 0. The point is
+    // the verdict: df 21 has no critical, and the result says so rather than throwing or reading 'none' as a finding.
+    const ids = Array.from({ length: 22 }, (_, i) => `reason.gone-${i}`)
+    await put(ids.flatMap((reason) => [{ n: 1, reason, worthwhile: true }, { n: 1, reason, worthwhile: false }]))
+    const r = asResult(await reasonWorthwhile(1))
+    expect(r.n).toBe(44)
+    expect(r.df).toBe(21)
+    expect(r.chiScaled).toBe(0)
+    expect(r.vBp).toBe(0)
+    expect(r.verdict).toBe('too-many-categories')
+    // The module's own ceiling must match the table's: df 20 answers, df 21 throws.
+    expect(chiSquareBracket(0, 20)).toBe('none')
+    expect(() => chiSquareBracket(0, 21)).toThrow(RangeError)
   })
 })
 
 describe('boredomImpulse', () => {
   it('builds the table from mood and reason, over spends that carry both', async () => {
     // Bored [15 impulse, 5 not], any other mood [5, 15]; N = 40; every expected count 10; df = 1.
-    // chi-square = 40 * (15*15 - 5*5)^2 / 20^4 = 40 * 40000 / 160000 = 10, above 6.6349, so p<0.01.
+    // chi-square = 40 * (15*15 - 5*5)^2 / 20^4 = 40 * 40000 / 160000 = 10, above 6.6349 and below 10.8276, so exactly p<0.01.
     // V = sqrt(10 / 40) = 0.5, exactly 5000 bp.
     await put([
       { n: 15, mood: 'mood.bored', reason: I }, { n: 5, mood: 'mood.bored', reason: E },

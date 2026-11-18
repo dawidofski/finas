@@ -25,8 +25,16 @@
 // withheld rather than computed around the gap.
 //
 // chiSquareBracket throws for df above 20. Reason x worthwhile has two columns, so df is the number of distinct reasons
-// answered minus one, and the throw is reachable only past 21 of them. It is deliberately not caught: a missing constant
-// is not weak evidence, and turning it into 'none' would bury the relationship as permanently unremarkable.
+// answered minus one, and past 21 of them the table has no critical value. That is refused BEFORE the bracket is asked
+// for, as its own verdict: a thrown RangeError on the screen is the worst outcome, and a quiet 'none' would tell the
+// owner their reasons do not predict their regrets when the truth is that the app declined to look.
+//
+// A result therefore has one of three verdicts, and the caller must read `verdict`, not `bracket`, to tell them apart:
+//   'tested'               the bracket is a real finding or a real absence of one; it counts in Benjamini-Hochberg's m.
+//   'sparse'               expected counts too small for chi-square to mean anything. No valid test was performed.
+//   'too-many-categories'  more categories than the critical table covers. No test was performed.
+// The last two carry the real vBp (strength survives) and bracket 'none' only so the type stays total; neither is an
+// unremarkable result and neither belongs in m.
 
 import { db } from '../db/db'
 import { resolveMany } from '../db/annotations'
@@ -53,10 +61,10 @@ export interface ContingencyResult {
   df: number
   /** Strength: Cramer's V in basis points. */
   vBp: number
-  /** Certainty. 'none' is an answer, not a failure. */
+  /** Certainty. Meaningful only when verdict is 'tested', where 'none' is an answer, not a failure. */
   bracket: Bracket
-  /** True when too many expected counts are small for a bracket to be believed; the bracket is then 'none'. */
-  sparse: boolean
+  /** Whether a test was performed at all. Anything but 'tested' means the bracket is a placeholder. */
+  verdict: 'tested' | 'sparse' | 'too-many-categories'
 }
 
 /** There was enough data to try, but the table cannot carry the statistic. */
@@ -68,6 +76,9 @@ export interface Withheld {
 
 /** Unmet gates when there is too little data; a withheld table; or the result. */
 export type ContingencyOutcome = ContingencyResult | Withheld | Gate[]
+
+/** The widest df chiSquareBracket has a critical for. Kept in step by a test, which asserts df 20 answers and df 21 throws. */
+const CHI_TABLE_MAX_DF = 20
 
 const BORED = 'mood.bored'
 const IMPULSE = 'reason.impulse'
@@ -119,10 +130,10 @@ function build(rows: ContingencyRow[], columns: [string, string], n: number): Co
   }
   const vBp = cramersVBp(stat.chiScaled, n, rows.length, 2)
   if (vBp === null) return { withheld: true, n, why: 'The strength of the association cannot be measured on this table.' }
-  const sparse = isSparse(rows)
-  // chiSquareBracket throws past df 20, on purpose: see the header.
-  const bracket: Bracket = sparse ? 'none' : chiSquareBracket(stat.chiScaled, stat.df)
-  return { n, columns, rows, chiScaled: stat.chiScaled, df: stat.df, vBp, bracket, sparse }
+  const base = { n, columns, rows, chiScaled: stat.chiScaled, df: stat.df, vBp }
+  if (stat.df > CHI_TABLE_MAX_DF) return { ...base, bracket: 'none', verdict: 'too-many-categories' }
+  if (isSparse(rows)) return { ...base, bracket: 'none', verdict: 'sparse' }
+  return { ...base, bracket: chiSquareBracket(stat.chiScaled, stat.df), verdict: 'tested' }
 }
 
 interface Answers {
