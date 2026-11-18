@@ -7,15 +7,12 @@ import { formatEur, sumCents } from '../lib/money'
 import { excludedTransactionIds, treatmentOf } from '../analysis/income'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { monthlyBudget } from '../budget/month'
-import { SMALL_PURCHASE_CEILING_CENTS, smallPurchases } from '../analytics/habits'
+import { SMALL_PURCHASE_CEILING_CENTS } from '../analytics/habits'
 import { monthSeries } from '../analytics/series'
 import { unusualIn } from '../analytics/unusual'
 import { regretClusters, type RegretCluster } from '../learning/regret'
-import type { RelationshipId } from '../battery/battery'
-import { benjaminiHochberg } from '../battery/correction'
-import { boredomImpulse, reasonWorthwhile, type ContingencyOutcome } from '../battery/contingency'
-import { moodAmount, stressDiscretionary, weekend } from '../battery/rank'
-import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle, type TrendFinding } from '../battery/trend'
+import { correct, enteredBrackets, readBattery } from '../battery/run'
+import type { TrendFinding } from '../battery/trend'
 import { findingFor, type Bracket } from '../battery/finding'
 import { withheldKeys } from './state'
 
@@ -54,7 +51,8 @@ import { withheldKeys } from './state'
  *
  * Money is integer cents and shares are basis points. Every amount, sign and date is the BANK's; the owner's choices
  * decide only classifications (§41/§43). `today` and `computedAt` are arguments, the clock is never read, and every read
- * is bounded by a date range or by the owner's own answers (§39.4).
+ * of transactions is bounded by a date range or by the owner's own answers (§39.4). Two small tables, categories and
+ * transfers, are read whole, as the Budget reads them.
  */
 export type RecommendationId =
   | 'overspent-category' | 'small-purchases-add-up' | 'savings-inconsistent'
@@ -89,8 +87,6 @@ const MIN_SAVINGS_MONTHS = 4
 /** The Intelligence screen's own bar for showing a group of purchases as a finding (src/ui/screens/Intelligence.tsx). */
 const MIN_REGRETTED = 2
 const MIN_ANSWERED = 3
-/** The battery's window, as the Intelligence screen reads it. */
-const BATTERY_WINDOW_MONTHS = 12
 
 const previousMonth = (month: string): string => monthKeyOf(addDays(`${month}-01`, -1))
 function monthsEndingAt(last: string, count: number): string[] {
@@ -213,7 +209,7 @@ async function overspent(month: string, today: string, ledger: Ledger): Promise<
     const rows = ledger.spending.filter((x) => monthOf(x) === month && owningLine(x.r.categoryId, owned, ledger.categoryById) === line.targetId)
     if (rows.length === 0) continue
     const gross = sumCents(rows.map(centsOut))
-    const refunded = gross === line.spentCents ? '' : ' Refunds you received have already been taken off the figure above.'
+    const refunded = gross === line.spentCents ? '' : ' The amount above is worked out with any refunds taken off, so it can differ from the sum of the purchases listed.'
     out.push(build('overspent-category', `overspent-category:${line.targetId}`, {
       noticed: `${line.label} has come to ${formatEur(line.spentCents)} ${when}, against the ${formatEur(line.allocatedCents)} you set for it.`,
       summary: `${count(rows.length, 'purchase', 'purchases')} in ${line.label}, ${formatEur(gross)} between them.${refunded}`,
@@ -228,11 +224,15 @@ async function overspent(month: string, today: string, ledger: Ledger): Promise<
   return out
 }
 
-async function smallOnes(month: string, computedAt: number, ledger: Ledger): Promise<Recommendation[]> {
-  const small = await smallPurchases(month, SMALL_PURCHASE_CEILING_CENTS, computedAt)
-  if (small.count < MIN_SMALL_PURCHASES) return []
+/**
+ * ONE source for the figure and the evidence: the rows themselves, so the count and the total beside the list can never
+ * disagree with the list. They are the rows smallPurchases (src/analytics/habits.ts) counts, by the same classification;
+ * the test compares the two figures.
+ */
+function smallOnes(month: string, ledger: Ledger): Recommendation[] {
   const rows = ledger.spending.filter((x) => monthOf(x) === month && centsOut(x) < SMALL_PURCHASE_CEILING_CENTS)
-  if (rows.length === 0) return []
+  if (rows.length < MIN_SMALL_PURCHASES) return []
+  const small = { count: rows.length, totalCents: sumCents(rows.map(centsOut)) }
   const line = formatEur(SMALL_PURCHASE_CEILING_CENTS)
   return [build('small-purchases-add-up', 'small-purchases-add-up', {
     noticed: `${small.count} purchases under ${line} came to ${formatEur(small.totalCents)} in ${formatMonthTitle(month)}.`,
@@ -255,7 +255,7 @@ async function savingsRhythm(month: string, today: string, computedAt: number): 
   const rows = ledger.savings
   if (rows.length === 0) return []
   return [build('savings-inconsistent', 'savings-inconsistent', {
-    noticed: `You put money aside in ${saved.length} of your last ${count(points.length, 'month', 'months')} with records, and in the other ${points.length - saved.length} nothing went to savings.`,
+    noticed: `Between ${formatMonthTitle(months[0] ?? last)} and ${formatMonthTitle(last)}, you put money aside in ${saved.length} of the ${count(points.length, 'month', 'months')} that have records, and in the other ${points.length - saved.length} nothing went to savings.`,
     summary: `${count(rows.length, 'movement', 'movements')} into savings across ${count(saved.length, 'month', 'months')}, from ${formatMonthTitle(months[0] ?? last)} to ${formatMonthTitle(last)}.`,
     why: 'Savings that arrive in some months and not in others are harder to plan around when you want a cushion or a larger purchase.',
     todo: 'If a steadier rhythm would suit you, choose a day shortly after your income arrives and move the same amount then. The amount is yours to choose, and a small one still counts.',
@@ -285,7 +285,7 @@ function unusual(month: string, ledger: Ledger): Recommendation[] {
         ? `One purchase in ${name} came to ${formatEur(first.cents)} in ${formatMonthTitle(month)}, where your usual there is about ${usual}.`
         : `${group.length} purchases in ${name} each came to well above your usual of about ${usual} in ${formatMonthTitle(month)}, the largest at ${formatEur(Math.max(...group.map((u) => u.cents)))}.`,
       summary: `${count(group.length, 'purchase', 'purchases')} out of the ${sample} you made in ${name} over the last ${HISTORY_MONTHS} months, ${formatEur(above)} above your usual between them.`,
-      why: 'A one-off can be exactly what you meant to spend, and it is also the kind of purchase that is easy to lose track of in a month.',
+      why: 'A one-off can be exactly what you meant to spend, and it is also the kind of purchase that can slip out of view in a month.',
       todo: 'Look at the purchase and see whether it was planned. If it was a one-off you chose, there is nothing to change; if it came as a surprise, you may want to leave room for it in next month\'s plan.',
       impactCents: above,
       confidence: 'medium',
@@ -317,8 +317,8 @@ function matches(c: RegretCluster, row: Row): boolean {
 
 async function regrets(month: string, ledger: Ledger): Promise<Recommendation[]> {
   const clusters = (await regretClusters(month)).filter((c) => c.regretted >= MIN_REGRETTED && c.total >= MIN_ANSWERED)
-  // The same rows regretClusters counted: a resolved spend the owner answered "no" on, money out by the bank's sign.
-  const answeredNo = ledger.rows.filter((x) => x.r.kind === 'spend' && x.bank.amountCents <= 0 && x.r.worthwhile === false)
+  // The same rows regretClusters counted, in the month it counted: a resolved spend the owner answered "no" on, money out by the bank's sign.
+  const answeredNo = ledger.rows.filter((x) => monthOf(x) === month && x.r.kind === 'spend' && x.bank.amountCents <= 0 && x.r.worthwhile === false)
   const out: Recommendation[] = []
   for (const c of clusters) {
     const rows = answeredNo.filter((x) => matches(c, x))
@@ -328,7 +328,7 @@ async function regrets(month: string, ledger: Ledger): Promise<Recommendation[]>
       summary: `${count(rows.length, 'purchase', 'purchases')} you marked as not worth it, ${formatEur(c.cents)} between them.`,
       why: 'These are your own answers, so they point at money that went somewhere you were not glad about afterwards.',
       todo: 'Before the next purchase of this kind, ask whether you expect to rate it as worth it a week later. If the answer is usually yes, nothing needs to change.',
-      impactCents: c.cents,
+      impactCents: null, // what was spent on them is a fact (it is in the summary), not an estimate of what acting differently would save
       confidence: c.regretted >= 3 && c.total >= 5 ? 'medium' : 'low',
     }, idsOf(rows)))
   }
@@ -341,48 +341,16 @@ async function regrets(month: string, ledger: Ledger): Promise<Recommendation[]>
 
 interface Tested { bracket: Bracket; survives: boolean }
 
-/** The bracket of a contingency outcome that was validly tested, else null: gated, withheld, sparse and oversized are none of them tested. */
-const testedBracket = (o: ContingencyOutcome): Bracket | null =>
-  Array.isArray(o) || 'withheld' in o || o.verdict !== 'tested' ? null : o.bracket
-
 /**
- * Runs the ten relationships and the Benjamini-Hochberg correction exactly as the Intelligence screen does, and returns
- * the corrected verdict for salary-lifestyle plus its result, or null when it was not tested at all.
- *
- * WHICH RESULTS COUNT. Only a validly tested relationship enters m: an unmet gate was never tested, a sparse or oversized
- * contingency table was not validly tested, and the small purchases are a count with no test (§12). A relationship that
- * WAS tested and came back 'none' counts, which is what stops a hopeless one being dropped to loosen the bar for the rest.
- * Kept in step with `loadBattery` in src/ui/screens/Intelligence.tsx by hand: that function lives in a screen, which
- * this module may not import.
+ * Salary-lifestyle's corrected verdict, and its result, or null when it was not validly tested. Which comparisons count
+ * toward the correction is decided in src/battery/run.ts, the same code the Intelligence screen uses, so advice and
+ * screen cannot disagree about what survived.
  */
 async function salaryVerdict(today: string, computedAt: number): Promise<{ result: TrendFinding; verdict: Tested } | null> {
-  const to = today.slice(0, 7)
-  const from = monthsEndingAt(to, BATTERY_WINDOW_MONTHS)[0] ?? to
-  const [mood, frequency, stress, boredom, reasons, week, payday, salary, savings] = await Promise.all([
-    moodAmount(computedAt), moodFrequency(computedAt, today), stressDiscretionary(computedAt),
-    boredomImpulse(computedAt), reasonWorthwhile(computedAt), weekend(from, to, computedAt),
-    paydayTrend(from, to, today, computedAt), salaryLifestyle(from, to, today, computedAt), categorySavings(from, to, today, computedAt),
-  ])
-  const judged: { item: RelationshipId; bracket: Bracket }[] = []
-  const add = (item: RelationshipId, result: { bracket: Bracket } | unknown[]): void => {
-    if (!Array.isArray(result)) judged.push({ item, bracket: result.bracket })
-  }
-  add('mood-amount', mood)
-  add('mood-frequency', frequency)
-  add('stress-discretionary', stress)
-  const boredomBracket = testedBracket(boredom)
-  if (boredomBracket !== null) judged.push({ item: 'boredom-impulse', bracket: boredomBracket })
-  const reasonsBracket = testedBracket(reasons)
-  if (reasonsBracket !== null) judged.push({ item: 'reason-worthwhile', bracket: reasonsBracket })
-  add('weekend', week)
-  add('payday', payday)
-  add('salary-lifestyle', salary)
-  if (!Array.isArray(savings)) judged.push({ item: 'category-savings', bracket: savings.categories[0]?.bracket ?? 'none' })
-
-  if (Array.isArray(salary)) return null
-  const { results } = benjaminiHochberg(judged)
-  const mine = results.find((c) => c.item === 'salary-lifestyle')
-  return mine === undefined ? null : { result: salary, verdict: { bracket: mine.bracket, survives: mine.survives } }
+  const reads = await readBattery(today, computedAt)
+  if (Array.isArray(reads.salary)) return null
+  const mine = correct(enteredBrackets(reads)).verdicts.get('salary-lifestyle')
+  return mine === undefined ? null : { result: reads.salary, verdict: { bracket: mine.bracket, survives: mine.survives } }
 }
 
 const CONFIDENCE: Record<Bracket, Recommendation['confidence']> = { 'p<0.001': 'high', 'p<0.01': 'medium', 'p<0.05': 'low', none: 'low' }
@@ -399,7 +367,7 @@ function fromSurvivors(month: string, tested: { result: TrendFinding; verdict: T
   return [build('discretionary-rising', 'discretionary-rising', {
     noticed: finding.pattern,
     summary: `${count(wants.length, 'purchase', 'purchases')} in categories you have marked as wants in ${formatMonthTitle(month)}, ${formatEur(sumCents(wants.map(centsOut)))} between them. The comparison itself covers ${count(finding.transactions, 'whole month', 'whole months')}, ${finding.period}.`,
-    why: 'Money that goes to wants as income rises is common, and it only matters if it is not where you meant the extra to go.',
+    why: 'In your own records, the months with more coming in were also the months with a larger share going to wants. That only matters if it is not where you meant the extra to go.',
     todo: finding.action,
     impactCents: null, // a pattern across months says nothing about how much would change, so no figure is offered
     confidence: CONFIDENCE[tested.verdict.bracket],
@@ -415,10 +383,10 @@ function fromSurvivors(month: string, tested: { result: TrendFinding; verdict: T
 export async function recommendationsFor(month: string, today: string, computedAt: number): Promise<Recommendation[]> {
   const months = monthsEndingAt(month, HISTORY_MONTHS)
   const [ledger, tested] = await Promise.all([ledgerOf(months), salaryVerdict(today, computedAt)])
-  const [over, small, rhythm, regretful] = await Promise.all([
-    overspent(month, today, ledger), smallOnes(month, computedAt, ledger), savingsRhythm(month, today, computedAt), regrets(month, ledger),
+  const [over, rhythm, regretful] = await Promise.all([
+    overspent(month, today, ledger), savingsRhythm(month, today, computedAt), regrets(month, ledger),
   ])
-  const all = [...over, ...small, ...rhythm, ...unusual(month, ledger), ...fromSurvivors(month, tested, ledger), ...regretful]
+  const all = [...over, ...smallOnes(month, ledger), ...rhythm, ...unusual(month, ledger), ...fromSurvivors(month, tested, ledger), ...regretful]
   const withheld = await withheldKeys(new Map(all.map((r) => [r.key, r.evidenceFingerprint])), computedAt)
   return all.filter((r) => !withheld.has(r.key))
 }

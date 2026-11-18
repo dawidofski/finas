@@ -5,15 +5,14 @@ import { regretClusters, type RegretCluster } from '../../learning/regret'
 import { SMALL_PURCHASE_CEILING_CENTS, smallPurchases } from '../../analytics/habits'
 import { monthSeries } from '../../analytics/series'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from '../../battery/battery'
-import { FDR_BP, benjaminiHochberg, type Corrected } from '../../battery/correction'
-import { boredomImpulse, reasonWorthwhile, type ContingencyOutcome, type ContingencyResult } from '../../battery/contingency'
-import { moodAmount, stressDiscretionary, weekend } from '../../battery/rank'
-import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle } from '../../battery/trend'
+import { FDR_BP, type Corrected } from '../../battery/correction'
+import { contingencyBracket, correct, readBattery, savingsBracket, windowOf } from '../../battery/run'
+import type { ContingencyOutcome, ContingencyResult } from '../../battery/contingency'
 import {
   findingFor, formatEffect,
   type Bracket, type CorrectionVerdict, type Finding, type Observation, type SmallPurchasesContext,
 } from '../../battery/finding'
-import { addDays, epochMsToIso, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
+import { epochMsToIso, formatMonthTitle, formatSpanishDate } from '../../lib/dates'
 import { formatBp, formatEur } from '../../lib/money'
 
 /**
@@ -77,21 +76,6 @@ async function loadTaught(): Promise<Taught[]> {
 //              unremarkable, so it counts in m and is worded "not certain yet", never "no effect".
 // ===========================================================================
 
-/**
- * The months the battery reads over. Twelve is the shortest window that can hold what the longest gates ask for —
- * four months of spending for the category comparison, two income levels of two months each — while still being a
- * bounded read (§39.4) rather than the whole ledger.
- */
-const WINDOW_MONTHS = 12
-
-const previousMonth = (month: string): string => monthKeyOf(addDays(`${month}-01`, -1))
-
-function windowOf(month: string): { from: string; to: string } {
-  let from = month
-  for (let i = 1; i < WINDOW_MONTHS; i++) from = previousMonth(from)
-  return { from, to: month }
-}
-
 type Body =
   | { kind: 'gated'; gates: Gate[] }
   | { kind: 'nothing'; why: string; n: number; period: { from: string; to: string } | null }
@@ -110,7 +94,8 @@ const looked = (bracket: Bracket, finding: (verdict: CorrectionVerdict) => Findi
 const UNJUDGED: CorrectionVerdict = { bracket: 'none', survives: false }
 
 /** One sentence per withheld state. Neither may be the sentence a real but uncertain result gets. */
-const WITHHELD: Record<'sparse' | 'too-many-categories', string> = {
+const WITHHELD: Record<ContingencyResult['verdict'], string> = {
+  tested: 'Looked at', // never shown: a tested table is `looked`, not `untested`
   sparse: 'Not looked at: too few of your answers in some corners',
   'too-many-categories': 'Not looked at: more different answers than it can weigh at once',
 }
@@ -143,10 +128,11 @@ function contingencyBody(
 ): Body {
   if (Array.isArray(outcome)) return gated(outcome)
   if ('withheld' in outcome) return { kind: 'nothing', why: outcome.why, n: outcome.n, period: outcome.period }
-  if (outcome.verdict !== 'tested') {
+  const bracket = contingencyBracket(outcome)
+  if (bracket === null) {
     return { kind: 'untested', state: WITHHELD[outcome.verdict], finding: make(outcome, UNJUDGED), own: own(outcome) }
   }
-  return looked(outcome.bracket, (verdict) => make(outcome, verdict), own(outcome))
+  return looked(bracket, (verdict) => make(outcome, verdict), own(outcome))
 }
 
 /**
@@ -158,19 +144,8 @@ function contingencyBody(
  */
 async function loadBattery(today: string, computedAt: number): Promise<Record<RelationshipId, Body>> {
   const { from, to } = windowOf(today.slice(0, 7))
-  const [mine, points, mood, frequency, stress, boredom, reasons, week, payday, salary, savings] = await Promise.all([
-    ownVocabulary(),
-    monthSeries(from, to, today, computedAt),
-    moodAmount(computedAt),
-    moodFrequency(computedAt, today),
-    stressDiscretionary(computedAt),
-    boredomImpulse(computedAt),
-    reasonWorthwhile(computedAt),
-    weekend(from, to, computedAt),
-    paydayTrend(from, to, today, computedAt),
-    salaryLifestyle(from, to, today, computedAt),
-    categorySavings(from, to, today, computedAt),
-  ])
+  const [mine, points, reads] = await Promise.all([ownVocabulary(), monthSeries(from, to, today, computedAt), readBattery(today, computedAt)])
+  const { mood, frequency, stress, boredom, reasons, week, payday, salary, savings } = reads
   // A complete month is one with records that has ENDED: the running month's small purchases are a part of a month,
   // and a part of a month compared with whole ones would read as a fall in spending that is only the calendar.
   /** Of the labels a finding may quote, the ones the owner actually authored. */
@@ -207,7 +182,7 @@ async function loadBattery(today: string, computedAt: number): Promise<Record<Re
     // the one owner-named label that reaches the sentences is that category's name.
     'category-savings': Array.isArray(savings)
       ? gated(savings)
-      : looked(savings.categories[0]?.bracket ?? 'none', (v) => findingFor('category-savings', savings, v),
+      : looked(savingsBracket(savings), (v) => findingFor('category-savings', savings, v),
         ownOnly(savings.categories[0] === undefined ? [] : [savings.categories[0].label])),
   }
 }
@@ -337,12 +312,11 @@ function Battery({ rows }: { rows: Record<RelationshipId, Body> }): ReactNode {
     const body = rows[r.id]
     return body.kind === 'looked' ? [{ item: r.id, bracket: body.bracket }] : []
   })
-  const { results, thresholdBp } = benjaminiHochberg(judged)
-  const verdicts = new Map<RelationshipId, Corrected<RelationshipId>>(results.map((c) => [c.item, c]))
+  const { verdicts, thresholdBp } = correct(judged)
 
   return (
     <>
-      <p>{correctionText(judged.length, results.filter((c) => c.survives).length, thresholdBp)}</p>
+      <p>{correctionText(judged.length, [...verdicts.values()].filter((c) => c.survives).length, thresholdBp)}</p>
       <ul className="intelligence-list battery-list" aria-label="Each question and what it can say">
         {BATTERY.map((relationship) => {
           const body = rows[relationship.id]

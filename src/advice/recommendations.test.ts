@@ -4,7 +4,9 @@ import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { saveAllocation } from '../budget/allocations'
 import { recordAccepted, recordRejected, recordShown } from './state'
-import { BANNED_LISTS, assertNotVacuous, causalWords, jargonWords, noJargon } from '../test/bannedWords'
+import { BANNED_LISTS, WORDING_LISTS, assertNotVacuous, causalWords, jargonWords, noJargon } from '../test/bannedWords'
+import { smallPurchases } from '../analytics/habits'
+import { formatEur } from '../lib/money'
 import { moodAmount, stressDiscretionary, weekend } from '../battery/rank'
 import { categorySavings, moodFrequency, paydayTrend, salaryLifestyle } from '../battery/trend'
 import { boredomImpulse, reasonWorthwhile } from '../battery/contingency'
@@ -88,6 +90,8 @@ async function world(): Promise<void> {
   await annotate('r1', { worthwhile: false })
   await annotate('r2', { worthwhile: false })
   await annotate('r3', { worthwhile: true })
+  await tx('old-r', '2026-10-20', -2000, RESTAURANTS) // an earlier month's "not worth it": not November's evidence
+  await annotate('old-r', { worthwhile: false })
   for (const m of ['2026-07', '2026-09', '2026-11']) await tx(`u${m}`, `${m}-20`, -300, ROUNDUP, { kind: 'roundup' })
   battery({ salary: salary('p<0.01') })
 }
@@ -126,6 +130,28 @@ describe('recommendationsFor', () => {
     }
   })
 
+  it('states the same small-purchases figure the analytics reader gives, over the same purchases', async () => {
+    await world()
+    const small = await smallPurchases(MONTH, 1000, COMPUTED_AT)
+    const rec = byId(await run(), 'small-purchases-add-up')
+    expect(rec.noticed).toContain(`${small.count} purchases under`)
+    expect(rec.noticed).toContain(formatEur(small.totalCents))
+    expect(rec.evidence.transactionIds).toHaveLength(small.count)
+    await db.transactions.update('s1', { deletedAt: 5 }) // nine is a handful, not a habit
+    expect((await run()).map((r) => r.id)).not.toContain('small-purchases-add-up')
+  })
+
+  it('says the figure is worked out with refunds taken off when it differs from the purchases listed, and not otherwise', async () => {
+    await world()
+    expect(byId(await run(), 'overspent-category').evidence.summary).not.toMatch(/refund/i) // 150,00 listed, 150,00 spent
+    await tx('ref', '2026-11-20', 2000, GROCERIES, { kind: 'income' })
+    await db.transfers.add({ id: 'rf', outTransactionId: 'g1', inTransactionId: 'ref', amountCents: 2000, matchScore: 100, confirmedByUser: true, matchedAt: 1, linkKind: 'refund' })
+    const rec = byId(await run(), 'overspent-category')
+    expect(rec.noticed).toContain(formatEur(13000)) // 150,00 less the 20,00 refunded
+    expect(rec.evidence.summary).toContain(formatEur(15000))
+    expect(rec.evidence.summary).toMatch(/refunds taken off, so it can differ/)
+  })
+
   it('names the transactions behind each recommendation, and only those', async () => {
     await world()
     const recs = await run()
@@ -133,7 +159,7 @@ describe('recommendationsFor', () => {
     expect(ids('overspent-category')).toEqual(['g1', 'g2', 'g3'])
     expect(ids('small-purchases-add-up')).toEqual(Array.from({ length: 10 }, (_, i) => `s${i + 1}`).sort())
     expect(ids('unusual-spend')).toEqual(['r1'])
-    expect(ids('regret-cluster')).toEqual(['r1', 'r2']) // the two marked not worth it, not the one marked worth it
+    expect(ids('regret-cluster')).toEqual(['r1', 'r2']) // November's two marked not worth it: not the one marked worth it, not October's
     expect(ids('discretionary-rising')).toEqual(['r1', 'r2', 'r3'])
     expect(ids('savings-inconsistent')).toEqual(['u2026-07', 'u2026-09', 'u2026-11'])
   })
@@ -191,14 +217,15 @@ describe('recommendationsFor', () => {
   it('withholds an estimated impact it cannot honestly compute, rather than printing zero', async () => {
     await world()
     const recs = await run()
-    // No honest saving can be read off a count of small purchases, a pattern across months or a run of savings.
-    for (const id of ['small-purchases-add-up', 'savings-inconsistent', 'discretionary-rising'] as const) {
+    // No honest saving can be read off a count of small purchases, a pattern across months, a run of savings or a list of purchases the owner rated.
+    for (const id of ['small-purchases-add-up', 'savings-inconsistent', 'discretionary-rising', 'regret-cluster'] as const) {
       expect(byId(recs, id).impactCents).toBeNull()
     }
-    // Where the bank rows do give a figure it is that figure: the overage on a line, the part above usual, what was marked not worth it.
+    // Where the bank rows do give a figure it is that figure: the overage on a line and the part above usual. What was marked
+    // not worth it is a fact in the summary, not an estimate of what would be saved, so it is not offered as an impact.
     expect(byId(recs, 'overspent-category').impactCents).toBe(5000)  // 150,00 spent against 100,00
     expect(byId(recs, 'unusual-spend').impactCents).toBe(13000)      // 150,00 against a usual 20,00
-    expect(byId(recs, 'regret-cluster').impactCents).toBe(17000)     // 150,00 + 20,00
+    expect(byId(recs, 'regret-cluster').evidence.summary).toContain(formatEur(17000)) // what was spent is still said, as a fact
     expect(recs.some((r) => r.impactCents === 0)).toBe(false)
   })
 
@@ -304,6 +331,18 @@ describe('recommendationsFor', () => {
     expect((await run()).map((r) => r.id)).not.toContain('savings-inconsistent') // none did
   })
 
+  it('does not count a month still running as a month without savings', async () => {
+    await world()
+    // December is the running month (today is the 5th) and holds a purchase but no saving yet. Counted, it would make
+    // four months without savings instead of three.
+    await tx('dec', '2026-12-02', -2000, RESTAURANTS)
+    const asked = await recommendationsFor('2026-12', TODAY, COMPUTED_AT)
+    const rec = byId(asked, 'savings-inconsistent')
+    expect(rec.noticed).toContain('3 of the 6 months')
+    expect(rec.noticed).toContain('the other 3')
+    expect(rec.noticed).toContain('Between June 2026 and November 2026')
+  })
+
   it('says nothing for a month with nothing to say', async () => {
     expect(await run()).toEqual([])
   })
@@ -312,11 +351,13 @@ describe('recommendationsFor', () => {
     // The scan reads the project's one set of lists; it is only worth anything if those lists are not vacuous.
     expect(BANNED_LISTS).toHaveLength(3)
     expect(() => assertNotVacuous(BANNED_LISTS)).not.toThrow()
+    expect(WORDING_LISTS.map((l) => l.name)).toEqual(['meansAssumption', 'shamingWords'])
+    expect(() => assertNotVacuous(WORDING_LISTS)).not.toThrow()
     for (const list of BANNED_LISTS) {
       expect(list.pattern.test(list.forbids)).toBe(true)
       expect(list.pattern.test(list.allows)).toBe(false)
     }
-    const patterns = [causalWords, jargonWords, noJargon]
+    const patterns = [causalWords, jargonWords, noJargon, ...WORDING_LISTS.map((l) => l.pattern)]
     const offending = (r: Recommendation): string[] =>
       wordsOf(r).flatMap((text) => patterns.flatMap((p) => (p.exec(text) ? [`${p.source.slice(0, 12)}: ${text}`] : [])))
 
@@ -328,6 +369,8 @@ describe('recommendationsFor', () => {
       { ...clean, noticed: 'Spending went up because of the weekend.' },
       { ...clean, why: 'This is a percentile of your month.' },
       { ...clean, todo: 'Fix the model.' },
+      { ...clean, why: 'You should not have spent it.' },
+      { ...clean, todo: 'You could just stop buying coffee.' },
       { ...clean, evidence: { ...clean.evidence, summary: 'It is due to stress.' } },
     ]) expect(offending(poisoned).length).toBeGreaterThan(0)
 
@@ -336,11 +379,13 @@ describe('recommendationsFor', () => {
     for (const r of recs) expect(offending(r)).toEqual([])
   })
 
-  it('judges nobody: no word of instruction or blame, and no unfilled placeholder', async () => {
+  it('leaves no unfilled placeholder in any field', async () => {
     await world()
     const text = (await run()).flatMap(wordsOf).join(' ')
-    expect(text).not.toMatch(/\b(should|must|waste|wasted|splurge|overspen[dt]|too much|careless|bad)\b/i)
+    expect(text.length).toBeGreaterThan(500)
     expect(text).not.toMatch(/\bNaN\b|undefined|\[object/)
+    // Nothing in the app supports a claim about people in general: the advice speaks only about the owner's own records.
+    expect(text).not.toMatch(/\b(common|most people|many people|typically|everyone)\b/i)
   })
 })
 
