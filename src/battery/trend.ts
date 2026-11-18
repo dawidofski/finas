@@ -3,6 +3,7 @@ import { afterPayday } from '../analytics/habits'
 import { monthSeries, type MonthPoint } from '../analytics/series'
 import { cached } from '../analytics/cache'
 import { monthlyBudget } from '../budget/month'
+import { incomeByMonth } from '../analysis/income'
 import { addDays, isoWeekday } from '../lib/dates'
 import { divRound } from '../lib/money'
 import { nextMonthStart } from '../analysis/transactionsInRange'
@@ -87,9 +88,14 @@ const monthsPeriod = (months: readonly string[]): { from: string; to: string } =
   return { from: first === undefined ? '' : `${first}-01`, to: last === undefined ? '' : addDays(nextMonthStart(last), -1) }
 }
 
-/** The months that were actually observed. A gap month (hasData false) is NOT zero, so it is not here. */
-async function observedMonths(from: string, to: string, today: string, computedAt: number): Promise<MonthPoint[]> {
-  return (await monthSeries(from, to, today, computedAt)).filter(p => p.hasData)
+/**
+ * The months with data (a gap month, hasData false, is NOT zero, so it is not here), optionally only the COMPLETE ones.
+ * The running month is a part of a month: as an observation it is not a small version of a whole month (a part-month
+ * spend against a part-month saving would read as a fall that is only the calendar), so a month-unit relationship
+ * leaves it out entirely, and it does not count toward the gate either.
+ */
+async function observedMonths(from: string, to: string, today: string, computedAt: number, completeOnly: boolean): Promise<MonthPoint[]> {
+  return (await monthSeries(from, to, today, computedAt)).filter(p => p.hasData && (!completeOnly || p.month < today.slice(0, 7)))
 }
 
 /**
@@ -101,20 +107,30 @@ export function paydayTrend(from: string, to: string, today: string, computedAt:
   return cached(`battery.trend.payday:${from}:${to}:${today}`, async (): Promise<TrendResult> => {
     const xs: number[] = []
     const ys: number[] = []
-    const paydayMonths: string[] = []
-    for (const p of await observedMonths(from, to, today, computedAt)) {
+    const dates: string[] = []
+    let incomeEvents = 0
+    // A day-unit relationship KEEPS the running month but only the days that have happened. afterPayday runs to month end,
+    // so its later days are the calendar, not behaviour: a day that has not happened is ABSENT, not a zero-spend day. Today
+    // itself is unfinished, so only days strictly before it are used.
+    for (const p of await observedMonths(from, to, today, computedAt, false)) {
       const pay = await afterPayday(p.month, computedAt)
       if (pay === null) continue
-      paydayMonths.push(p.month)
-      for (const d of pay.days) { xs.push(d.dayOffset); ys.push(d.spentCents) }
+      const lastDay = addDays(nextMonthStart(p.month), -1)
+      const payday = addDays(lastDay, 1 - pay.daysObserved)
+      const happened = pay.days.filter(d => addDays(payday, d.dayOffset) < today)
+      if (happened.length === 0) continue
+      // The count the gate words in PAYMENTS: income events, not months that had one (three salary payments in two
+      // months are three).
+      incomeEvents += (await incomeByMonth(p.month, p.month)).get(p.month)?.rows ?? 0
+      for (const d of happened) { xs.push(d.dayOffset); ys.push(d.spentCents); dates.push(addDays(payday, d.dayOffset)) }
     }
-    const short = unmet('payday', { incomeEvents: paydayMonths.length })
+    const short = unmet('payday', { incomeEvents })
     if (short.length > 0) return short
     const rho = spearmanRhoBp(xs, ys)
     if (rho === null) return unusable(0, 2, 'Your spending is the same on every day after payday, or the days observed are too few, so there is no pattern to measure yet.')
     return {
       effectBp: rho, bracket: spearmanBracket(rho, xs.length), n: xs.length,
-      period: monthsPeriod(paydayMonths),
+      period: { from: [...dates].sort()[0] ?? '', to: [...dates].sort().reverse()[0] ?? '' },
     }
   }, computedAt)
 }
@@ -153,7 +169,7 @@ function incomeLevels(months: readonly ShareMonth[]): ShareMonth[][] {
  */
 export function salaryLifestyle(from: string, to: string, today: string, computedAt: number): Promise<TrendResult> {
   return cached(`battery.trend.salary-lifestyle:${from}:${to}:${today}`, async (): Promise<TrendResult> => {
-    const months: ShareMonth[] = (await observedMonths(from, to, today, computedAt))
+    const months: ShareMonth[] = (await observedMonths(from, to, today, computedAt, true))
       .filter(p => p.incomeBasis === 'actual' && p.spentCents > 0)
       .map(p => ({ month: p.month, incomeCents: p.incomeCents, shareBp: divRound(p.discretionaryCents * 10000, p.spentCents) }))
     const levels = incomeLevels(months).filter(l => l.length >= 2)
@@ -197,34 +213,38 @@ export function moodFrequency(computedAt: number): Promise<MoodFrequencyResult> 
   return cached('battery.trend.mood-frequency', async (): Promise<MoodFrequencyResult> => {
     // The shared spend loader of rank.ts: one definition of what counts as a spend, bank sign, amount and date.
     const spends = await spendsOf(await annotatedTransactions(a => a.moodId !== null))
-    const perWeek = new Map<string, { low: number; good: number }>()
+    const perWeek = new Map<string, { low: number; good: number; first: string; last: string }>()
     for (const s of spends) {
       if (s.valence === null || s.valence === 0) continue
       const week = weekOf(s.date)
-      const w = perWeek.get(week) ?? { low: 0, good: 0 }
+      const w = perWeek.get(week) ?? { low: 0, good: 0, first: s.date, last: s.date }
+      if (s.date > w.last) w.last = s.date
+      if (s.date < w.first) w.first = s.date
       if (s.valence < 0) w.low++
       else w.good++
       perWeek.set(week, w)
     }
     const short = unmet('mood-frequency', { weeksOfMoodCoverage: perWeek.size })
     if (short.length > 0) return short
-    const lowWeeks: string[] = []
-    const goodWeeks: string[] = []
+    const bankDates: string[] = []
     const lowCounts: number[] = []
     const goodCounts: number[] = []
-    for (const [week, w] of [...perWeek].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+    for (const w of perWeek.values()) {
       if (w.low === w.good) continue // tied: counted nowhere
-      if (w.low > w.good) { lowWeeks.push(week); lowCounts.push(w.low + w.good) } else { goodWeeks.push(week); goodCounts.push(w.low + w.good) }
+      bankDates.push(w.first, w.last)
+      if (w.low > w.good) lowCounts.push(w.low + w.good)
+      else goodCounts.push(w.low + w.good)
     }
     const mw = mannWhitneyU(lowCounts, goodCounts)
     if (mw === null) return unusable(0, 1, 'Only one kind of mood week has been recorded so far, so there is nothing to compare it with.')
     const sum = (xs: number[]): number => xs.reduce((t, x) => t + x, 0)
-    const used = [...lowWeeks, ...goodWeeks].sort()
     return {
       effectBp: mw.rBp,
       bracket: mannWhitneyBracket(mw.uDoubled, lowCounts.length, goodCounts.length),
       n: lowCounts.length + goodCounts.length,
-      period: { from: used[0] ?? '', to: addDays(used[used.length - 1] ?? '', 6) },
+      // The first and last BANK dates actually used, never the Monday and Sunday that bound the weeks: either may hold no
+      // purchase and the Sunday may not have happened yet.
+      period: { from: bankDates.sort()[0] ?? '', to: bankDates.sort().reverse()[0] ?? '' },
       lowMood: { weeks: lowCounts.length, purchases: sum(lowCounts) },
       goodMood: { weeks: goodCounts.length, purchases: sum(goodCounts) },
       tiedWeeks: perWeek.size - lowCounts.length - goodCounts.length,
@@ -241,7 +261,7 @@ export function moodFrequency(computedAt: number): Promise<MoodFrequencyResult> 
  */
 export function categorySavings(from: string, to: string, today: string, computedAt: number): Promise<CategorySavingsResult> {
   return cached(`battery.trend.category-savings:${from}:${to}:${today}`, async (): Promise<CategorySavingsResult> => {
-    const months = await observedMonths(from, to, today, computedAt)
+    const months = await observedMonths(from, to, today, computedAt, true)
     const short = unmet('category-savings', { monthsObserved: months.length })
     if (short.length > 0) return short
     const budgets = await Promise.all(months.map(p => monthlyBudget(p.month, today)))

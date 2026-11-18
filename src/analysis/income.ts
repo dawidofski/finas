@@ -187,10 +187,10 @@ export async function excludedTransactionIds(month: string): Promise<Set<string>
   return exclusions((d) => d.startsWith(month))
 }
 
-interface MonthIncome { rows: number; cents: number }
+export interface MonthIncome { rows: number; cents: number }
 
 /** Per-month income over a window. A month appears in the map only if it holds at least one live transaction. */
-async function incomeByMonth(firstMonth: string, lastMonth: string): Promise<Map<string, MonthIncome>> {
+export async function incomeByMonth(firstMonth: string, lastMonth: string): Promise<Map<string, MonthIncome>> {
   const [txs, excluded] = await Promise.all([
     liveTransactionsBetween(firstMonth, lastMonth),
     exclusions((d) => d >= `${firstMonth}-01` && d < nextMonthStart(lastMonth)),

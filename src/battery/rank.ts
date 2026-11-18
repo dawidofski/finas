@@ -4,6 +4,7 @@ import type { TransactionRow } from '../db/schema'
 import { annotatedTransactions } from '../learning/regret'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { cached } from '../analytics/cache'
+import { treatmentOf } from '../analysis/income'
 import { addDays, isoWeekday } from '../lib/dates'
 import { mannWhitneyU, spearmanRhoBp } from './stats'
 import { mannWhitneyBracket, spearmanBracket, type Bracket } from './critical'
@@ -46,9 +47,16 @@ export interface Spend {
   discretionary: boolean
   /** The resolved category's kind; null for an uncategorised spend, which is not evidence either way. */
   categoryKind: string | null
+  reasonId: string | null
+  worthwhile: boolean | null
 }
 
-/** Spends among `bank` rows: the kind is the owner's (§43), the sign, amount and date the bank's. */
+/**
+ * THE definition of "a spend" for the whole battery, and the app's own: the resolved kind and category must make
+ * `treatmentOf(kind, categoryKind) === 'spending'` (the rule Budget, Reports and payday already show), and the BANK
+ * amount must be strictly negative, so a 0,00 row is not a purchase anywhere. A spend sitting in a savings, internal or
+ * income category is not one. The kind and category are the owner's (§43); the sign, amount and date are the bank's (§41).
+ */
 export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const byId = new Map(bank.map(t => [t.id, t]))
   const resolved = await resolveMany(bank)
@@ -58,15 +66,17 @@ export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const out: Spend[] = []
   for (const r of resolved) {
     const t = byId.get(r.id)
-    // The kind is the owner's (§43); the sign, amount and date are the bank's.
-    if (!t || r.kind !== 'spend' || t.amountCents >= 0) continue
+    const categoryKind = r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null
+    if (!t || t.amountCents >= 0 || treatmentOf(r.kind, categoryKind) !== 'spending') continue
     out.push({
       centsOut: -t.amountCents,
       date: t.valueDate,
       moodId: r.moodId,
       valence: r.moodId === null ? null : valence.get(r.moodId) ?? null,
       discretionary: r.categoryId !== null && kindOf.get(r.categoryId) === 'discretionary',
-      categoryKind: r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null,
+      categoryKind,
+      reasonId: r.purchaseReasonId,
+      worthwhile: r.worthwhile,
     })
   }
   return out
@@ -151,8 +161,8 @@ export function stressDiscretionary(computedAt: number): Promise<RankResult> {
 }
 
 /**
- * `firstMonth` and `lastMonth` ('YYYY-MM') bound the read and are the period reported on: the caller (the screen) names
- * the window. Unlike mood and stress, the weekend effect reads LIVE transactions, not annotations: nothing in it is
+ * `firstMonth` and `lastMonth` ('YYYY-MM') bound the read ONLY. The period reported is the first and last BANK date of the
+ * spends actually used, never the caller's window: echoing the window would claim months the owner may have no records in. Unlike mood and stress, the weekend effect reads LIVE transactions, not annotations: nothing in it is
  * classified by the owner (the weekday is the bank's date, the figure the bank's amount), so restricting it to rows the
  * owner happened to annotate would bias it for no reason. A month range is the sanctioned bounded read (§39.4).
  */

@@ -51,7 +51,34 @@ describe('paydayTrend', () => {
     // The owner "corrects" the last day of October to look like payday itself. The bank's date stands, so nothing moves.
     await ann('sp.2026-10-28.3', { dateOverride: '2026-10-28' })
     const r = await paydayTrend('2026-10', '2026-12', TODAY, 1000)
-    expect(r).toEqual({ effectBp: -10000, bracket: 'p<0.001', n: 12, period: { from: '2026-10-01', to: '2026-12-31' } })
+    expect(r).toEqual({ effectBp: -10000, bracket: 'p<0.001', n: 12, period: { from: '2026-10-28', to: '2026-12-31' } })
+  })
+
+  it('counts income events, not months with a payday, against the gate of three payments', async () => {
+    // Two months, three payments: Oct 28 and Nov 27 are the paydays (the largest of their months), and a second, smaller
+    // payment lands on Nov 29. The gate is worded in payments, so it has 3 and is met; counting months it would have 2.
+    await seedPaydays([['2026-10-28', 28], ['2026-11-27', 27]])
+    await tx('second.pay', '2026-11-29', 5000, { kind: 'income' })
+    const r = await paydayTrend('2026-10', '2026-12', TODAY, 1000)
+    expect(Array.isArray(r)).toBe(false)
+  })
+
+  it('leaves out the days that have not happened in the running month, rather than reading them as zero spending', async () => {
+    // Oct 28 and Nov 27 are as above: y = 4000, 3000, 2000, 1000 on offsets 0..3. December's payday is Dec 5 and today is
+    // Dec 10, so the days that HAVE happened are offsets 0..4 (Dec 5..9), spending 1000, 2000, 3000, 4000, 5000. Today
+    // (Dec 10, offset 5) is unfinished and holds a 90.00 spend that must not count either.
+    // Pooled n = 13, x ranks (average): 0 -> 2, 1 -> 5, 2 -> 8, 3 -> 11, 4 -> 13; y has the same tie shape, same ranks.
+    // Mean rank 7. Sxx = Syy = 3*25 + 3*4 + 3*1 + 3*16 + 36 = 174.
+    // Sxy: Oct and Nov, each (-5*4) + (-2*1) + (1*-2) + (4*-5) = -44, so -88; December (25 + 4 + 1 + 16 + 36) = 82. Sxy = -6.
+    // rho = -6 / 174 = -0.03448 = -345 bp; n = 13 is past the floor of ten and nowhere near a critical, so 'none'.
+    // With the 22 unlived days (offsets 5..26) read as zero spending, rho would be -0.81 over n = 35 and a finding.
+    await seedPaydays([['2026-10-28', 28], ['2026-11-27', 27]])
+    await tx('pay.dec', '2026-12-05', 200000, { kind: 'income' })
+    for (let off = 0; off < 5; off++) await tx(`sp.dec.${off}`, `2026-12-0${5 + off}`, -(1000 + off * 1000))
+    await tx('sp.today', '2026-12-10', -9000)
+    const r = await paydayTrend('2026-10', '2026-12', '2026-12-10', 1000)
+    // The period is the bank dates actually covered: the first payday to the last finished day.
+    expect(r).toEqual({ effectBp: -345, bracket: 'none', n: 13, period: { from: '2026-10-28', to: '2026-12-09' } })
   })
 
   it('withholds below three payments received, naming what is short', async () => {
@@ -85,6 +112,18 @@ describe('salaryLifestyle', () => {
     const r = await salaryLifestyle('2026-01', '2026-05', TODAY, 1000)
     // Four months a side is under the floor of eight, so the effect is real and the bracket is 'none'.
     expect(r).toEqual({ effectBp: 10000, bracket: 'none', n: 4, period: { from: '2026-01-01', to: '2026-05-31' } })
+  })
+
+  it('leaves the running month out entirely, whatever income it already has', async () => {
+    await month('2026-01', 200000, 20000, 80000) // 2000 bp
+    await month('2026-02', 200000, 25000, 75000) // 2500 bp
+    await month('2026-03', 300000, 30000, 70000) // 3000 bp
+    await month('2026-04', 300000, 35000, 65000) // 3500 bp
+    // May is the running month (today is May 20): income already landed, nothing spent on wants yet, share 0. Admitted,
+    // the high level would be 3500, 3000, 0 against 2500, 2000: wins 4, losses 2 of 6, r = +3333 instead of +10000.
+    await month('2026-05', 300000, 0, 20000)
+    const r = await salaryLifestyle('2026-01', '2026-05', '2026-05-20', 1000)
+    expect(r).toEqual({ effectBp: 10000, bracket: 'none', n: 4, period: { from: '2026-01-01', to: '2026-04-30' } })
   })
 
   it('reads negative when the share spent on wants fell as income rose', async () => {
@@ -126,7 +165,7 @@ describe('moodFrequency', () => {
       const count = LOW[w] ?? 0
       for (let k = 0; k < count; k++) {
         // Week 0's third purchase is on the SUNDAY (offset 6): it belongs to the week that began the Monday before.
-        const off = w === 0 && k === 2 ? 6 : k
+        const off = w === 0 && k === 2 ? 6 : w === 0 && k === 0 ? 1 : k // week 0 has no Monday purchase: its period starts Tuesday
         const id = `l.${w}.${k}`
         await tx(id, addDays(monday(w), off), -1500)
         await ann(id, { moodId: k % 2 === 0 ? 'mood.stressed' : 'mood.sad' })
@@ -157,7 +196,7 @@ describe('moodFrequency', () => {
     await tx('o.1', '2026-10-12', -1500); await ann('o.1', { moodId: 'mood.other' })
     const r = await moodFrequency(1000)
     expect(r).toEqual({
-      effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-05', to: '2026-07-19' },
+      effectBp: 10000, bracket: 'p<0.001', n: 28, period: { from: '2026-01-06', to: '2026-07-15' },
       lowMood: { weeks: 8, purchases: 39 }, goodMood: { weeks: 20, purchases: 40 }, tiedWeeks: 5,
     })
   })
@@ -202,6 +241,18 @@ describe('categorySavings', () => {
     const r = await categorySavings('2026-01', '2026-06', TODAY, 1000)
     expect(r).toMatchObject({ months: 5, period: { from: '2026-02-01', to: '2026-06-30' } })
     expect((r as { categories: { effectBp: number }[] }).categories[0]?.effectBp).toBe(-3000)
+  })
+
+  it('does not count the running month toward the four months, or into the correlation', async () => {
+    await seedFive() // Feb..Jun 2026
+    // Today is June 15: June is the running month. The four whole months give x ranks 1..4, y ranks 2, 4, 1, 3:
+    // d = -1, -2, 2, 1, sum d^2 = 10, rho = 1 - 6*10 / (4*15) = 0. With June (the -3000 above) it would be five months.
+    const four = await categorySavings('2026-02', '2026-06', '2026-06-15', 1000)
+    expect(four).toMatchObject({ months: 4, period: { from: '2026-02-01', to: '2026-05-31' } })
+    expect((four as { categories: { effectBp: number }[] }).categories[0]?.effectBp).toBe(0)
+    // Today is May 15: Feb, Mar, Apr are whole; May and June do not count, so three months is short of four.
+    const three = await categorySavings('2026-02', '2026-06', '2026-05-15', 1000)
+    expect(three).toMatchObject([{ have: 3, need: 4 }])
   })
 
   it('withholds below four months, naming what is short', async () => {

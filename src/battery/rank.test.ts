@@ -74,6 +74,18 @@ describe('moodAmount', () => {
     expect(r.bracket).toBe('p<0.001')
   })
 
+  it('reports the period it covered, from the bank dates, not the typed ones', async () => {
+    await seedMoodSpends()
+    // Bank dates run 2026-01-10 .. 2026-03-15. The owner "corrected" the latest to 2030 and the earliest to 2020: neither
+    // may widen the period.
+    await db.transactions.bulkDelete(['m1', 'm30'])
+    await db.transactions.bulkAdd([tx('m1', { amountCents: -100, valueDate: '2026-01-10' }), tx('m30', { amountCents: -3000, valueDate: '2026-03-15' })])
+    await db.annotations.update('m1', { dateOverride: '2020-01-01' })
+    await db.annotations.update('m30', { dateOverride: '2030-12-31' })
+    const r = finding(await moodAmount(1))
+    expect(r.period).toEqual({ from: '2026-01-10', to: '2026-03-15' })
+  })
+
   it('treats a mood with no valence as unusable rather than as zero', async () => {
     // Five "Other" purchases (valence null) with huge amounts. As valence 0 they would join the Neutral group:
     // n would be 35 and rho would move. As unusable they change nothing.
@@ -232,6 +244,19 @@ describe('weekend', () => {
     await db.transactions.bulkAdd(txs)
     const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.effectBp).toBe(10000)
+    expect(r.n).toBe(16)
+    expect(r.period).toEqual({ from: '2026-01-03', to: '2026-02-23' })
+  })
+
+  it('counts only what the budget counts as a purchase: no 0,00 row, no spend filed under savings', async () => {
+    // The sixteen spends above, plus on Saturdays: a 0,00 row (not money out), and a large spend the owner filed under
+    // the savings category (treatmentOf says savings, not spending). Neither is a purchase, so n stays 16 and the
+    // weekend side does not move; counted, there would be 18 and the huge savings row would be the top weekend value.
+    await seedWeekends(false)
+    await db.transactions.add(tx('zero', { valueDate: '2026-01-10', amountCents: 0 }))
+    await db.transactions.add(tx('sav', { valueDate: '2026-01-10', amountCents: -900000 }))
+    await db.annotations.add(ann('sav', { categoryId: 'cat.roundup' }))
+    const r = finding(await weekend('2026-01', '2026-03', 1))
     expect(r.n).toBe(16)
     expect(r.period).toEqual({ from: '2026-01-03', to: '2026-02-23' })
   })

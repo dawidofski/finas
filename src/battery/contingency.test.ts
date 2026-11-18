@@ -31,6 +31,7 @@ interface Group {
   worthwhile?: boolean | null
   amountCents?: number
   kind?: TransactionRow['kind']
+  categoryId?: string
   /** The bank's valueDate. */
   date?: string
   /** The owner's correction of the date, which must never move a period. */
@@ -46,7 +47,7 @@ async function put(groups: Group[]): Promise<void> {
       const id = `t${(seq += 1)}`
       txs.push(tx(id, { amountCents: g.amountCents ?? -1000, kind: g.kind ?? 'spend', valueDate: g.date ?? '2026-11-16' }))
       if (g.annotate === false) continue
-      anns.push(ann(id, { purchaseReasonId: g.reason ?? null, moodId: g.mood ?? null, worthwhile: g.worthwhile ?? null, dateOverride: g.dateOverride ?? null }))
+      anns.push(ann(id, { purchaseReasonId: g.reason ?? null, moodId: g.mood ?? null, worthwhile: g.worthwhile ?? null, categoryId: g.categoryId ?? null, dateOverride: g.dateOverride ?? null }))
     }
   }
   await db.transactions.bulkAdd(txs)
@@ -71,6 +72,21 @@ beforeEach(async () => {
 
 const E = 'reason.essential'
 const I = 'reason.impulse'
+
+describe('what counts as a spend', () => {
+  it('leaves out a 0,00 row and a spend filed under savings, as the budget does', async () => {
+    await put([
+      { n: 12, reason: E, worthwhile: true }, { n: 3, reason: E, worthwhile: false },
+      { n: 5, reason: I, worthwhile: true }, { n: 12, reason: I, worthwhile: false },
+      // Neither is a purchase: a zero-cent row is not money out, and treatmentOf calls a savings-category spend savings.
+      { n: 2, reason: E, worthwhile: false, amountCents: 0 },
+      { n: 2, reason: E, worthwhile: false, categoryId: 'cat.roundup' },
+    ])
+    const r = asResult(await reasonWorthwhile(1))
+    expect(r.n).toBe(32)
+    expect(counts(r)).toEqual({ [E]: [12, 3], [I]: [5, 12] })
+  })
+})
 
 describe('reasonWorthwhile', () => {
   it('builds the table from the owners reasons and hindsight answers, counting only answered spends', async () => {

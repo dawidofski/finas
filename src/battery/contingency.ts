@@ -37,9 +37,9 @@
 // unremarkable result and neither belongs in m.
 
 import { db } from '../db/db'
-import { resolveMany } from '../db/annotations'
 import { annotatedTransactions } from '../learning/regret'
 import { cached } from '../analytics/cache'
+import { spendsOf } from './rank'
 import { chiSquareScaled, cramersVBp } from './stats'
 import { CHI_TABLE_MAX_DF, chiSquareBracket, type Bracket } from './critical'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from './battery'
@@ -165,17 +165,15 @@ interface Answers {
 }
 
 /**
- * The answers on every spend (money out, owner-resolved kind spend, §41/§43) that satisfies `keep`. The read goes through
+ * The answers on every spend (rank.ts's spendsOf: money out and a spending treatment, §41/§43) that satisfies `keep`. The read goes through
  * annotatedTransactions, so it is bounded by the owner's own annotations and never reads the whole ledger (§39.4).
  */
 async function answeredSpends(keep: (a: Omit<Answers, 'bankDate'>) => boolean): Promise<Answers[]> {
   const bank = await annotatedTransactions((a) => keep({ moodId: a.moodId, reasonId: a.purchaseReasonId, worthwhile: a.worthwhile }))
-  const byId = new Map(bank.map((t) => [t.id, t]))
   const out: Answers[] = []
-  for (const r of await resolveMany(bank)) {
-    const t = byId.get(r.id)
-    if (t === undefined || r.kind !== 'spend' || t.amountCents > 0) continue
-    const answers = { bankDate: t.valueDate, moodId: r.moodId, reasonId: r.purchaseReasonId, worthwhile: r.worthwhile }
+  // The one definition of a spend, shared with rank.ts: treatmentOf spending and a strictly negative bank amount.
+  for (const s of await spendsOf(bank)) {
+    const answers = { bankDate: s.date, moodId: s.moodId, reasonId: s.reasonId, worthwhile: s.worthwhile }
     if (keep(answers)) out.push(answers)
   }
   return out
