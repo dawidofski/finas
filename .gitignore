@@ -32,3 +32,6 @@ Thumbs.db
 
 # Local editor/agent config
 .claude/
+
+# Agent mutation scratch (never committed)
+scratchpad/
