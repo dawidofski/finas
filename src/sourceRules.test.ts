@@ -130,6 +130,38 @@ describe('source rules, over every file in src/', () => {
     expect(Object.keys(allowed).filter((rel) => !users.includes(rel))).toEqual([]) // an exemption that is no longer needed
   })
 
+  it('keeps the battery out of the learning engine: nothing in src/learning/ imports from src/battery/', () => {
+    // Design 7.2: the battery FEEDS NOTHING ELSE. It reads the learning engine's own annotations (rank.ts and
+    // contingency.ts both import src/learning/regret.ts) and hands its results to one screen; the arrow never turns
+    // round. A statistic that reached the learning engine would let a bracket decide a category, a merchant or a
+    // regret cluster, so the engine's behaviour would start depending on how many comparisons the battery happened to
+    // run — and a figure the owner was shown as provisional would have quietly become a decision about their money.
+    //
+    // This rule cannot use `code()`: an import path IS a string literal, and code() replaces every string with ''.
+    // Comments are stripped instead, so a doc comment that merely names a battery path (this one does not, on
+    // purpose) cannot trip it, and the match is required to be import syntax rather than a bare mention.
+    const withoutComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ')
+    const batteryImport = /\b(?:from|import|require)\s*\(?\s*['"][^'"]*\bbattery\b[^'"]*['"]/g
+    const learning = files.filter((f) => f.rel.startsWith('learning/'))
+    expect(learning.length).toBeGreaterThan(3) // the scan covers a real directory, not an empty one
+    expect(learning.flatMap((f) => (withoutComments(f.text).match(batteryImport) ?? []).map((m) => `${f.rel}: ${m}`))).toEqual([])
+    // The detector itself: it must see the imports it exists to forbid, in every spelling, and leave the rest alone.
+    for (const bad of [
+      "import { BATTERY } from '../battery/battery'",
+      "import type { Gate } from '../battery/battery'\n",
+      "export { findingFor } from '../../battery/finding'",
+      "const m = await import('../battery/rank')",
+      "const m = require('../battery/trend')",
+    ]) expect(withoutComments(bad).match(batteryImport), bad).not.toBeNull()
+    for (const good of [
+      "import { db } from '../db/db'",
+      "// the engine never imports from '../battery/battery'",
+      "/* nothing here reads '../battery/finding' */",
+      'const battery = 1',
+      "const label = 'battery'",
+    ]) expect(withoutComments(good).match(batteryImport), good).toBeNull()
+  })
+
   it('reads db.<table> at call time, never captures it at module scope', () => {
     // A `const t = db.transactions` outside any function would bind the table when the module loads, before a test (or a
     // restore) has replaced the database, and the module would then read a stale handle. This replaces three per-file copies
