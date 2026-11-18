@@ -598,3 +598,48 @@ describe('monthlyBudget allocation arithmetic', () => {
     })
   })
 })
+
+describe('monthlyBudget goal lines', () => {
+  const goalAlloc = (goalId: string, fixedCents: number | null, percentBp: number | null = null) =>
+    saveAllocation({ categoryId: null, savingsGoalId: goalId, percentBp, fixedCents, effectiveFrom: '2026-01-01', note: null })
+  beforeEach(async () => {
+    await db.savingsGoals.add({
+      id: 'goal.2', name: 'Coche inventado', targetCents: 500000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: null, archived: false,
+    })
+    await tx('pay', '2026-11-01', 200000)
+  })
+
+  it('shows a goal line as funded by the savings attributed to it that month', async () => {
+    await goalAlloc('goal.1', 3000)
+    await goalAlloc('goal.2', 1000)
+    await tx('s1', '2026-11-05', -2000, ROUNDUP, 'roundup') // 20.00 saved in the month, shared 3:1 -> 1500 and 500
+    expect(await line('goal.1')).toMatchObject({ targetKind: 'goal', allocatedCents: 3000, spentCents: 1500, remainingCents: 1500, varianceBp: -5000 })
+    expect(await line('goal.2')).toMatchObject({ allocatedCents: 1000, spentCents: 500, remainingCents: 500, varianceBp: -5000 })
+  })
+
+  it('never funds a goal beyond its allocation, and funds nothing when nothing was saved', async () => {
+    await goalAlloc('goal.1', 3000)
+    await goalAlloc('goal.2', 1000)
+    await tx('s1', '2026-11-05', -9000, ROUNDUP, 'roundup') // more saved than planned: each line is met exactly
+    expect(await line('goal.1')).toMatchObject({ spentCents: 3000, remainingCents: 0, varianceBp: 0 })
+    expect(await line('goal.2')).toMatchObject({ spentCents: 1000, remainingCents: 0, varianceBp: 0 })
+    expect(await line('goal.1', '2026-10')).toMatchObject({ spentCents: 0, remainingCents: 3000, varianceBp: -10000 })
+  })
+
+  it('gives a goal with a zero allocation nothing, and no ratio', async () => {
+    await goalAlloc('goal.1', 3000)
+    await goalAlloc('goal.2', 0)
+    await tx('s1', '2026-11-05', -2000, ROUNDUP, 'roundup')
+    expect(await line('goal.1')).toMatchObject({ spentCents: 2000 })
+    expect(await line('goal.2')).toMatchObject({ allocatedCents: 0, spentCents: 0, varianceBp: null })
+  })
+
+  it('does not let savings change what a category line shows', async () => {
+    await allocate('cat.groceries', null, 10000)
+    await goalAlloc('goal.1', 3000)
+    await tx('g', '2026-11-05', -4000, GROCERIES)
+    await tx('s1', '2026-11-06', -2000, ROUNDUP, 'roundup')
+    expect(await line('cat.groceries')).toMatchObject({ spentCents: 4000 })
+    expect(await line('goal.1')).toMatchObject({ spentCents: 2000 })
+  })
+})

@@ -3,14 +3,19 @@ import { cached } from '../../analytics/cache'
 import { monthSeries, type MonthPoint } from '../../analytics/series'
 import { monthlyBudget } from '../../budget/month'
 import { db } from '../../db/db'
+import type { SavingsGoalRow } from '../../db/schema'
 import { regretClustersBetween } from '../../learning/regret'
-import { addDays, monthKeyOf } from '../../lib/dates'
+import { goalContributions } from '../../goals/contributions'
+import { progressOf } from '../../goals/progress'
+import { addDays, epochMsToIso, monthKeyOf } from '../../lib/dates'
 import { divRound } from '../../lib/money'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, type Component } from '../../score/components'
 import { moneyScore, type ComponentId, type MoneyScore, type ScoredComponent } from '../../score/score'
 
 /** Completed months the series-based measures look back over. Improvement needs six of them to have spending, so this leaves room for gaps. */
 const SERIES_MONTHS = 12
+/** The most completed months of goal history the goal-progress measure reads; a goal older than this counts only its last 36 months, and the measure says so. */
+const GOAL_MONTHS = 36
 /** Months in the review window, counting the one in progress: the review measure speaks about recent activity. */
 const REVIEW_MONTHS = 6
 /** Each of the two windows the repeated-regret measure compares: the latest completed months, and the same number before them. */
@@ -24,11 +29,11 @@ const lastDayOf = (month: string): string => addDays(`${monthKeyOf(addDays(`${mo
 /**
  * The six measures, each from the cache (§39.4: this screen never reads the ledger itself). A measure is cached whole,
  * under a key naming its window, so a new month is a new key. Within a window it is recomputed when the cache's digest
- * moves, and that digest covers transactions, annotations, transfers and budget allocations, and NOTHING else (cache.ts).
- * Two gaps follow. Goals are read straight from the small goals table instead of cached, because a cached goal figure
- * would outlive an edit. And the budget measure goes through monthlyBudget, which also reads categories and savings
- * goals: renaming a category or editing a goal leaves that one measure as it was until something the digest does cover
- * changes, or the cache is rebuilt. The goals screen, when it exists, must add its table to the digest.
+ * moves, and that digest covers transactions, annotations, transfers, budget allocations and savings goals (by content),
+ * but not categories (cache.ts). Goal progress IS cached, under a key naming its window: a goal's edit, completion or
+ * archiving, and the allocation each of those writes, all move the digest, so a cached figure cannot outlive one. The one
+ * gap left is the budget measure, which goes through monthlyBudget and so reads category names: renaming a category
+ * leaves that one measure as it was until something the digest covers changes, or the cache is rebuilt.
  */
 async function measures(today: string, computedAt: number): Promise<{ parts: Record<ComponentId, Component>; recorded: boolean }> {
   const month = today.slice(0, 7)
@@ -44,6 +49,7 @@ async function measures(today: string, computedAt: number): Promise<{ parts: Rec
   // Whether any record exists at all, this month's included: it decides which sentence the empty state says.
   const recorded = points.some((p) => p.hasData) || (await monthSeries(month, month, today, computedAt)).some((p) => p.hasData)
 
+  const goalRows = await db.savingsGoals.toArray()
   const [budget, savings, trend, review, goals, repeated] = await Promise.all([
     cached(`score:budget-awareness:${seriesFrom}:${last}`, async () =>
       budgetAwareness(await Promise.all(points.map(async (p) => ({ budget: await monthlyBudget(p.month, today), hasData: p.hasData })))), computedAt),
@@ -51,7 +57,7 @@ async function measures(today: string, computedAt: number): Promise<{ parts: Rec
     cached(`score:improvement:${seriesFrom}:${last}`, async () => improvement(points), computedAt),
     // To the month's own last day, so the window and its key stay the same all month.
     cached(`score:spending-awareness:${reviewFrom}:${month}`, () => spendingAwareness(`${reviewFrom}-01`, reviewTo), computedAt),
-    db.savingsGoals.toArray().then(goalProgress),
+    goalMeasure(goalRows, last, today, computedAt),
     cached(`score:learning:${earlyFrom}:${earlyTo}:${lateFrom}:${last}`, async () => learning(await regretClustersBetween(earlyFrom, earlyTo), await regretClustersBetween(lateFrom, last)), computedAt),
   ])
   return {
@@ -61,6 +67,26 @@ async function measures(today: string, computedAt: number): Promise<{ parts: Rec
       'spending-awareness': review, 'goal-progress': goals, 'learning': repeated,
     },
   }
+}
+
+/**
+ * Goal progress: every goal's own figures from `progressOf`, the same ones the goals screen shows, over the months since the
+ * earliest goal was created, at most the last GOAL_MONTHS completed months. Cached under a key naming that window.
+ */
+async function goalMeasure(goals: readonly SavingsGoalRow[], last: string, today: string, computedAt: number): Promise<Component> {
+  if (goals.length === 0) return goalProgress([])
+  const earliest = goals.map((g) => monthKeyOf(epochMsToIso(g.createdAt))).sort()[0] ?? last
+  const windowStart = monthsBack(last, GOAL_MONTHS - 1)
+  const capped = earliest < windowStart
+  const from = capped ? windowStart : earliest
+  const compute = async (): Promise<Component> => {
+    const months = from > last ? [] : await goalContributions(from, last, today, computedAt)
+    const c = goalProgress(goals.map((goal) => ({ goal, progress: progressOf(goal, months, last) })))
+    return c.kind === 'measured' && capped
+      ? { ...c, inputs: `${c.inputs} Only the last ${GOAL_MONTHS} completed months are counted.` }
+      : c
+  }
+  return from > last ? compute() : cached(`score:goal-progress:${from}:${last}`, compute, computedAt)
 }
 
 function Item({ item }: { item: ScoredComponent }): ReactNode {

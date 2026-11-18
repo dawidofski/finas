@@ -4,6 +4,7 @@ import type { CategoryRow, TransactionRow } from '../db/schema'
 import { applyPercentBp, percentBpOf, sumCents } from '../lib/money'
 import { excludedTransactionIds, netIncome, refundSubtractions, treatmentOf } from '../analysis/income'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
+import { attribute } from '../goals/attribute'
 import { allocationsFor } from './allocations'
 
 export interface BudgetLine {
@@ -225,16 +226,27 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
       return false
     })
 
+  const allocatedOf = (a: (typeof allocations)[number]): number => a.fixedCents ?? applyPercentBp(basis, a.percentBp ?? 0)
+  const savingsCents = sumCents(savings)
+  // What the month saved is shared between the goals in proportion to their allocations, each capped at its own (the pure
+  // attribute(); goalContributions in goals/contributions.ts applies the same function to the same two inputs, but it calls
+  // monthlyBudget, so it cannot be called from here). A goal line's "spent" is therefore what was set aside for it.
+  const goalShares = attribute(
+    savingsCents,
+    allocations.filter((a) => a.categoryId === null && a.savingsGoalId !== null)
+      .map((a) => ({ goalId: a.savingsGoalId as string, allocatedCents: allocatedOf(a) })),
+  )
+
   const lines: BudgetLine[] = allocations.map((a) => {
     const fixed = a.fixedCents !== null
-    const allocatedCents = a.fixedCents ?? applyPercentBp(basis, a.percentBp ?? 0)
+    const allocatedCents = allocatedOf(a)
     const isCategory = a.categoryId !== null
     const targetId = (isCategory ? a.categoryId : a.savingsGoalId) as string
     const name = isCategory ? categoryById.get(targetId)?.name : goalById.get(targetId)?.name
     const label = name === undefined ? (isCategory ? REMOVED_CATEGORY : REMOVED_GOAL)
       : isCategory && hasBudgetedChild(targetId) ? `${name} (excluding categories budgeted separately)` : name
-    // No transaction is tied to a goal yet, so a goal line has nothing spent against it.
-    const spentCents = isCategory ? spentByOwner.get(targetId) ?? 0 : 0
+    // A category line is what was spent in it. A goal line is the part of this month's savings attributed to the goal.
+    const spentCents = isCategory ? spentByOwner.get(targetId) ?? 0 : goalShares.get(targetId) ?? 0
     return {
       targetKind: isCategory ? 'category' : 'goal', targetId, label, allocatedCents, spentCents,
       remainingCents: allocatedCents - spentCents,
@@ -255,7 +267,6 @@ export async function monthlyBudget(month: string, today: string): Promise<Month
   lines.push(...unbudgetedLines)
 
   const allocatedTotal = sumCents(lines.map((l) => l.allocatedCents))
-  const savingsCents = sumCents(savings)
   return {
     month,
     income: { cents: income.cents, provisional: income.provisional, basis: income.basis },

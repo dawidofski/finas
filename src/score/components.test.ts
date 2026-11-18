@@ -5,6 +5,8 @@ import type { AnnotationRow, SavingsGoalRow, TransactionRow } from '../db/schema
 import type { RegretCluster } from '../learning/regret'
 import type { BudgetLine, MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
+import type { GoalProgress } from '../goals/progress'
+import { formatEur } from '../lib/money'
 import { violations } from '../test/bannedWords'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, wholePoints } from './components'
 
@@ -83,15 +85,27 @@ describe('budgetAwareness', () => {
     expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'category')]))])).toMatchObject({ score: 0 })
   })
 
-  it('leaves a savings-goal line out entirely, since no transaction is tied to a goal yet', () => {
-    // The goal line (1000 allocated, 0 spent, as the app always produces) is dropped: only the category counts, 500 of 500 = 100.
-    // Admitted as unrespected it would read 500 of 1500 = 33.
-    const c = budgetAwareness([bm(budget('2026-01', [line(500, 400, 'category'), line(1000, 0, 'goal')]))])
-    expect(c).toMatchObject({ kind: 'measured', score: 100 })
+  it('respects a goal line by meeting it, the opposite direction from a category line', () => {
+    // Goal 1000 allocated: 1000 set aside meets it (100); 1500 exceeds it (still respected); 400 falls short (0).
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1000, 'goal')]))])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'goal')]))])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 400, 'goal')]))])).toMatchObject({ score: 0 })
+    // The same two figures on a category line read the other way round.
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'category')]))])).toMatchObject({ score: 0 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 400, 'category')]))])).toMatchObject({ score: 100 })
+  })
+
+  it('weighs a goal line and a category line together, each by its own direction', () => {
+    // Category 500 allocated, 400 spent: respected. Goal 1500 allocated, 400 set aside: not. 500 of 2000 = 25.
+    const c = budgetAwareness([bm(budget('2026-01', [line(500, 400, 'category'), line(1500, 400, 'goal')]))])
+    expect(c).toMatchObject({ kind: 'measured', score: 25 })
     if (c.kind !== 'measured') throw new Error('expected measured')
-    expect(c.inputs).toMatch(/1 of 1 allocation/)
-    // A month with only a goal line has nothing to measure.
-    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 0, 'goal')]))]).kind).toBe('not-measured')
+    expect(c.inputs).toMatch(/1 of 2 allocations/)
+  })
+
+  it('still leaves out a goal line with no allocation, as an archived goal now has', () => {
+    expect(budgetAwareness([bm(budget('2026-01', [line(500, 400, 'category'), line(0, 0, 'goal')]))])).toMatchObject({ score: 100 })
+    expect(budgetAwareness([bm(budget('2026-01', [line(0, 0, 'goal')]))]).kind).toBe('not-measured')
   })
 
   it('never reports 100 while an allocation was not respected', () => {
@@ -351,6 +365,14 @@ const goal = (id: string, targetCents: number, over: Partial<SavingsGoalRow> = {
   id, name: id, targetCents, deadline: null, contributionPercentBp: 1000, createdAt: 1, completedAt: null, archived: false, ...over,
 })
 
+const prog = (g: SavingsGoalRow, contributedCents: number): { goal: SavingsGoalRow; progress: GoalProgress } => ({
+  goal: g,
+  progress: {
+    goalId: g.id, targetCents: g.targetCents, contributedCents, remainingCents: Math.max(0, g.targetCents - contributedCents),
+    estimate: null, estimateWhy: null, estimateNote: null, reached: contributedCents >= g.targetCents,
+  },
+})
+
 describe('goalProgress', () => {
   it('says the owner has set no goal yet, rather than scoring no progress', () => {
     const c = goalProgress([])
@@ -360,48 +382,54 @@ describe('goalProgress', () => {
     expect(c.why).not.toMatch(/no progress|not made/i)
   })
 
-  it('scores progress against each goal target, weighted by the size of the target', () => {
-    // Reached 10000 of 10000 + 90000 = 10%. A count-based version says 1 of 2 = 50.
-    const c = goalProgress([goal('a', 10000, { completedAt: 5 }), goal('b', 90000)])
-    expect(c).toMatchObject({ kind: 'measured', score: 10 })
+  it('scores goal progress as contributed over target, weighted by target', () => {
+    // 5000 of 10000 and 18000 of 90000: 23000 of 100000 = 23. An average of the two ratios (50 and 20) would say 35.
+    const c = goalProgress([prog(goal('a', 10000), 5000), prog(goal('b', 90000), 18000)])
+    expect(c).toMatchObject({ kind: 'measured', score: 23 })
     if (c.kind !== 'measured') throw new Error('expected measured')
-    expect(c.inputs).toMatch(/completed 1 of 2 savings goals/)
-    expect(c.inputs).toMatch(/partway toward a goal is not measured/) // completion only: it must not imply partial progress
-    // The big goal reached instead: 90000 of 100000 = 90.
-    expect(goalProgress([goal('a', 10000), goal('b', 90000, { completedAt: 5 })])).toMatchObject({ score: 90 })
+    expect(c.inputs).toContain(`${formatEur(23000)} of ${formatEur(100000)}`)
+    expect(c.inputs).toMatch(/2 active savings goals/)
+  })
+
+  it('caps each goal at its own target, so a surplus on one cannot cover a shortfall on another', () => {
+    // a: 30000 put toward a 10000 target counts 10000. b: 0 of 90000. 10000 of 100000 = 10 (uncapped it would be 30).
+    expect(goalProgress([prog(goal('a', 10000), 30000), prog(goal('b', 90000), 0)])).toMatchObject({ score: 10 })
+  })
+
+  it('counts a completed goal as fully reached, whatever its progress figure says', () => {
+    expect(goalProgress([prog(goal('a', 10000, { completedAt: 5 }), 0), prog(goal('b', 90000), 0)])).toMatchObject({ score: 10 })
   })
 
   it('leaves out a goal the owner archived unfinished, but keeps a completed one', () => {
-    // Archived unfinished 50000 is dropped: 20000 of 40000 = 50 (admitted it would be 20000 of 90000 = 22).
-    expect(goalProgress([goal('a', 20000, { completedAt: 5 }), goal('b', 20000), goal('c', 50000, { archived: true })])).toMatchObject({ score: 50 })
-    // Completed then archived still counts: 20000 of 40000 = 50. (Dropped it would be 0 of 20000 = 0.)
-    expect(goalProgress([goal('a', 20000, { completedAt: 5, archived: true }), goal('b', 20000)])).toMatchObject({ score: 50 })
+    // Archived unfinished (50000, 40000 put toward it) is dropped: 20000+10000 of 40000 = 75 (admitted: 70000 of 90000 = 78).
+    expect(goalProgress([prog(goal('a', 20000, { completedAt: 5 }), 20000), prog(goal('b', 20000), 10000), prog(goal('c', 50000, { archived: true }), 40000)])).toMatchObject({ score: 75 })
+    // Completed then archived still counts: 20000 + 0 of 40000 = 50. (Dropped it would be 0 of 20000 = 0.)
+    expect(goalProgress([prog(goal('a', 20000, { completedAt: 5, archived: true }), 20000), prog(goal('b', 20000), 0)])).toMatchObject({ score: 50 })
   })
 
-  it('is not measured until a goal has been completed, rather than scoring 0 beside a goal that may be mostly funded', () => {
-    const c = goalProgress([goal('a', 10000), goal('b', 90000)])
+  it('is not measured while nothing has been put toward any goal, without calling it no progress', () => {
+    const c = goalProgress([prog(goal('a', 10000), 0), prog(goal('b', 90000), 0)])
     expect(c.kind).toBe('not-measured')
     if (c.kind !== 'not-measured') throw new Error('expected not-measured')
-    expect(c.why).toMatch(/None of your savings goals is marked completed yet/)
+    expect(c.why).toMatch(/Nothing has been put toward your savings goals in a completed month yet/)
   })
 
   it('ignores a goal with no target rather than dividing by it', () => {
-    // Only a zero-target goal: nothing counted, so not-measured (a 0 of 0 must not read as a full score).
-    expect(goalProgress([goal('z', 0, { completedAt: 5 })]).kind).toBe('not-measured')
-    // Beside a real completed goal the zero-target one adds nothing: 5000 of 5000 = 100.
-    expect(goalProgress([goal('z', 0, { completedAt: 5 }), goal('a', 5000, { completedAt: 5 })])).toMatchObject({ score: 100 })
+    expect(goalProgress([prog(goal('z', 0, { completedAt: 5 }), 0)]).kind).toBe('not-measured')
+    expect(goalProgress([prog(goal('z', 0, { completedAt: 5 }), 0), prog(goal('a', 5000, { completedAt: 5 }), 0)])).toMatchObject({ score: 100 })
   })
 
   it('is not measured, and says so differently, when every goal is archived unfinished', () => {
-    const c = goalProgress([goal('a', 1000, { archived: true })])
+    const c = goalProgress([prog(goal('a', 1000, { archived: true }), 500)])
     expect(c.kind).toBe('not-measured')
     if (c.kind !== 'not-measured') throw new Error('expected not-measured')
     expect(c.why).toMatch(/None of your savings goals is active/)
   })
 
-  it('does not award 100 while a goal is unfinished', () => {
+  it('does not award 100 while a goal is short, and does at the target', () => {
     // 199999 of 200000 = 99.9995 -> 100 by rounding; must stay 99.
-    expect(goalProgress([goal('a', 199999, { completedAt: 5 }), goal('b', 1)])).toMatchObject({ score: 99 })
+    expect(goalProgress([prog(goal('a', 199999), 199999), prog(goal('b', 1), 0)])).toMatchObject({ score: 99 })
+    expect(goalProgress([prog(goal('a', 1000), 1000), prog(goal('b', 1), 1)])).toMatchObject({ score: 100 })
   })
 })
 

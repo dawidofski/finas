@@ -1,6 +1,7 @@
 import type { MonthlyBudget } from '../budget/month'
 import type { MonthPoint } from '../analytics/series'
 import type { SavingsGoalRow } from '../db/schema'
+import type { GoalProgress } from '../goals/progress'
 import { type RegretCluster } from '../learning/regret'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { loadCategoryKinds, worthAnnotating } from '../analysis/queues'
@@ -31,9 +32,10 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  * all their lines, not an average of monthly scores). Left out: a month with `hasData` false (its lines come from the
  * allocations, so they exist with nothing spent and would all read as respected), a month still in progress
  * (`partial`: a part-month of spending against a whole month's allocation), and any line with no allocation (no ratio,
- * as varianceBp is null for the same reason). A category line is respected when spent does not exceed allocated.
- * A savings-goal line is left out too: no transaction is tied to a goal yet, so it carries no evidence either way (see
- * the filter below). The score is 100 only when every line was respected.
+ * as varianceBp is null for the same reason; an archived or completed goal has one). The two kinds are respected in opposite
+ * directions: a category line when what was spent does not exceed what was allocated, a savings-goal line when what was
+ * set aside for it (its attributed savings, see monthlyBudget) reaches what was allocated. The score is 100 only when every
+ * line was respected.
  */
 export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasData: boolean }[]): Component {
   // Two kinds of month are not evidence. A month with no records still has lines (they come from the allocations) with
@@ -43,20 +45,16 @@ export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasDat
     .filter((m) => m.hasData && !m.budget.partial)
     .flatMap((m) => m.budget.lines)
     .filter((l) => l.allocatedCents > 0)
-    // A savings-goal line carries no evidence either way: the app ties no transaction to a goal yet, so its spend is always
-    // zero and it would read as unrespected whatever the owner did. Without data it is not measured (§13.3), not scored 0.
-    // A later plan that tracks goal contributions must revisit this.
-    .filter((l) => l.targetKind !== 'goal')
   if (lines.length === 0) {
-    return { kind: 'not-measured', why: 'No completed month with a category allocation is recorded yet, so there is nothing to compare spending against.' }
+    return { kind: 'not-measured', why: 'No completed month with an allocation is recorded yet, so there is nothing to compare spending against.' }
   }
   let total = 0
   let respected = 0
   let respectedLines = 0
   for (const l of lines) {
     total += l.allocatedCents
-    // A category is respected by spending no more than allocated.
-    if (l.spentCents <= l.allocatedCents) {
+    // A category is respected by spending no more than allocated; a goal by setting aside at least what was allocated.
+    if (l.targetKind === 'goal' ? l.spentCents >= l.allocatedCents : l.spentCents <= l.allocatedCents) {
       respected += l.allocatedCents
       respectedLines += 1
     }
@@ -155,39 +153,38 @@ export async function spendingAwareness(from: string, to: string): Promise<Compo
 }
 
 /**
- * Progress against the owner's own goals, weighted by each goal's target: the share of the total target that belongs to
- * goals marked completed. The row records no amount set aside, so completion is the only progress it can state. An
- * archived goal that was never completed is one the owner put away, and is left out; a completed one still counts.
- * With no goal at all the owner has not set one: that is a different statement from making no progress, and the only
- * true one.
+ * Progress against the owner's own goals (§13.3), weighted by each goal's target: every active goal counts what has been
+ * put toward it, up to its own target and no further, as a share of its target, and the shares are weighted by target (which
+ * makes the score the sum of what is funded over the sum of the targets, so a big goal counts for more than a small one).
+ * A goal marked completed counts as fully reached. An archived goal that was never completed is one the owner put away, and
+ * is left out; a completed one still counts. The figures are the `progressOf` values the goals screen shows, passed in so the
+ * two cannot disagree. With no goal at all the owner has not set one, which is a different statement from making no
+ * progress; and while nothing has yet been put toward any goal there is no progress to measure, so that is not scored 0 either.
  */
-export function goalProgress(goals: readonly SavingsGoalRow[]): Component {
+export function goalProgress(goals: readonly { goal: SavingsGoalRow; progress: GoalProgress }[]): Component {
   if (goals.length === 0) {
     return { kind: 'not-measured', why: 'You have not set a savings goal yet, so there is no goal to measure progress against.' }
   }
-  const counted = goals.filter((g) => g.targetCents > 0 && (!g.archived || g.completedAt !== null))
+  const counted = goals.filter(({ goal }) => goal.targetCents > 0 && (!goal.archived || goal.completedAt !== null))
   if (counted.length === 0) {
     return { kind: 'not-measured', why: 'None of your savings goals is active with a target, so there is no goal to measure progress against.' }
   }
   let total = 0
-  let reached = 0
-  let reachedGoals = 0
-  for (const g of counted) {
-    total += g.targetCents
-    if (g.completedAt !== null) {
-      reached += g.targetCents
-      reachedGoals += 1
-    }
+  let funded = 0
+  let started = false
+  for (const { goal, progress } of counted) {
+    total += goal.targetCents
+    const done = goal.completedAt !== null ? goal.targetCents : Math.min(goal.targetCents, Math.max(0, progress.contributedCents))
+    funded += done
+    if (done > 0) started = true
   }
-  // Completion share only means something once something has completed: before that, 0 would read as "no progress" beside
-  // a goal that may be mostly funded, and this measure cannot see funding.
-  if (reachedGoals === 0) {
-    return { kind: 'not-measured', why: 'None of your savings goals is marked completed yet. This measures completed goals only, so it has nothing to show until one is; partway toward a goal is not measured.' }
+  if (!started) {
+    return { kind: 'not-measured', why: 'Nothing has been put toward your savings goals in a completed month yet, so there is no progress to measure.' }
   }
   return {
     kind: 'measured',
-    score: wholePoints(reached, total),
-    inputs: `You have completed ${reachedGoals} of ${plural(counted.length, 'savings goal')}, weighted by target: ${formatEur(reached)} of ${formatEur(total)}. Only completed goals count; partway toward a goal is not measured.`,
+    score: wholePoints(funded, total),
+    inputs: `Across ${plural(counted.length, 'active savings goal')}, ${formatEur(funded)} of ${formatEur(total)} of the targets is funded, weighted by target. Each goal counts up to its own target, and a goal marked completed counts in full.`,
   }
 }
 

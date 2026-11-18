@@ -12,6 +12,8 @@ import type { TransactionRow } from '../../db/schema'
 import type { MonthPoint } from '../../analytics/series'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness } from '../../score/components'
 import { regretClustersBetween } from '../../learning/regret'
+import { goalContributions } from '../../goals/contributions'
+import { progressOf } from '../../goals/progress'
 import { ROUTES } from '../routes'
 
 // Pass-throughs that remember how they were called, so the windows the screen asks about can be read back.
@@ -29,12 +31,13 @@ const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentac
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes']
 const TODAY = '2026-11-10'
 const AT = 1_700_000_000_000
+const JAN = Date.UTC(2026, 0, 1) // when the goals in the fixtures were created
 
 let uid = 0
-const tx = async (id: string, valueDate: string, amountCents: number, ing: [string, string] | null = null): Promise<void> => {
+const tx = async (id: string, valueDate: string, amountCents: number, ing: [string, string] | null = null, kind: TransactionRow['kind'] = amountCents > 0 ? 'income' : 'spend'): Promise<void> => {
   const row: TransactionRow = {
     id, accountId: 'acc.1', valueDate, amountCents, balanceCents: 0, description: 'Movimiento inventado', comment: null,
-    ingCategory: ing?.[0] ?? null, ingSubcategory: ing?.[1] ?? null, kind: amountCents > 0 ? 'income' : 'spend',
+    ingCategory: ing?.[0] ?? null, ingSubcategory: ing?.[1] ?? null, kind,
     dedupKey: `k.${++uid}`, importId: 'imp.1', fileSeq: uid, roundupParentId: null, createdAt: 1, deletedAt: null,
   }
   await db.transactions.add(row)
@@ -61,8 +64,10 @@ const text = () => document.body.textContent ?? ''
  * Two of the six measured, with DIFFERENT weights (budget 3, goals 2) so that the divisor the screen shows can be told from
  * the weight of all six (14), from the number of measured parts (2), and from either one alone:
  *   October: groceries allocated 300, spent 100 (respected); restaurants allocated 100, spent 200 (not) -> 300 of 400 = 75.
- *   Goals: one completed (target 1.000), one not (target 3.000) -> 1.000 of 4.000 = 25.
- *   3 x 75 + 2 x 25 = 275, over a measured weight of 5 = 55.
+ *   The month also saved 40.00, shared between two goals in proportion to their allocations (30.00 and 10.00): 30.00 and 10.00,
+ *   so both goal lines are met and count as respected: the budget measure then reads 340 of 440 = 77 (300 + 30 + 10 respected of 300 + 100 + 30 + 10 allocated, in euros).
+ *   Goals: g1 (target 40.00) has 30.00 put toward it, g2 (target 120.00) has 10.00: 40.00 of 160.00 = 25.
+ *   3 x 77 + 2 x 25 = 281, over a measured weight of 5 = 56 (281 / 5 = 56.2).
  */
 async function twoMeasured(): Promise<void> {
   await tx('pay', '2026-10-01', 200000)
@@ -70,8 +75,11 @@ async function twoMeasured(): Promise<void> {
   await tx('r', '2026-10-04', -20000, RESTAURANTS)
   await saveAllocation({ categoryId: 'cat.groceries', savingsGoalId: null, percentBp: null, fixedCents: 30000, effectiveFrom: '2026-01-01', note: null })
   await saveAllocation({ categoryId: 'cat.restaurants', savingsGoalId: null, percentBp: null, fixedCents: 10000, effectiveFrom: '2026-01-01', note: null })
-  await db.savingsGoals.add({ id: 'g1', name: 'Viaje', targetCents: 100000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: 5, archived: false })
-  await db.savingsGoals.add({ id: 'g2', name: 'Coche', targetCents: 300000, deadline: null, contributionPercentBp: 0, createdAt: 1, completedAt: null, archived: false })
+  await tx('save', '2026-10-05', -4000, ['Ahorro', 'Redondeo'], 'roundup')
+  await db.savingsGoals.add({ id: 'g1', name: 'Viaje', targetCents: 4000, deadline: null, contributionPercentBp: 0, createdAt: JAN, completedAt: null, archived: false })
+  await db.savingsGoals.add({ id: 'g2', name: 'Coche', targetCents: 12000, deadline: null, contributionPercentBp: 0, createdAt: JAN, completedAt: null, archived: false })
+  await saveAllocation({ categoryId: null, savingsGoalId: 'g1', percentBp: null, fixedCents: 3000, effectiveFrom: '2026-01-01', note: null })
+  await saveAllocation({ categoryId: null, savingsGoalId: 'g2', percentBp: null, fixedCents: 1000, effectiveFrom: '2026-01-01', note: null })
 }
 
 /**
@@ -135,13 +143,13 @@ describe('Money Score screen', () => {
     for (const id of IDS) expect(field(itemOf(id), 'Weight'), id).toBe(String(WEIGHTS[id]))
 
     const budget = itemOf('budget-awareness')
-    expect(field(budget, 'Status')).toBe('Measured: 75 out of 100')
-    expect(field(budget, 'Inputs')).toContain('You respected 1 of 2 allocations in completed months')
-    expect(field(budget, 'Arithmetic')).toBe('75 × 3 = 225')
+    expect(field(budget, 'Status')).toBe('Measured: 77 out of 100')
+    expect(field(budget, 'Inputs')).toContain('You respected 3 of 4 allocations in completed months')
+    expect(field(budget, 'Arithmetic')).toBe('77 × 3 = 231')
 
     const goals = itemOf('goal-progress')
     expect(field(goals, 'Status')).toBe('Measured: 25 out of 100')
-    expect(field(goals, 'Inputs')).toContain('You have completed 1 of 2 savings goals')
+    expect(field(goals, 'Inputs')).toContain('Across 2 active savings goals')
     expect(field(goals, 'Arithmetic')).toBe('25 × 2 = 50')
 
     // The four are there for the four that are not measured too, each with its own words.
@@ -155,7 +163,7 @@ describe('Money Score screen', () => {
     await mount()
     // Each reason is the one its own component gives, so a screen that printed one generic line for all six fails.
     const waiting: Record<ComponentId, RegExp> = {
-      'budget-awareness': /No completed month with a category allocation is recorded yet/,
+      'budget-awareness': /No completed month with an allocation is recorded yet/,
       'savings-consistency': /Not enough months recorded yet: this needs 3 and there are 0\./,
       'improvement': /so it needs 6 and there are 0\./,
       'spending-awareness': /No transactions in this period are ones the app asks you to review/,
@@ -181,10 +189,10 @@ describe('Money Score screen', () => {
   it('shows the weight it actually divided by, not the total of all six', async () => {
     await twoMeasured()
     await mount()
-    expect(screen.getByText('Your Money Score: 55 out of 100')).toBeInTheDocument()
+    expect(screen.getByText('Your Money Score: 56 out of 100')).toBeInTheDocument()
     expect(text()).toContain('Weight measured: 5 of 14.')
-    // 225 + 50 = 275, over 5: not over 14 (which would give 20), and not over the 2 parts measured (which would be capped).
-    expect(text()).toContain('275 ÷ 5, rounded to a whole number, gives 55.')
+    // 231 + 50 = 281, over 5: not over 14 (which would give 20), and not over the 2 parts measured (which would be capped).
+    expect(text()).toContain('281 ÷ 5, rounded to a whole number, gives 56.')
     expect(text()).not.toMatch(/÷ 14/)
     expect(text()).not.toMatch(/÷ 2\b/)
   })
@@ -245,12 +253,12 @@ describe('Money Score screen', () => {
     const keys = async () => (await db.analyticsCache.toArray()).map((r) => r.key).filter((k) => k.startsWith('score:')).sort()
     const view = await mount()
     const november = await keys()
-    expect(november.map((k) => k.split(':')[1])).toEqual(['budget-awareness', 'improvement', 'learning', 'savings-consistency', 'spending-awareness'])
+    expect(november.map((k) => k.split(':')[1])).toEqual(['budget-awareness', 'goal-progress', 'improvement', 'learning', 'savings-consistency', 'spending-awareness'])
     view.unmount()
     render(<Score today="2026-12-10" computedAt={AT} />)
     await settled()
     const both = await keys()
-    expect(both).toHaveLength(november.length * 2) // five new figures, none of them an old key reused
+    expect(both).toHaveLength(november.length * 2) // six new figures, none of them an old key reused
     expect(new Set(both).size).toBe(both.length)
   })
 
@@ -293,14 +301,40 @@ describe('Money Score screen', () => {
     for (const r of rows) expect(r.computedAt, r.key).toBe(AT)
   })
 
-  it('shows a goal completed after the first visit on the next, because goals are not cached', async () => {
+  it('shows a goal completed after the first visit on the next, because the cache notices a goal change', async () => {
     await twoMeasured()
     const view = await mount()
     expect(field(itemOf('goal-progress'), 'Status')).toBe('Measured: 25 out of 100')
     view.unmount()
     await db.savingsGoals.update('g2', { completedAt: 9 })
     await mount()
-    expect(field(itemOf('goal-progress'), 'Status')).toBe('Measured: 100 out of 100')
+    // g2 completed counts in full: 3.000 + 12.000 of 16.000 = 93.75 -> 94.
+    expect(field(itemOf('goal-progress'), 'Status')).toBe('Measured: 94 out of 100')
+  })
+
+  it('feeds the score the same progress figures the goals screen shows', async () => {
+    await twoMeasured()
+    await mount()
+    const given = vi.mocked(goalProgress).mock.calls[0]?.[0]
+    const months = await goalContributions('2026-01', '2026-10', TODAY, AT)
+    const goals = await db.savingsGoals.orderBy('id').toArray()
+    expect([...(given ?? [])].sort((a, b) => (a.goal.id < b.goal.id ? -1 : 1))).toEqual(goals.map((goal) => ({ goal, progress: progressOf(goal, months, '2026-10') })))
+    expect(given?.map((x) => x.progress.contributedCents).sort()).toEqual([1000, 3000])
+  })
+
+  it('reads at most the last 36 completed months of goal history, keys the cache by that window, and says so', async () => {
+    await twoMeasured()
+    await db.savingsGoals.update('g1', { createdAt: Date.UTC(2015, 0, 1) })
+    await mount()
+    const keys = (await db.analyticsCache.toArray()).map((r) => r.key).filter((k) => k.startsWith('score:goal-progress:'))
+    expect(keys).toEqual(['score:goal-progress:2023-11:2026-10'])
+    expect(field(itemOf('goal-progress'), 'Inputs')).toContain('Only the last 36 completed months are counted.')
+  })
+
+  it('says nothing about a window when no goal is older than it', async () => {
+    await twoMeasured()
+    await mount()
+    expect(field(itemOf('goal-progress'), 'Inputs')).not.toContain('completed months are counted')
   })
 
   it('says the score could not be worked out, and offers nothing to press, when the store fails', async () => {
