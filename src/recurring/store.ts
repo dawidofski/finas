@@ -18,22 +18,28 @@ export interface RecurringView extends Detected {
    * due and never counts toward a total. An irregular payment has no expected date, so it is never lapsed.
    */
   lapsed: boolean
+  /**
+   * The expected next date has passed but the payment is not yet lapsed: it was expected around that date and has not appeared
+   * yet. expectedNextDate is kept so the screen can say when, in the past tense; it is never upcoming.
+   */
+  overdue: boolean
 }
 
-/** Months of history detection reads: the last 14 COMPLETED months before the month `today` falls in. */
-export const WINDOW_MONTHS = 14
-
 /**
- * A payment the owner has not confirmed is shown only at or above this score (basis points). Three payments score at most 5000,
- * so this keeps a steady short run and hides a ragged one. A confirmed payment is shown whatever its score.
+ * Months of history detection reads: the last 14 COMPLETED months before the month `today` falls in, plus the running month up
+ * to `today`. The running month is read because a payment that happened is a payment: without it, a weekly payment last seen
+ * on the last day of the previous month would look stopped for half of every month. (The rule that a part-month is not a whole
+ * month is about totals of spending, not about whether a payment was made.)
+ *
+ * A YEARLY bill is not found by this window: it holds at most two payments of a yearly bill, and three are needed.
  */
-export const MIN_SHOWN_SCORE_BP = 3000
+export const WINDOW_MONTHS = 14
 
 export function recurringWindow(today: string): { first: string; last: string } {
   const thisMonthStart = `${monthKeyOf(today)}-01`
   let cur = thisMonthStart
   for (let i = 0; i < WINDOW_MONTHS; i++) cur = `${monthKeyOf(addDays(cur, -1))}-01`
-  return { first: monthKeyOf(cur), last: monthKeyOf(addDays(thisMonthStart, -1)) }
+  return { first: monthKeyOf(cur), last: monthKeyOf(today) }
 }
 
 /** Nominal length of a cycle in days, for the lapsed rule only. */
@@ -59,71 +65,124 @@ export function monthlyCostOf(frequency: Frequency, amountCents: number): number
 }
 
 /**
- * STABLE IDS. An id is `merchantId|frequency|k`: the merchant, the cadence, and k, the position (from 0, by typical amount)
- * among that merchant's detected payments of the same cadence. Nothing in it is an amount, so a price rise within the
- * cluster's tolerance leaves it alone and the owner's correction stays attached. Two distinct payments at one merchant (an
- * app's 9.99 and 54.99 subscriptions) have the same cadence only by coincidence, and then take k = 0 and 1 by price; a price
- * change moves k only if the two prices swap order. What does orphan an id: the cadence changing (a monthly payment going
- * irregular), or two same-cadence payments crossing in price. A dismissal then stops applying, so the payment comes back,
- * which errs toward showing the owner something over hiding it for good.
+ * Detection over the window, from the bank rows: spends only (via spendsOf, the project's one definition, so a refund can never
+ * merge into the payments), by bank date, up to today. Spends with no merchant are left out: detection clusters by merchant,
+ * and a spend without one has nothing to cluster on. Reads only; no clock.
  */
-function idsOf(detected: readonly Detected[]): string[] {
-  const seen = new Map<string, number>()
-  return detected.map(d => {   // detectRecurring orders by merchant, then amount, so k follows price
-    const key = `${d.merchantId}|${d.frequency}`
-    const k = seen.get(key) ?? 0
-    seen.set(key, k + 1)
-    return `${key}|${k}`
+async function detectedNow(today: string): Promise<Detected[]> {
+  const { first, last } = recurringWindow(today)
+  const spends = await spendsOf(await liveTransactionsBetween(first, last))
+  return detectRecurring(spends.flatMap(s => (s.merchantId === null || s.date > today ? [] : [{ merchantId: s.merchantId, valueDate: s.date, amountCents: s.centsOut }])))
+}
+
+/**
+ * WHICH STORED ROW IS WHICH PAYMENT. An id is minted once, when a series is first seen, and is never recomputed: nothing about
+ * a payment's rank, amount or cadence is in the matching of a later run, so an owner's correction cannot move to another payment.
+ *   1. Continuity: a stored row of the same merchant whose stored lastSeenDate is one of the series' payment dates is the same
+ *      run of payments carrying on. (A price change, a cadence drift, an older payment ageing out of the window and a new
+ *      subscription appearing beside it all leave that date among the series' payments.)
+ *   2. Fallback: else the stored row of that merchant whose stored amount is within the series' tolerance, nearest first.
+ *   3. Else the series is new and gets an id of its merchant and the date of its first payment, with a counter if two series
+ *      began the same day at one merchant.
+ * Each stored row matches at most one series. All continuity matches are made before any fallback, so a fallback can never take
+ * a row that another series continues. Series are taken in the order detection gives them (merchant, amount, last seen).
+ * Frequency is in no part of this, so a confirmed payment whose cadence drifts keeps its confirmation.
+ */
+function assignIds(detected: readonly Detected[], rows: readonly RecurringRow[]): string[] {
+  const ids: (string | null)[] = detected.map(() => null)
+  const taken = new Set<string>()
+  detected.forEach((d, i) => {
+    const dates = new Set(d.paymentDates)
+    const hit = rows
+      .filter(r => r.merchantId === d.merchantId && !taken.has(r.id) && dates.has(r.lastSeenDate))
+      .sort((a, b) => (a.lastSeenDate < b.lastSeenDate ? 1 : a.lastSeenDate > b.lastSeenDate ? -1 : a.id < b.id ? -1 : 1))[0]
+    if (hit) { ids[i] = hit.id; taken.add(hit.id) }
+  })
+  detected.forEach((d, i) => {
+    if (ids[i] !== null) return
+    const hit = rows
+      .filter(r => r.merchantId === d.merchantId && !taken.has(r.id) && Math.abs(r.amountCents - d.amountCents) <= d.toleranceCents)
+      .sort((a, b) => Math.abs(a.amountCents - d.amountCents) - Math.abs(b.amountCents - d.amountCents) || (a.id < b.id ? -1 : 1))[0]
+    if (hit) { ids[i] = hit.id; taken.add(hit.id) }
+  })
+  const used = new Set([...rows.map(r => r.id), ...taken])
+  return detected.map((d, i) => {
+    const matched = ids[i]
+    if (matched) return matched
+    const base = `${d.merchantId}|${d.paymentDates[0] ?? d.lastSeenDate}`
+    let id = base
+    for (let n = 2; used.has(id); n++) id = `${base}#${n}`
+    used.add(id)
+    return id
+  })
+}
+
+function viewOf(d: Detected, id: string, row: RecurringRow, today: string): RecurringView {
+  const period = periodDays(d.frequency)
+  const expected = d.expectedNextDate
+  const lapsed = expected !== null && period !== null && daysBetween(addDays(expected, period), today) > 0
+  const overdue = !lapsed && expected !== null && daysBetween(expected, today) > 0
+  return {
+    ...d, id, confirmedByUser: row.confirmedByUser, cancelled: row.cancelled, lapsed, overdue,
+    expectedNextDate: lapsed ? null : expected,
+    monthlyCostCents: lapsed ? null : monthlyCostOf(d.frequency, d.amountCents),
+  }
+}
+
+/** A payment is shown unless the owner hid it, and an irregular one only once the owner has confirmed it (three payments in a day are not a subscription). */
+const shown = (d: Detected, row: RecurringRow): boolean => row.dismissed !== true && (d.frequency !== 'irregular' || row.confirmedByUser)
+
+function rowFor(d: Detected, id: string, prior: RecurringRow | undefined): RecurringRow {
+  return {
+    id, merchantId: d.merchantId, amountCents: d.amountCents, toleranceCents: d.toleranceCents, frequency: d.frequency,
+    lastSeenDate: d.lastSeenDate, expectedNextDate: d.expectedNextDate, matchScore: d.matchScoreBp,
+    confirmedByUser: prior?.confirmedByUser ?? false, cancelled: prior?.cancelled ?? false,
+    ...(prior?.dismissed === true ? { dismissed: true } : {}),
+  }
+}
+
+/**
+ * Detects over the window and stores one row per detected payment, keeping what the owner decided. A dismissed payment is not
+ * returned (hiddenRecurring lists them); a cancelled one is, flagged. Rows the owner never touched and that are no longer
+ * detected are removed; rows the owner touched are kept even then. The stored rows are read and written in ONE transaction, so
+ * a correction made while a detection runs is never overwritten by it. Reads only the window, by bank date; the clock is an argument.
+ */
+export async function recurringPayments(today: string, computedAt: number): Promise<RecurringView[]> {
+  void computedAt   // not cached: nothing here is expensive and the table is the owner's.
+  const detected = await detectedNow(today)
+  return db.transaction('rw', db.recurring, async () => {
+    const existing = await db.recurring.toArray()
+    const byId = new Map(existing.map(r => [r.id, r]))
+    const ids = assignIds(detected, existing)
+    const writes = detected.map((d, i) => rowFor(d, ids[i] as string, byId.get(ids[i] as string)))
+    const keep = new Set(ids)
+    await db.recurring.bulkDelete(existing.filter(r => !keep.has(r.id) && !r.confirmedByUser && !r.cancelled && r.dismissed !== true).map(r => r.id))
+    await db.recurring.bulkPut(writes)
+    return detected.flatMap((d, i) => {
+      const row = writes[i] as RecurringRow
+      return shown(d, row) ? [viewOf(d, row.id, row, today)] : []
+    })
   })
 }
 
 /**
- * Detects over the window and stores one row per detected payment, keeping what the owner decided. Spends with no merchant are
- * left out: detection clusters by merchant, and a spend without one has nothing to cluster on. A dismissed payment is not
- * returned; a cancelled one is, flagged; a confirmed one is returned whatever its score. Rows the owner never touched and that
- * are no longer detected are removed; rows the owner touched are kept even then.
- * Reads only the window, by bank date; the clock is an argument.
+ * The same payments recurringPayments would return, worked out WITHOUT writing a row. For a screen that only needs to know
+ * whether anything recurs (Learning), so that visiting it cannot change what the Recurring screen shows.
  */
-export async function recurringPayments(today: string, computedAt: number): Promise<RecurringView[]> {
-  void computedAt   // not cached: nothing here is expensive and the table is the owner's. Kept so callers need not change if it is.
-  const { first, last } = recurringWindow(today)
-  const spends = await spendsOf(await liveTransactionsBetween(first, last))
-  const rows = spends.flatMap(s => (s.merchantId === null ? [] : [{ merchantId: s.merchantId, valueDate: s.date, amountCents: s.centsOut }]))
-  const detected = detectRecurring(rows)
-  const ids = idsOf(detected)
-  const existing = new Map((await db.recurring.toArray()).map(r => [r.id, r]))
+export async function recurringPreview(today: string): Promise<RecurringView[]> {
+  const detected = await detectedNow(today)
+  const existing = await db.recurring.toArray()
+  const byId = new Map(existing.map(r => [r.id, r]))
+  const ids = assignIds(detected, existing)
+  return detected.flatMap((d, i) => {
+    const row = rowFor(d, ids[i] as string, byId.get(ids[i] as string))
+    return shown(d, row) ? [viewOf(d, row.id, row, today)] : []
+  })
+}
 
-  const writes: RecurringRow[] = []
-  const views: RecurringView[] = []
-  detected.forEach((d, i) => {
-    const id = ids[i] as string
-    const prior = existing.get(id)
-    const row: RecurringRow = {
-      id, merchantId: d.merchantId, amountCents: d.amountCents, toleranceCents: d.toleranceCents, frequency: d.frequency,
-      lastSeenDate: d.lastSeenDate, expectedNextDate: d.expectedNextDate, matchScore: d.matchScoreBp,
-      confirmedByUser: prior?.confirmedByUser ?? false, cancelled: prior?.cancelled ?? false,
-      ...(prior?.dismissed === true ? { dismissed: true } : {}),
-    }
-    writes.push(row)
-    if (row.dismissed === true) return
-    // Three payments in a day are not a subscription: an irregular cluster is shown only once the owner has confirmed it.
-    if (d.frequency === 'irregular' && !row.confirmedByUser) return
-    if (!row.confirmedByUser && d.matchScoreBp < MIN_SHOWN_SCORE_BP) return
-    const period = periodDays(d.frequency)
-    const lapsed = d.expectedNextDate !== null && period !== null && daysBetween(addDays(d.expectedNextDate, period), today) > 0
-    views.push({
-      ...d, id, confirmedByUser: row.confirmedByUser, cancelled: row.cancelled, lapsed,
-      expectedNextDate: lapsed ? null : d.expectedNextDate,
-      monthlyCostCents: lapsed ? null : monthlyCostOf(d.frequency, d.amountCents),
-    })
-  })
-  const keep = new Set(ids)
-  const stale = [...existing.values()].filter(r => !keep.has(r.id) && !r.confirmedByUser && !r.cancelled && r.dismissed !== true).map(r => r.id)
-  await db.transaction('rw', db.recurring, async () => {
-    await db.recurring.bulkDelete(stale)
-    await db.recurring.bulkPut(writes)
-  })
-  return views
+/** The payments the owner said are not recurring: always visible, so a hidden payment can be shown again. */
+export async function hiddenRecurring(): Promise<RecurringRow[]> {
+  return (await db.recurring.filter(r => r.dismissed === true).toArray()).sort((a, b) => (a.merchantId < b.merchantId ? -1 : a.merchantId > b.merchantId ? 1 : a.id < b.id ? -1 : 1))
 }
 
 /*
@@ -139,5 +198,7 @@ async function amend(id: string, change: Partial<RecurringRow>): Promise<void> {
 export const confirmRecurring = (id: string): Promise<void> => amend(id, { confirmedByUser: true, dismissed: false })
 /** "This is not recurring." Stored in `dismissed`, never in `cancelled`. */
 export const dismissRecurring = (id: string): Promise<void> => amend(id, { dismissed: true, confirmedByUser: false })
+/** "Show it again": clears the dismissal. */
+export const restoreRecurring = (id: string): Promise<void> => amend(id, { dismissed: false })
 /** "I cancelled it." The payment did recur; this changes neither confirmed nor dismissed. */
 export const markCancelled = (id: string): Promise<void> => amend(id, { cancelled: true })

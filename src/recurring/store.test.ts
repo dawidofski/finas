@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import Dexie from 'dexie'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { addDays } from '../lib/dates'
-import { confirmRecurring, dismissRecurring, markCancelled, monthlyCostOf, recurringPayments, recurringWindow } from './store'
+import { confirmRecurring, dismissRecurring, hiddenRecurring, markCancelled, monthlyCostOf, recurringPayments, recurringPreview, recurringWindow, restoreRecurring } from './store'
 
 const TODAY = '2026-11-18'
 let n = 0
@@ -23,6 +24,13 @@ async function monthly(merchantId: string, months: string[], amounts: number | n
   await db.transactions.bulkAdd(rows)
   await db.annotations.bulkAdd(rows.map(r => ann(r.id, merchantId)))
 }
+/** Payments to a merchant on the given dates, each for the same amount (cents out). */
+async function pay(merchantId: string, dates: string[], amount: number): Promise<void> {
+  const rows = dates.map(d => tx(d, -amount))
+  await db.transactions.bulkAdd(rows)
+  await db.annotations.bulkAdd(rows.map(r => ann(r.id, merchantId)))
+}
+const every = (start: string, gap: number, count: number): string[] => Array.from({ length: count }, (_, i) => addDays(start, i * gap))
 const M6 = ['2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08']
 
 beforeEach(async () => { await db.delete(); await db.open(); await seedDatabase(); n = 0 })
@@ -57,22 +65,6 @@ describe('recurring store', () => {
     expect((await db.recurring.get(v!.id))?.cancelled).toBe(false)
   })
 
-  it('shows a confirmed payment even when its score has fallen', async () => {
-    // Gaps of 30, 30, 8, 52 days: a low score, so an unconfirmed one is not shown.
-    const dates = ['2026-01-01', '2026-01-31', '2026-03-02', '2026-03-10', '2026-05-01']
-    const rows = dates.map(d => tx(d, -1000))
-    await db.transactions.bulkAdd(rows)
-    await db.annotations.bulkAdd(rows.map(r => ann(r.id, 'm.odd')))
-    expect(await recurringPayments(TODAY, 1)).toEqual([])
-    const id = (await db.recurring.toArray())[0]?.id
-    expect(id).toBeTruthy()
-    await confirmRecurring(id!)
-    const shown = await recurringPayments(TODAY, 2)
-    expect(shown).toHaveLength(1)
-    expect(shown[0]).toMatchObject({ confirmedByUser: true })
-    expect(shown[0]!.matchScoreBp).toBeLessThan(3000)
-  })
-
   it('shows a cancelled payment, flagged, and cancelling is not dismissing', async () => {
     await monthly('m.gym', M6, 3000)
     const [v] = await recurringPayments(TODAY, 1)
@@ -96,9 +88,9 @@ describe('recurring store', () => {
     expect(monthlyCostOf('irregular', 1000)).toBeNull()
   })
 
-  it('works out the window as the last 14 completed months before the month of today', () => {
-    expect(recurringWindow('2026-11-18')).toEqual({ first: '2025-09', last: '2026-10' })
-    expect(recurringWindow('2026-01-01')).toEqual({ first: '2024-11', last: '2025-12' })
+  it('works out the window as the last 14 completed months plus the running month', () => {
+    expect(recurringWindow('2026-11-18')).toEqual({ first: '2025-09', last: '2026-11' })
+    expect(recurringWindow('2026-01-01')).toEqual({ first: '2024-11', last: '2026-01' })
   })
 
   it('reads a bounded window by the bank dates, never the whole ledger', async () => {
@@ -151,5 +143,132 @@ describe('recurring store', () => {
     await db.transactions.bulkAdd(rows)
     await db.annotations.bulkAdd(rows.map(r => ann(r.id, 'm.pay')))
     expect(await recurringPayments(TODAY, 1)).toEqual([])
+  })
+  it('reads the running month, so a live weekly payment is not stopped mid-month, and is once it really has', async () => {
+    await pay('m.week', every('2026-09-28', 7, 8), 800)   // ends 2026-11-16
+    const [live] = await recurringPayments('2026-11-18', 1)
+    expect(live).toMatchObject({ lastSeenDate: '2026-11-16', lapsed: false, expectedNextDate: '2026-11-23', overdue: false })
+    const [stopped] = await recurringPayments('2026-12-31', 2)
+    expect(stopped).toMatchObject({ lapsed: true, expectedNextDate: null, monthlyCostCents: null })
+  })
+
+  it('says a payment is overdue, not lapsed, between its expected date and a whole cycle later', async () => {
+    await pay('m.gym', ['2026-08-05', '2026-09-04', '2026-10-04'], 3000)   // expected 2026-11-03
+    const [v] = await recurringPayments('2026-11-10', 1)
+    expect(v).toMatchObject({ lapsed: false, overdue: true, expectedNextDate: '2026-11-03' })
+    expect(v?.monthlyCostCents).toBe(3000)
+    const [early] = await recurringPayments('2026-11-03', 2)
+    expect(early).toMatchObject({ overdue: false })
+  })
+
+  it('shows a price rise as one payment at the new price, with the monthly cost from the new price', async () => {
+    await pay('m.stream', every('2026-05-01', 30, 4), 999)
+    await pay('m.stream', every('2026-08-29', 30, 2), 1299)
+    const shown = await recurringPayments('2026-10-20', 1)
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toMatchObject({ amountCents: 1299, monthlyCostCents: 1299, occurrences: 6, amountChanged: { fromCents: 999, toCents: 1299 }, lapsed: false })
+  })
+
+  it('keeps two subscriptions at one merchant running at once as two payments', async () => {
+    await pay('m.apple', every('2026-05-01', 30, 5), 999)
+    await pay('m.apple', every('2026-05-12', 30, 5), 5499)
+    expect(await recurringPayments('2026-10-20', 1)).toHaveLength(2)
+  })
+
+  describe("the owner's corrections stay with their payment", () => {
+    it('a cheaper subscription that appears does not inherit a cancellation', async () => {
+      await pay('m.apple', every('2026-05-01', 30, 5), 5499)
+      const [old] = await recurringPayments('2026-10-20', 1)
+      await markCancelled(old!.id)
+      await pay('m.apple', every('2026-07-10', 30, 3), 999)   // sorts BEFORE the old one by amount
+      const shown = await recurringPayments('2026-10-20', 2)
+      const byAmount = new Map(shown.map(v => [v.amountCents, v]))
+      expect(byAmount.get(5499)).toMatchObject({ id: old!.id, cancelled: true })
+      expect(byAmount.get(999)).toMatchObject({ cancelled: false })
+      expect(byAmount.get(999)?.id).not.toBe(old!.id)
+    })
+
+    it('an older payment ageing out of the window does not hand its corrections to another', async () => {
+      await pay('m.a', every('2025-09-20', 30, 14), 999)          // runs to 2026-10-14
+      await pay('m.a', every('2026-06-01', 30, 5), 5499)
+      const first = await recurringPayments('2026-10-20', 1)
+      const cheap = first.find(v => v.amountCents === 999)!
+      const dear = first.find(v => v.amountCents === 5499)!
+      await dismissRecurring(cheap.id)
+      await markCancelled(dear.id)
+      // A month on, the early payments of the cheap one have left the window.
+      const later = await recurringPayments('2026-11-25', 2)
+      expect(later.map(v => v.id)).toEqual([dear.id])
+      expect(later[0]).toMatchObject({ cancelled: true })
+      expect((await db.recurring.get(cheap.id))?.dismissed).toBe(true)
+    })
+
+    it("a price change keeps the id, and the owner's confirmation with it", async () => {
+      await pay('m.stream', every('2026-05-01', 30, 4), 999)
+      const [before] = await recurringPayments('2026-09-10', 1)
+      await confirmRecurring(before!.id)
+      await pay('m.stream', every('2026-08-29', 30, 3), 1299)
+      const shown = await recurringPayments('2026-11-20', 2)
+      expect(shown).toHaveLength(1)
+      expect(shown[0]).toMatchObject({ id: before!.id, confirmedByUser: true, amountCents: 1299 })
+    })
+
+    it('a confirmed payment whose cadence drifts keeps its confirmation', async () => {
+      await pay('m.drift', every('2026-05-01', 30, 4), 2000)
+      const [before] = await recurringPayments('2026-09-10', 1)
+      await confirmRecurring(before!.id)
+      await pay('m.drift', every('2026-08-29', 7, 6), 2000)   // now far more often
+      const after = await recurringPayments('2026-10-20', 2)
+      expect(after.map(v => v.id)).toContain(before!.id)
+      expect(await db.recurring.count()).toBe(1)
+    })
+
+    it('matches each stored row to at most one payment', async () => {
+      await pay('m.apple', every('2026-05-01', 30, 5), 999)
+      await pay('m.apple', every('2026-05-01', 30, 5), 5499)   // the same dates, so both series continue from the same stored date
+      const first = await recurringPayments('2026-10-20', 1)
+      const again = await recurringPayments('2026-10-20', 2)
+      expect(new Set(again.map(v => v.id)).size).toBe(again.length)
+      expect(again.map(v => v.id).sort()).toEqual(first.map(v => v.id).sort())
+    })
+  })
+
+  it('ignores a row dated after today', async () => {
+    await pay('m.gym', [...every('2026-06-20', 30, 4), '2026-10-28'], 3000)
+    const [v] = await recurringPayments('2026-10-20', 1)
+    expect(v).toMatchObject({ occurrences: 4, lastSeenDate: '2026-09-18' })
+  })
+
+  it('lists the payments the owner hid and shows one again', async () => {
+    await pay('m.gym', every('2026-05-01', 30, 5), 3000)
+    const [v] = await recurringPayments('2026-10-20', 1)
+    await dismissRecurring(v!.id)
+    expect(await recurringPayments('2026-10-20', 2)).toEqual([])
+    expect((await hiddenRecurring()).map(r => r.id)).toEqual([v!.id])
+    await restoreRecurring(v!.id)
+    expect(await hiddenRecurring()).toEqual([])
+    expect((await recurringPayments('2026-10-20', 3)).map(x => x.id)).toEqual([v!.id])
+  })
+
+  it('previews without writing anything, so a read-only screen cannot change what the Recurring screen shows', async () => {
+    await pay('m.gym', every('2026-05-01', 30, 5), 3000)
+    expect(await recurringPreview('2026-10-20')).toHaveLength(1)
+    expect(await db.recurring.count()).toBe(0)
+  })
+
+  it('does not lose a correction made between the read of the stored rows and the write', async () => {
+    await pay('m.gym', every('2026-05-01', 30, 5), 3000)
+    const [v] = await recurringPayments('2026-10-20', 1)
+    const read = db.recurring.toArray.bind(db.recurring)
+    const spy = vi.spyOn(db.recurring, 'toArray').mockImplementationOnce(async () => {
+      const rows = await read()
+      // The owner presses "not recurring" now: after the rows were read, before the detection writes them back.
+      void Dexie.ignoreTransaction(() => dismissRecurring(v!.id))
+      return rows
+    })
+    await recurringPayments('2026-10-20', 2)
+    spy.mockRestore()
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await db.recurring.get(v!.id))?.dismissed).toBe(true)
   })
 })

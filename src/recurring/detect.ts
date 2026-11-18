@@ -14,6 +14,8 @@ export interface Detected {
   frequency: Frequency
   occurrences: number
   lastSeenDate: string
+  /** The date of every payment in the series, oldest first. The store matches a stored row to a series by one of them. */
+  paymentDates: string[]
   /** Last seen plus the median gap; null for 'irregular', where there is no honest date to give. */
   expectedNextDate: string | null
   /** 0-10000 basis points: how well the evidence pins the pattern. See detectRecurring. */
@@ -190,6 +192,7 @@ export function detectRecurring(rows: readonly { merchantId: string; valueDate: 
       frequency,
       occurrences: n,
       lastSeenDate: last.date,
+      paymentDates: payments.map((p) => p.date),
       expectedNextDate: frequency === 'irregular' ? null : addDays(last.date, medianGap),
       matchScoreBp: frequency === 'irregular' ? 0 : matchScoreBp(inBand, gaps.length, n),
       amountChanged: change,
