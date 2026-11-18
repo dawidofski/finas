@@ -41,7 +41,7 @@ import { resolveMany } from '../db/annotations'
 import { annotatedTransactions } from '../learning/regret'
 import { cached } from '../analytics/cache'
 import { chiSquareScaled, cramersVBp } from './stats'
-import { chiSquareBracket, type Bracket } from './critical'
+import { CHI_TABLE_MAX_DF, chiSquareBracket, type Bracket } from './critical'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from './battery'
 
 export interface ContingencyRow {
@@ -76,9 +76,6 @@ export interface Withheld {
 
 /** Unmet gates when there is too little data; a withheld table; or the result. */
 export type ContingencyOutcome = ContingencyResult | Withheld | Gate[]
-
-/** The widest df chiSquareBracket has a critical for. Kept in step by a test, which asserts df 20 answers and df 21 throws. */
-const CHI_TABLE_MAX_DF = 20
 
 const BORED = 'mood.bored'
 const IMPULSE = 'reason.impulse'

@@ -3,7 +3,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { CHI_SCALE } from './stats'
-import { chiSquareBracket } from './critical'
+import { CHI_TABLE_MAX_DF, chiSquareBracket } from './critical'
 import { boredomImpulse, reasonWorthwhile, type ContingencyResult, type Withheld } from './contingency'
 
 // Every expected figure below is worked by hand, with real arithmetic, in the comment above it. Tests may use floats;
@@ -270,8 +270,8 @@ describe('reasonWorthwhile', () => {
     expect(r.vBp).toBe(0)
     expect(r.verdict).toBe('too-many-categories')
     // The module's own ceiling must match the table's: df 20 answers, df 21 throws.
-    expect(chiSquareBracket(0, 20)).toBe('none')
-    expect(() => chiSquareBracket(0, 21)).toThrow(RangeError)
+    expect(chiSquareBracket(0, CHI_TABLE_MAX_DF)).toBe('none')
+    expect(() => chiSquareBracket(0, CHI_TABLE_MAX_DF + 1)).toThrow(RangeError)
   })
 })
 
