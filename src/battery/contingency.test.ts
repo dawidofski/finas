@@ -244,28 +244,32 @@ describe('reasonWorthwhile', () => {
   })
 
   it('still tests at df 20, the widest the critical table carries', async () => {
+    // The reason count follows the critical table: with two columns df = reasons - 1, so CHI_TABLE_MAX_DF + 1 reasons sit
+    // exactly at the ceiling (21 while the table ends at df 20). The figures below are for that size.
     // Twenty-one reasons, ten worthwhile and ten not each: N = 420, every row 20, columns 210 and 210, every expected
     // count 20*210/420 = 10 and every observed count 10, so chi-square is exactly 0 and V is 0. df = 20 is the last the
     // table answers, so this is tested (a real, unremarkable absence), not refused.
-    const ids = Array.from({ length: 21 }, (_, i) => `reason.gone-${i}`)
+    const ids = Array.from({ length: CHI_TABLE_MAX_DF + 1 }, (_, i) => `reason.gone-${i}`)
     await put(ids.flatMap((reason) => [{ n: 10, reason, worthwhile: true }, { n: 10, reason, worthwhile: false }]))
     const r = asResult(await reasonWorthwhile(1))
-    expect(r.df).toBe(20)
+    expect(r.df).toBe(CHI_TABLE_MAX_DF)
     expect(r.chiScaled).toBe(0)
     expect(r.verdict).toBe('tested')
     expect(r.bracket).toBe('none')
   })
 
+    // Reasons = CHI_TABLE_MAX_DF + 2, so df = reasons - 1 = CHI_TABLE_MAX_DF + 1: one past the table, wherever it ends. The
+    // figures in the next lines are for a table that ends at df 20 (22 reasons, N = 44, df 21).
   it('refuses past the critical table instead of throwing or calling it unremarkable', async () => {
     // Twenty-two distinct reasons (the seed has eight; fourteen are removed ids), two answered spends each: one worthwhile,
     // one not. N = 44, df = 21, one more than the table carries. Every column sum is 22 and every row sum 2, so every
     // expected count is 2*22/44 = 1, and every cell is O = 1 against E = 1: chi-square is exactly 0 and V is 0. The point is
     // the verdict: df 21 has no critical, and the result says so rather than throwing or reading 'none' as a finding.
-    const ids = Array.from({ length: 22 }, (_, i) => `reason.gone-${i}`)
+    const ids = Array.from({ length: CHI_TABLE_MAX_DF + 2 }, (_, i) => `reason.gone-${i}`)
     await put(ids.flatMap((reason) => [{ n: 1, reason, worthwhile: true }, { n: 1, reason, worthwhile: false }]))
     const r = asResult(await reasonWorthwhile(1))
-    expect(r.n).toBe(44)
-    expect(r.df).toBe(21)
+    expect(r.n).toBe(2 * (CHI_TABLE_MAX_DF + 2))
+    expect(r.df).toBe(CHI_TABLE_MAX_DF + 1)
     expect(r.chiScaled).toBe(0)
     expect(r.vBp).toBe(0)
     expect(r.verdict).toBe('too-many-categories')
