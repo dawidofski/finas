@@ -16,6 +16,9 @@ const MIN_IMPROVEMENT_MONTHS = BASELINE_WINDOW * 2
 const POINTS_PER_100_BP = 5
 
 const clamp = (n: number): number => Math.max(0, Math.min(100, n))
+/** `part` of `total` as whole points; 100 only when nothing is short, so rounding never awards a full score. */
+const wholePoints = (part: number, total: number): number =>
+  clamp(part < total ? Math.min(99, divRound(part * 100, total)) : 100)
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /**
@@ -34,17 +37,20 @@ export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasDat
     .filter((m) => m.hasData && !m.budget.partial)
     .flatMap((m) => m.budget.lines)
     .filter((l) => l.allocatedCents > 0)
+    // A savings-goal line carries no evidence either way: the app ties no transaction to a goal yet, so its spend is always
+    // zero and it would read as unrespected whatever the owner did. Without data it is not measured (§13.3), not scored 0.
+    // A later plan that tracks goal contributions must revisit this.
+    .filter((l) => l.targetKind !== 'goal')
   if (lines.length === 0) {
-    return { kind: 'not-measured', why: 'No completed month with an allocation is recorded yet, so there is nothing to compare spending against.' }
+    return { kind: 'not-measured', why: 'No completed month with a category allocation is recorded yet, so there is nothing to compare spending against.' }
   }
   let total = 0
   let respected = 0
   let respectedLines = 0
   for (const l of lines) {
     total += l.allocatedCents
-    // A category is respected by spending no more than allocated; a savings goal by setting aside no less than planned.
-    const met = l.targetKind === 'goal' ? l.spentCents >= l.allocatedCents : l.spentCents <= l.allocatedCents
-    if (met) {
+    // A category is respected by spending no more than allocated.
+    if (l.spentCents <= l.allocatedCents) {
       respected += l.allocatedCents
       respectedLines += 1
     }
@@ -52,7 +58,7 @@ export function budgetAwareness(months: readonly { budget: MonthlyBudget; hasDat
   return {
     kind: 'measured',
     // 100 means every allocation was respected: rounding must not award it while one was not.
-    score: clamp(respected < total ? Math.min(99, divRound(respected * 100, total)) : 100),
+    score: wholePoints(respected, total),
     inputs: `You respected ${respectedLines} of ${plural(lines.length, 'allocation')} in completed months, weighted by size: ${formatEur(respected)} of ${formatEur(total)} allocated.`,
   }
 }
@@ -110,10 +116,6 @@ export function improvement(points: readonly MonthPoint[]): Component {
 
 const MIN_SHARED_CLUSTERS = 2
 
-/** `part` of `total` as whole points; 100 only when nothing is short, so rounding never awards a full score. */
-const wholePoints = (part: number, total: number): number =>
-  clamp(part < total ? Math.min(99, divRound(part * 100, total)) : 100)
-
 /**
  * Share of the window's live bank transactions the owner has reviewed. Reviewed means the owner's own `reviewed` flag is
  * set; having an annotation row is not enough (a note alone is not a review). Not measured when the window has no
@@ -170,7 +172,7 @@ export function goalProgress(goals: readonly SavingsGoalRow[]): Component {
   return {
     kind: 'measured',
     score: wholePoints(reached, total),
-    inputs: `You have reached ${reachedGoals} of ${plural(counted.length, 'savings goal')}, weighted by target: ${formatEur(reached)} of ${formatEur(total)}.`,
+    inputs: `You have completed ${reachedGoals} of ${plural(counted.length, 'savings goal')}, weighted by target: ${formatEur(reached)} of ${formatEur(total)}. Only completed goals count; partway toward a goal is not measured.`,
   }
 }
 
@@ -204,6 +206,6 @@ export function learning(early: readonly RegretCluster[], late: readonly RegretC
   return {
     kind: 'measured',
     score: wholePoints(fell, shared),
-    inputs: `The share of spends you marked as not worth it fell in ${fell} of ${plural(shared, 'pattern')} that appear in both periods.`,
+    inputs: `Comparing only the patterns of spends marked not worth it that appear in both periods, the share fell in ${fell} of ${plural(shared, 'pattern')}. A pattern with no such spends in the later period does not appear in it, so it is not compared.`,
   }
 }

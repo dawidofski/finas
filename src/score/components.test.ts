@@ -82,11 +82,15 @@ describe('budgetAwareness', () => {
     expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'category')]))])).toMatchObject({ score: 0 })
   })
 
-  it('respects a savings goal by meeting it, not by contributing less than planned', () => {
-    // Goal 1000, 400 put aside: short of the plan, 0. Exactly 1000 or more: met, 100.
-    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 400, 'goal')]))])).toMatchObject({ score: 0 })
-    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1000, 'goal')]))])).toMatchObject({ score: 100 })
-    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 1500, 'goal')]))])).toMatchObject({ score: 100 })
+  it('leaves a savings-goal line out entirely, since no transaction is tied to a goal yet', () => {
+    // The goal line (1000 allocated, 0 spent, as the app always produces) is dropped: only the category counts, 500 of 500 = 100.
+    // Admitted as unrespected it would read 500 of 1500 = 33.
+    const c = budgetAwareness([bm(budget('2026-01', [line(500, 400, 'category'), line(1000, 0, 'goal')]))])
+    expect(c).toMatchObject({ kind: 'measured', score: 100 })
+    if (c.kind !== 'measured') throw new Error('expected measured')
+    expect(c.inputs).toMatch(/1 of 1 allocation/)
+    // A month with only a goal line has nothing to measure.
+    expect(budgetAwareness([bm(budget('2026-01', [line(1000, 0, 'goal')]))]).kind).toBe('not-measured')
   })
 
   it('never reports 100 while an allocation was not respected', () => {
@@ -234,14 +238,20 @@ describe('spendingAwareness', () => {
 
   it('does not score a window whose transactions are all unannotated', async () => {
     await db.transactions.bulkAdd([tx('a', '2026-11-03'), tx('b', '2026-11-04')])
-    expect((await spendingAwareness('2026-11-01', '2026-11-30')).kind).toBe('not-measured')
+    const c = await spendingAwareness('2026-11-01', '2026-11-30')
+    expect(c.kind).toBe('not-measured')
+    if (c.kind !== 'not-measured') throw new Error('expected not-measured')
+    expect(c.why).toMatch(/None of the transactions in this period has been reviewed or annotated/)
   })
 
   it('does not score a window with nothing live in it, whatever is reviewed outside it or deleted', async () => {
     // Only a reviewed October row and a soft-deleted reviewed November row exist: November has nothing live.
     await db.transactions.bulkAdd([tx('o', '2026-10-30'), tx('x', '2026-11-03', { deletedAt: 5 })])
     await db.annotations.bulkAdd([ann('o', { reviewed: true }), ann('x', { reviewed: true })])
-    expect((await spendingAwareness('2026-11-01', '2026-11-30')).kind).toBe('not-measured')
+    const c = await spendingAwareness('2026-11-01', '2026-11-30')
+    expect(c.kind).toBe('not-measured')
+    if (c.kind !== 'not-measured') throw new Error('expected not-measured')
+    expect(c.why).toMatch(/No transactions are recorded in this period/) // nothing live, not merely nothing touched
   })
 
   it('uses the window to the day, not the whole month', async () => {
@@ -281,7 +291,11 @@ describe('goalProgress', () => {
 
   it('scores progress against each goal target, weighted by the size of the target', () => {
     // Reached 10000 of 10000 + 90000 = 10%. A count-based version says 1 of 2 = 50.
-    expect(goalProgress([goal('a', 10000, { completedAt: 5 }), goal('b', 90000)])).toMatchObject({ kind: 'measured', score: 10 })
+    const c = goalProgress([goal('a', 10000, { completedAt: 5 }), goal('b', 90000)])
+    expect(c).toMatchObject({ kind: 'measured', score: 10 })
+    if (c.kind !== 'measured') throw new Error('expected measured')
+    expect(c.inputs).toMatch(/completed 1 of 2 savings goals/)
+    expect(c.inputs).toMatch(/partway toward a goal is not measured/) // completion only: it must not imply partial progress
     // The big goal reached instead: 90000 of 100000 = 90.
     expect(goalProgress([goal('a', 10000), goal('b', 90000, { completedAt: 5 })])).toMatchObject({ score: 90 })
   })
@@ -319,6 +333,7 @@ describe('learning', () => {
     expect(c).toMatchObject({ kind: 'measured', score: 33 })
     if (c.kind !== 'measured') throw new Error('expected measured')
     expect(c.inputs).toMatch(/1 of 3 patterns/)
+    expect(c.inputs).toMatch(/appear in both periods/) // it compares the shared patterns, and says so
   })
 
   it('compares rates, not counts', () => {
