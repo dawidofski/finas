@@ -39,6 +39,31 @@ describe('parseHeader', () => {
   })
 })
 
+describe('parseHeader: the layout the bank itself exports', () => {
+  // A title in the first column; each label two columns over, indented and closed with a colon; the value in the next cell.
+  const BANK = [
+    ['Movimientos de la Cuenta', '', '  Número de cuenta:', '0000 1111 2222 33334444', '', '', '', ''],
+    ['', '', '  Titular:', 'PRUEBA TESTER EJEMPLO', '', '', '', ''],
+    ['', '', '  Fecha exportación:', '16/11/2026 08:00h', '', '', '', ''],
+    ['F. VALOR', 'CATEGORÍA', 'SUBCATEGORÍA', 'DESCRIPCIÓN', 'COMENTARIO', 'IMPORTE (€)', 'SALDO (€)', ''],
+  ]
+  it('finds each entry wherever its label sits in the row', () => {
+    const header = parseHeader(BANK)
+    expect(header.accountNumber).toBe('0000 1111 2222 33334444')
+    expect(header.holderName).toBe('PRUEBA TESTER EJEMPLO')
+    expect(header.exportedAt).toBe('16/11/2026 08:00h')
+  })
+  it('reads a label written without accents or in another case, and a value written after the colon', () => {
+    const header = parseHeader([['x', 'NUMERO DE CUENTA: 0000 1111 2222 33334444'], ['', 'titular:', '', 'PRUEBA TESTER'], ['', '', 'Fecha exportación', '16/11/2026']])
+    expect(header.accountNumber).toBe('0000 1111 2222 33334444')
+    expect(header.holderName).toBe('PRUEBA TESTER')
+    expect(header.exportedAt).toBe('16/11/2026')
+  })
+  it('still refuses a file with no such entry, and does not take a longer label for it', () => {
+    expect(() => parseHeader([['', '', '  Número de cuenta destino:', '0000 1111 2222 33334444']])).toThrow(/Número de cuenta/)
+  })
+})
+
 describe('fingerprintAccount', () => {
   it('fingerprints to 64 lowercase hex, stable for the same number and salt', async () => {
     const a = await fingerprintAccount(ACCOUNT, 'salt-one')

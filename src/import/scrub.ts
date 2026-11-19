@@ -39,15 +39,24 @@ const wordsOf = (text: string): Array<{ text: string; index: number }> =>
 /** What may sit between two name words without breaking a run: spaces, hyphen, apostrophe, comma. */
 const RUN_JOINER = /^[\s\-'’,]+$/
 
-const labelOf = (row: string[]): string => foldUpper((row[0] ?? '').trim())
-
+/**
+ * The value of a header entry. ING writes the block in more than one layout, and both are read:
+ *   - label in the first column, value in a later one ("Número de cuenta" | "…"), or "Label: value" in one cell;
+ *   - a title in the first column and the label further right, indented and ending in a colon, with the value in the
+ *     next filled cell ("Movimientos de la Cuenta" | "" | "  Número de cuenta:" | "…"). This is what the bank's own
+ *     export has.
+ * So the label is looked for in EVERY cell of the first rows, compared with spaces, case, accents and a closing colon
+ * ignored, and the value is what follows the colon in that cell, or else the next filled cell to its right.
+ */
 function headerValue(grid: string[][], label: string): string {
   const wanted = foldUpper(label)
   for (const row of grid.slice(0, 10)) {
-    const first = (row[0] ?? '').trim()
-    if (labelOf(row) === wanted || foldUpper(first).startsWith(`${wanted}:`)) {
-      const inline = first.includes(':') ? first.slice(first.indexOf(':') + 1).trim() : ''
-      const value = inline || (row.slice(1).find((cell) => cell.trim() !== '') ?? '').trim()
+    for (let i = 0; i < row.length; i++) {
+      const cell = (row[i] ?? '').trim()
+      const folded = foldUpper(cell)
+      if (folded !== wanted && !folded.startsWith(`${wanted}:`)) continue
+      const inline = cell.includes(':') ? cell.slice(cell.indexOf(':') + 1).trim() : ''
+      const value = inline || (row.slice(i + 1).find((c) => c.trim() !== '') ?? '').trim()
       if (value) return value
     }
   }
