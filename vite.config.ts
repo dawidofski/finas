@@ -5,8 +5,9 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 /**
- * Runtime enforcement of the network posture (design 14.4): the page may talk to its own origin and nothing
- * else. Plan 5 adds the DeepSeek origin to connect-src, and only there. No 'unsafe-inline' or 'unsafe-eval':
+ * Runtime enforcement of the network posture (design 14.4): the page may talk to its own origin and to ONE other
+ * address, DeepSeek's, which is in connect-src and nowhere else: scripts, styles, images and fonts stay 'self'. The
+ * only code that calls it is src/coach/request.ts, when the owner presses send. No 'unsafe-inline' or 'unsafe-eval':
  * the pre-paint theme script is the external public/theme-init.js for exactly that reason.
  */
 const CONTENT_SECURITY_POLICY = [
@@ -15,7 +16,7 @@ const CONTENT_SECURITY_POLICY = [
   "style-src 'self'",
   "img-src 'self'",
   "font-src 'self'",
-  "connect-src 'self'",
+  "connect-src 'self' https://api.deepseek.com",
   "manifest-src 'self'",
   "worker-src 'self'",
   "object-src 'none'",

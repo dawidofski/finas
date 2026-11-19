@@ -35,14 +35,15 @@ describe('production build', () => {
     const sw = readFileSync(resolve(dist, 'sw.js'), 'utf8')
     for (const f of readdirSync(resolve(dist, 'assets'))) expect(sw, f).toContain(`assets/${f}`)
   })
-  it('ships a Content-Security-Policy that allows only its own origin', () => {
+  it('ships a Content-Security-Policy that allows only its own origin, plus the one DeepSeek address for connections', () => {
     const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html())?.[1]?.replaceAll('&#39;', "'")
     expect(csp, 'no CSP meta tag').toBeDefined()
     expect(csp).toMatch(/default-src 'self'/)
-    expect(csp).toMatch(/connect-src 'self'(;|$)/)
+    expect(csp).toMatch(/connect-src 'self' https:\/\/api\.deepseek\.com(;|$)/)
     expect(csp).toMatch(/script-src 'self'(;|$)/)
     expect(csp).toMatch(/object-src 'none'/)
-    expect(csp).not.toMatch(/unsafe-inline|unsafe-eval|https?:|\*/)
+    // With that one address taken out, no other origin and no wildcard is left anywhere in the policy.
+    expect(csp?.replace("connect-src 'self' https://api.deepseek.com", "connect-src 'self'")).not.toMatch(/unsafe-inline|unsafe-eval|https?:|\*/)
     // The page must carry no inline script, or the policy would block it.
     expect(html()).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/)
     expect(html().slice(0, 1024)).toContain('charset') // a long meta ahead of it must not push the charset out of the first 1024 bytes
@@ -60,7 +61,8 @@ describe('production build', () => {
     const css = readdirSync(resolve(dist, 'assets')).filter(f => f.endsWith('.css')).map(f => readFileSync(resolve(dist, 'assets', f), 'utf8'))
     expect(css.length).toBeGreaterThan(0)
     for (const text of [html(), ...css]) {
-      expect(text.replaceAll('http://www.w3.org/2000/svg', '')).not.toMatch(/https?:\/\//i)
+      // The policy names the one address the owner can choose to send a question to; nothing is LOADED from it.
+      expect(text.replaceAll('http://www.w3.org/2000/svg', '').replace("connect-src 'self' https://api.deepseek.com", '').replace('connect-src &#39;self&#39; https://api.deepseek.com', '')).not.toMatch(/https?:\/\//i)
     }
   })
   it('emits .nojekyll so hashed asset filenames are served', () => {

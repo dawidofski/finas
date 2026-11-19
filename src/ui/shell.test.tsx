@@ -88,16 +88,11 @@ describe('shell', () => {
   it('exposes exactly five primary destinations for the mobile tab bar', () => {
     expect(ROUTES.filter(r => r.primary).map(r => r.path)).toEqual(['/', '/import', '/transactions', '/budget', '/intelligence'])
   })
-  it('stub screens say they are not built yet', async () => {
-    window.location.hash = '#/coach'
-    render(<App />)
-    expect(await screen.findByRole('heading', { level: 1, name: 'AI coach' })).toBeInTheDocument()
-    expect(screen.getByText('Not built yet')).toBeInTheDocument()
-  })
   // A stub renders a level-1 heading with its title, exactly as a real screen does, so a heading assertion alone cannot tell
   // them apart: on a previous plan a headline screen was unreachable while every test passed. "Not built yet" is what tells them apart.
-  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/goals', '/settings']
-  const STUBS = ['/coach']
+  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/goals', '/coach', '/settings']
+  // Every screen is built. The list stays, empty, so a placeholder added later has to be pinned here to pass.
+  const STUBS: string[] = []
   it('has pinned every route as either a real screen or a stub', () => {
     expect([...REAL, ...STUBS].sort()).toEqual(ROUTES.map(r => r.path).sort())
   })
@@ -108,12 +103,15 @@ describe('shell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: title })).toBeInTheDocument()
     expect(screen.queryByText('Not built yet')).toBeNull()
   })
-  it.each(STUBS)('%s is still a stub', async path => {
-    window.location.hash = `#${path}`
-    render(<App />)
-    const title = ROUTES.find(r => r.path === path)?.title ?? ''
-    expect(await screen.findByRole('heading', { level: 1, name: title })).toBeInTheDocument()
-    expect(screen.getByText('Not built yet')).toBeInTheDocument()
+  it('every placeholder still says it is not built', async () => {
+    for (const path of STUBS) {
+      window.location.hash = `#${path}`
+      const view = render(<App />)
+      const title = ROUTES.find(r => r.path === path)?.title ?? ''
+      expect(await screen.findByRole('heading', { level: 1, name: title })).toBeInTheDocument()
+      expect(screen.getByText('Not built yet')).toBeInTheDocument()
+      view.unmount()
+    }
   })
   /**
    * The router is the one place that reads the clock, and it hands down TWO readings of it: the day a screen's figures

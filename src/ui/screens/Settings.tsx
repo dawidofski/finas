@@ -416,6 +416,10 @@ export default function Settings(): ReactNode {
           Your data lives only in this browser, on this device, and browser storage is <strong>not encrypted</strong>.
           Clearing site data or losing the device destroys it. A plain backup is a readable file, so keep it somewhere private, or download the encrypted backup instead.
         </p>
+        <p>
+          Nothing is uploaded anywhere. The one thing that can leave this device is a question you choose to send from the AI coach screen,
+          with monthly totals only, after you have read the exact text.
+        </p>
       </div>
 
       <Accounts />

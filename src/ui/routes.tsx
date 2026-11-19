@@ -11,6 +11,7 @@ import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
 import Mood from './screens/Mood'
 import WorthIt from './screens/WorthIt'
+import Coach from './screens/Coach'
 import Settings from './screens/Settings'
 import Transactions from './screens/Transactions'
 
@@ -71,6 +72,12 @@ function LearningRoute() {
   return <Learning today={epochMsToIso(now)} computedAt={now} />
 }
 
+/** The coach reads the same cached month totals as the Dashboard, so it takes the day and the instant the same way. */
+function CoachRoute() {
+  const now = Date.now()
+  return <Coach today={epochMsToIso(now)} computedAt={now} />
+}
+
 /** The day and the instant together, as the other screens that read the store take them. */
 function RecurringRoute() {
   const now = Date.now()
@@ -100,7 +107,7 @@ export const ROUTES: ReadonlyArray<RouteDef> = [
   { path: '/mood', title: 'Mood', element: <Mood />, primary: false },
   { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false },
   { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false },
-  screen('/coach', 'AI coach'),
+  { path: '/coach', title: 'AI coach', element: <CoachRoute />, primary: false },
   { path: '/goals', title: 'Goals', element: <GoalsRoute />, primary: false },
   { path: '/recurring', title: 'Recurring', element: <RecurringRoute />, primary: false },
   { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false },
