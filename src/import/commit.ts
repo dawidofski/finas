@@ -155,7 +155,8 @@ export async function commitPreview(
 
   await db.transaction(
     'rw',
-    [db.accounts, db.transactions, db.annotations, db.categories, db.imports, db.transfers, db.learningEvents],
+    // settings: the owner's category rules are read when a correction made in the preview is written.
+    [db.accounts, db.transactions, db.annotations, db.categories, db.imports, db.transfers, db.learningEvents, db.settings],
     async () => {
       const stored = await db.accounts.where('fingerprint').equals(preview.accountFingerprint).first()
       if (stored === undefined) {

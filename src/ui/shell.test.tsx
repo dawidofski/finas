@@ -30,10 +30,10 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('shell', () => {
-  it('declares all fourteen screens', () => {
+  it('declares every screen, in navigation order', () => {
     expect(ROUTES.map(r => r.path)).toEqual([
-      '/', '/worth-it', '/mood', '/transactions', '/recurring', '/budget', '/goals', '/intelligence',
-      '/score', '/learning', '/reports', '/settings', '/import', '/coach'])
+      '/', '/worth-it', '/transactions', '/recurring', '/budget', '/goals', '/investments', '/intelligence',
+      '/score', '/learning', '/reports', '/settings', '/import', '/categories', '/coach'])
   })
   it('renders the screen named by the hash', async () => {
     window.location.hash = '#/transactions'
@@ -90,7 +90,7 @@ describe('shell', () => {
   })
   // A stub renders a level-1 heading with its title, exactly as a real screen does, so a heading assertion alone cannot tell
   // them apart: on a previous plan a headline screen was unreachable while every test passed. "Not built yet" is what tells them apart.
-  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/goals', '/coach', '/settings']
+  const REAL = ['/', '/import', '/transactions', '/budget', '/intelligence', '/worth-it', '/reports', '/score', '/learning', '/recurring', '/goals', '/coach', '/settings', '/categories', '/investments']
   // Every screen is built. The list stays, empty, so a placeholder added later has to be pinned here to pass.
   const STUBS: string[] = []
   it('has pinned every route as either a real screen or a stub', () => {
@@ -179,11 +179,13 @@ describe('navigation: five destinations, everything else a tab inside one', () =
   it.each([
     ['#/transactions', ['All', 'Recurring'], 'All', 'Transactions'],
     ['#/recurring', ['All', 'Recurring'], 'Recurring', 'Transactions'],
-    ['#/budget', ['Spending plan', 'Savings goals'], 'Spending plan', 'Budget'],
-    ['#/goals', ['Spending plan', 'Savings goals'], 'Savings goals', 'Budget'],
+    ['#/budget', ['Spending plan', 'Savings goals', 'Investments'], 'Spending plan', 'Budget'],
+    ['#/goals', ['Spending plan', 'Savings goals', 'Investments'], 'Savings goals', 'Budget'],
+    ['#/investments', ['Spending plan', 'Savings goals', 'Investments'], 'Investments', 'Budget'],
     ['#/intelligence', ['Patterns', 'Score', 'Advice', 'Month report'], 'Patterns', 'Intelligence'],
     ['#/score', ['Patterns', 'Score', 'Advice', 'Month report'], 'Score', 'Intelligence'],
-    ['#/import', ['General', 'Import a statement'], 'Import a statement', 'Settings'],
+    ['#/import', ['General', 'Import a statement', 'Categories'], 'Import a statement', 'Settings'],
+    ['#/categories', ['General', 'Import a statement', 'Categories'], 'Categories', 'Settings'],
   ])('%s shows its group of tabs, marks its own, and keeps its destination lit', async (hash, labels, own, destination) => {
     const main = await at(hash)
     expect(tabs().map(a => a.textContent)).toEqual(labels)
@@ -197,8 +199,8 @@ describe('navigation: five destinations, everything else a tab inside one', () =
     for (const r of ROUTES) {
       if (r.tab !== undefined) expect(ROUTES.some(p => p.primary && p.group === r.group), r.path).toBe(true)
     }
-    // The screens with no tab: the dashboard (a destination on its own), the two queues it links to, and the coach (the floating button).
-    expect(ROUTES.filter(r => r.tab === undefined).map(r => r.path)).toEqual(['/', '/worth-it', '/mood', '/coach'])
+    // The screens with no tab: the dashboard (a destination on its own), the queue it carries as a card, and the coach (the floating button).
+    expect(ROUTES.filter(r => r.tab === undefined).map(r => r.path)).toEqual(['/', '/worth-it', '/coach'])
   })
 
   it('shows no tabs on a screen that stands alone', async () => {
@@ -208,7 +210,7 @@ describe('navigation: five destinations, everything else a tab inside one', () =
 
   it('a tab is a link, so choosing one changes the screen', async () => {
     await at('#/budget')
-    expect(tabs().map(a => a.getAttribute('href'))).toEqual(['#/budget', '#/goals'])
+    expect(tabs().map(a => a.getAttribute('href'))).toEqual(['#/budget', '#/goals', '#/investments'])
     await act(async () => { window.location.hash = '#/goals' })
     expect(await screen.findByRole('heading', { level: 1, name: 'Goals' })).toBeInTheDocument()
   })

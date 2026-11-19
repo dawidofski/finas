@@ -1,3 +1,5 @@
+import type { InvestmentEvent } from '../investments/trading212'
+
 /**
  * Row types for the Dexie database (design §8, with the §23 deltas applied).
  * Types only: no runtime code lives here.
@@ -265,6 +267,8 @@ export interface SettingsRow {
   categoryRules?: CategoryRule[]
   /** The owner's mood for a whole day, by ISO date ('YYYY-MM-DD') -> mood id. Absent means none recorded. */
   dayMoods?: Record<string, string>
+  /** Rows of imported Trading 212 history files (src/investments). Kept here so they travel in a backup. Absent means none. */
+  investments?: InvestmentEvent[]
 }
 
 export interface CategoryRule {

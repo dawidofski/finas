@@ -143,3 +143,12 @@ html, body { max-width: 100%; overflow-x: clip; }
 .accounts-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .accounts-card strong { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .accounts-total { border-top: 2px solid var(--hair); padding-top: 0.5rem; margin-top: 0.25rem; }
+
+/* Investments: holdings as rows, like transactions. */
+.holdings-list { list-style: none; margin: 0.25rem 0; }
+.screen ul.holdings-list { padding-left: 0; }
+.holdings-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--hair); }
+.holdings-list li:last-child { border-bottom: 0; }
+.holding-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.holdings-list strong { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.investments input[type='file'] { max-width: 100%; min-height: 48px; }

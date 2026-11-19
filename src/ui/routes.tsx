@@ -1,6 +1,8 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { epochMsToIso } from '../lib/dates'
+import { AccountsCard } from './AccountsCard'
 import Budget from './screens/Budget'
+import Categories from './screens/Categories'
 import Dashboard from './screens/Dashboard'
 import Reports from './screens/Reports'
 import Score from './screens/Score'
@@ -9,7 +11,8 @@ import Recurring from './screens/Recurring'
 import Goals from './screens/Goals'
 import Import from './screens/Import'
 import Intelligence from './screens/Intelligence'
-import Mood from './screens/Mood'
+import Investments from './screens/Investments'
+import DayMood from './DayMood'
 import WorthIt from './screens/WorthIt'
 import Coach from './screens/Coach'
 import Settings from './screens/Settings'
@@ -50,7 +53,7 @@ function DashboardRoute() {
   const now = Date.now()
   const today = epochMsToIso(now)
   // The purchases waiting for a second look sit under the month's figures, so there is no separate screen to remember.
-  return <><Dashboard today={today} computedAt={now} /><WorthIt today={today} embedded /></>
+  return <><Dashboard today={today} computedAt={now} /><DayMood today={today} /><AccountsCard /><WorthIt today={today} embedded /></>
 }
 
 /** Same reading of the clock as the dashboard: the day and the instant together, handed down so no screen reads it. */
@@ -113,17 +116,18 @@ const screen = (path: string, title: string, primary = false): RouteDef =>
 export const ROUTES: ReadonlyArray<RouteDef> = [
   { path: '/', title: 'Dashboard', element: <DashboardRoute />, primary: true, group: 'home' },
   { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false, group: 'home' },
-  { path: '/mood', title: 'Mood', element: <Mood />, primary: false, group: 'home' },
   { path: '/transactions', title: 'Transactions', element: <Transactions />, primary: true, group: 'transactions', tab: 'All' },
   { path: '/recurring', title: 'Recurring', element: <RecurringRoute />, primary: false, group: 'transactions', tab: 'Recurring' },
   { path: '/budget', title: 'Budget', element: <BudgetRoute />, primary: true, group: 'budget', tab: 'Spending plan' },
   { path: '/goals', title: 'Goals', element: <GoalsRoute />, primary: false, group: 'budget', tab: 'Savings goals' },
+  { path: '/investments', title: 'Investments', element: <Investments />, primary: false, group: 'budget', tab: 'Investments' },
   { path: '/intelligence', title: 'Intelligence', element: <IntelligenceRoute />, primary: true, group: 'insights', tab: 'Patterns' },
   { path: '/score', title: 'Money Score', element: <ScoreRoute />, primary: false, group: 'insights', tab: 'Score' },
   { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false, group: 'insights', tab: 'Advice' },
   { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false, group: 'insights', tab: 'Month report' },
   { path: '/settings', title: 'Settings', element: <Settings />, primary: true, group: 'settings', tab: 'General' },
   { path: '/import', title: 'Import', element: <Import />, primary: false, group: 'settings', tab: 'Import a statement' },
+  { path: '/categories', title: 'Categories', element: <Categories />, primary: false, group: 'settings', tab: 'Categories' },
   { path: '/coach', title: 'AI coach', element: <CoachRoute />, primary: false, group: 'none' },
 ]
 
