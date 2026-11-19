@@ -257,4 +257,18 @@ export interface SettingsRow {
   worthwhileDelayDays?: number
   deepseek: { enabled: boolean }
   backup: { lastBackupAt: number | null }
+  /**
+   * The owner's own rules for filing a transaction: when the bank's description contains `contains` (compared with case,
+   * accents and spaces ignored), the transaction is filed under `categoryId` unless the owner set a category on it by hand.
+   * Kept on the settings row so it travels in a backup and needs no new table. Absent means no rules.
+   */
+  categoryRules?: CategoryRule[]
+  /** The owner's mood for a whole day, by ISO date ('YYYY-MM-DD') -> mood id. Absent means none recorded. */
+  dayMoods?: Record<string, string>
+}
+
+export interface CategoryRule {
+  id: string
+  contains: string
+  categoryId: string
 }
