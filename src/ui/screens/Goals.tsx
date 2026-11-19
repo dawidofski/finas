@@ -8,6 +8,7 @@ import { GOAL_MONTHS, goalWindow } from '../../goals/window'
 import { addMonths, formatMonthTitle, formatSpanishDate } from '../../lib/dates'
 import { centsToTypedString, formatBp, formatEur, parseTypedAmount } from '../../lib/money'
 import { allocationsFor } from '../../budget/allocations'
+import './budget-goals.css'
 
 interface Figures { goal: SavingsGoalRow; progress: GoalProgress }
 interface Loaded { figures: Figures[]; capped: boolean; shares: Map<string, string> }
@@ -98,19 +99,21 @@ function GoalCard({ f, share, onEdit, onArchive, onComplete, headingRef, busy }:
   const { goal, progress: p } = f
   const done = goal.completedAt !== null
   const words = estimateWords(p)
+  const percent = goal.targetCents > 0 ? Math.floor((Math.min(p.contributedCents, goal.targetCents) * 100) / goal.targetCents) : 0
   return (
-    <article className="goal-item" aria-labelledby={`goal-${goal.id}`}>
-      <h3 id={`goal-${goal.id}`} tabIndex={-1} ref={headingRef}><q>{goal.name}</q></h3>
-      <dl>
-        <dt>Target</dt>
-        <dd>{formatEur(goal.targetCents)}</dd>
-        <dt>Put toward it so far</dt>
-        <dd>{formatEur(p.contributedCents)}</dd>
-        <dt>Still to go</dt>
-        <dd>{formatEur(p.remainingCents)}</dd>
-        <dt>Share of income planned</dt>
-        <dd>{share}</dd>
-        {goal.deadline !== null && (<><dt>Deadline</dt><dd>{formatSpanishDate(goal.deadline)}</dd></>)}
+    <article className="goal-item gl-card card" aria-labelledby={`goal-${goal.id}`}>
+      <h3 id={`goal-${goal.id}`} tabIndex={-1} ref={headingRef} className="gl-name"><q>{goal.name}</q></h3>
+      <p className="gl-big">
+        <span className="gl-saved">{formatEur(p.contributedCents)}</span>
+        <span className="muted"> of {formatEur(goal.targetCents)}</span>
+      </p>
+      <progress className="meter" max={Math.max(goal.targetCents, 1)} value={Math.min(p.contributedCents, goal.targetCents)}
+                aria-label={`${goal.name}: ${percent} % of the target`} />
+      <p className="row-between gl-meta">
+        <span>{percent} % reached</span>
+        {goal.deadline !== null && <span className="muted">By {formatSpanishDate(goal.deadline)}</span>}
+      </p>
+      <dl className="gl-estimate">
         <dt>When it might be reached</dt>
         <dd>
           {done ? 'You marked this goal as completed.'
@@ -119,8 +122,21 @@ function GoalCard({ f, share, onEdit, onArchive, onComplete, headingRef, busy }:
           {!done && !p.reached && words.note !== null && <> {words.note}</>}
         </dd>
       </dl>
-      {p.reached && !done && <p>This goal keeps receiving a share of your savings until you mark it as completed.</p>}
-      <div className="goal-actions">
+      <details className="tip">
+        <summary>The figures</summary>
+        <dl className="gl-figures">
+          <dt>Target</dt>
+          <dd>{formatEur(goal.targetCents)}</dd>
+          <dt>Put toward it so far</dt>
+          <dd>{formatEur(p.contributedCents)}</dd>
+          <dt>Still to go</dt>
+          <dd>{formatEur(p.remainingCents)}</dd>
+          <dt>Share of income planned</dt>
+          <dd>{share}</dd>
+        </dl>
+      </details>
+      {p.reached && !done && <p className="gl-note">This goal keeps receiving a share of your savings until you mark it as completed.</p>}
+      <div className="goal-actions gl-actions">
         <button type="button" disabled={busy} aria-label={`Edit goal: ${goal.name}`} onClick={onEdit}>Edit</button>
         {p.reached && !done && <button type="button" disabled={busy} aria-label={`Mark as completed: ${goal.name}`} onClick={onComplete}>Mark as completed</button>}
         <button type="button" disabled={busy} aria-label={`Archive goal: ${goal.name}`} onClick={onArchive}>Archive</button>
@@ -188,8 +204,8 @@ export default function Goals({ today, computedAt }: { today: string; computedAt
   }
 
   const heading = <h1>Goals</h1>
-  if (error) return <section className="goals">{heading}<div role="alert" className="notice notice-refusal"><p>{error}</p></div></section>
-  if (data === null) return <section className="goals">{heading}<p role="status">Loading your savings goals…</p></section>
+  if (error) return <section className="goals gl-screen">{heading}<div role="alert" className="notice notice-refusal"><p>{error}</p></div></section>
+  if (data === null) return <section className="goals gl-screen">{heading}<p role="status">Loading your savings goals…</p></section>
 
   const active = data.figures.filter((f) => !f.goal.archived)
   const archived = data.figures.filter((f) => f.goal.archived)
@@ -204,24 +220,26 @@ export default function Goals({ today, computedAt }: { today: string; computedAt
   const showForm = adding || active.length === 0
 
   return (
-    <section className="goals">
+    <section className="goals gl-screen">
       {heading}
-      <p>Savings goals: an amount you are putting money toward, with the share of your income you plan to set aside for it.</p>
-      <h2>How the contribution is worked out</h2>
-      <p>
+      <p className="muted">Savings goals: an amount you are putting money toward, with the share of your income you plan to set aside for it.</p>
+      <details className="tip">
+        <summary><h2 className="gl-tip-title">How the contribution is worked out</h2></summary>
+        <p>
         Each completed month, the money you moved into savings is shared between your goals in proportion to the share of income you set for each,
         and no goal receives more than its planned amount for that month. Savings beyond what your goals plan belong to no goal.
         A goal counts the savings of the whole month it was created in, including days before you created it.
         The current month is not counted until it is over. The estimate is a range taken from your own months so far, and it moves as new months are added.
         {data.capped && ` Only the last ${GOAL_MONTHS} completed months are read.`}
-      </p>
+        </p>
+      </details>
       <h2 tabIndex={-1} ref={regionHeading}>Your goals</h2>
       {actionError && <div role="alert" className="notice notice-refusal"><p>{actionError}</p></div>}
       {active.length === 0 && (
         <p>You have not set a savings goal yet. That is a normal place to start, not something missed. You can add one below whenever you like.</p>
       )}
       {active.length > 0 && (
-        <ul aria-label="Savings goals" className="goal-list">
+        <ul aria-label="Savings goals" className="goal-list gl-list">
           {active.map((f) => (
             <li key={f.goal.id}>
               {editing === f.goal.id
@@ -264,11 +282,14 @@ export default function Goals({ today, computedAt }: { today: string; computedAt
           />
         )
         : <button type="button" disabled={busy} onClick={() => { focusNext.current = 'add'; setAdding(true); setEditing(null) }}>Add a goal</button>}
-      <p>
+      <details className="tip">
+        <summary>What archiving, completing and changing the share do</summary>
+        <p>
         Archiving or completing a goal applies to this whole month and every month after, so the goal receives nothing from this month on. What it received in earlier months is kept.
         {' '}An archived goal moves to the list below and cannot be changed. A goal whose contributions have reached its target can be marked as completed.
         {' '}Changing the share of income applies to the whole of the current month, and earlier months keep the share they had.
-      </p>
+        </p>
+      </details>
       {archived.length > 0 && (
         <>
           <h2>Archived goals</h2>

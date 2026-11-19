@@ -4,7 +4,8 @@ import type { BudgetAllocationRow, CategoryRow, SavingsGoalRow } from '../../db/
 import { AllocationError, allocationsFor, deleteAllocation, saveAllocation } from '../../budget/allocations'
 import { monthlyBudget, type BudgetLine, type MonthlyBudget } from '../../budget/month'
 import { addDays, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
-import { centsToTypedString, formatBp, formatEur, parseTypedAmount, percentBpOf } from '../../lib/money'
+import { centsToTypedString, divRound, formatBp, formatEur, parseTypedAmount, percentBpOf } from '../../lib/money'
+import './budget-goals.css'
 
 const monthTitle = formatMonthTitle
 const previousMonth = (m: string) => monthKeyOf(addDays(`${m}-01`, -1))
@@ -166,40 +167,72 @@ function Share({ bp, note }: { bp: number | null; note: string | null }): ReactN
   return bp === null ? null : <> · {formatBp(bp)} of income{note ? ` (${note})` : ''}</>
 }
 
+/** Bar value for a line: the whole bar when a plan of zero already has something against it, empty when it has nothing. */
+const barMax = (allocated: number): number => (allocated > 0 ? allocated : 1)
+const barValue = (spent: number, allocated: number): number => (allocated > 0 ? Math.min(Math.max(spent, 0), allocated) : spent > 0 ? 1 : 0)
+
 function BudgetedRow({ line, budget, onOpen }: { line: BudgetLine; budget: MonthlyBudget; onOpen: (l: BudgetLine, el: HTMLElement) => void }): ReactNode {
   const { income } = budget
   const share = income.cents > 0 ? percentBpOf(line.allocatedCents, income.cents) : null
   const over = line.remainingCents < 0
+  const isGoal = line.targetKind === 'goal'
   return (
-    <li className="budget-line" data-budget-line={keyOf(line.targetKind, line.targetId)}>
-      <button type="button" className="tx-open" data-budget-open={keyOf(line.targetKind, line.targetId)} onClick={(e) => onOpen(line, e.currentTarget)}>
+    <li className="budget-line bg-card" data-budget-line={keyOf(line.targetKind, line.targetId)}>
+      <button type="button" className="tx-open bg-name" data-budget-open={keyOf(line.targetKind, line.targetId)} onClick={(e) => onOpen(line, e.currentTarget)}>
         {line.label}
       </button>
-      <p className="budget-fig">
-        {line.fixed ? 'Fixed' : 'Planned'}: {formatEur(line.allocatedCents)}
-        <Share bp={share} note={basisNote(income)} />
-        {share === null && !line.fixed && basisNote(income) ? ` (${basisNote(income)})` : null}
-      </p>
-      {line.targetKind === 'goal'
+      {isGoal
         // A goal line is money set aside (the month's savings attributed to the goal), not money spent.
         ? (
-          <p className="budget-fig">
+          <p className="budget-fig bg-caption">
             {budget.partial ? 'Set aside so far' : 'Set aside'}: {formatEur(line.spentCents)}
             {line.varianceBp !== null && line.varianceBp !== 0 && ` · ${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'above' : 'below'} plan`}
             {' · '}{over ? `${formatEur(-line.remainingCents)} set aside beyond the plan` : `${formatEur(line.remainingCents)} still to set aside`}
           </p>
         )
         : (
-          <p className="budget-fig">
-            {budget.partial ? 'Spent so far' : 'Spent'}: {formatEur(line.spentCents)}
-            {line.varianceBp !== null && ` · ${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'over' : 'under'} plan`}
-            {' · '}{over ? `${formatEur(-line.remainingCents)} over` : `${formatEur(line.remainingCents)} left`}
-          </p>
+          <>
+            <p className="budget-fig bg-amounts row-between">
+              <span className="bg-spent">{budget.partial ? 'Spent so far' : 'Spent'}: {formatEur(line.spentCents)}</span>
+              <span className="muted">of {formatEur(line.allocatedCents)}</span>
+            </p>
+            <p className="budget-fig bg-caption muted" data-over={over ? 'true' : undefined}>
+              {line.varianceBp !== null && `${formatBp(Math.abs(line.varianceBp))} ${line.varianceBp > 0 ? 'over' : 'under'} plan · `}
+              {over ? `${formatEur(-line.remainingCents)} over` : `${formatEur(line.remainingCents)} left`}
+            </p>
+          </>
         )}
+      <progress className="meter" max={barMax(line.allocatedCents)} value={barValue(line.spentCents, line.allocatedCents)}
+                data-over={!isGoal && over ? 'true' : undefined}
+                aria-label={`${line.label}: ${formatEur(line.spentCents)} of ${formatEur(line.allocatedCents)}`} />
+      <p className="budget-fig bg-plan muted">
+        {line.fixed ? 'Fixed' : 'Planned'}: {formatEur(line.allocatedCents)}
+        <Share bp={share} note={basisNote(income)} />
+        {share === null && !line.fixed && basisNote(income) ? ` (${basisNote(income)})` : null}
+      </p>
     </li>
   )
 }
 
+/** Essentials against wants as one bar. Integer coordinates in a 0..1000 box; the widths come from integer division. */
+function SplitBar({ essential, discretionary }: { essential: number; discretionary: number }): ReactNode {
+  const total = essential + discretionary
+  const essentialWidth = total > 0 ? divRound(essential * 1000, total) : 0
+  const label = `Essentials ${formatEur(essential)}, discretionary ${formatEur(discretionary)}`
+  return (
+    <div className="bg-split">
+      <svg viewBox="0 0 1000 40" className="bg-split-svg" role="img" aria-label={label} preserveAspectRatio="none">
+        <rect x="0" y="0" width="1000" height="40" className="bg-split-track" />
+        {total > 0 && <rect x="0" y="0" width={essentialWidth} height="40" className="bg-split-essential" />}
+        {total > 0 && <rect x={essentialWidth} y="0" width={1000 - essentialWidth} height="40" className="bg-split-want" />}
+      </svg>
+      <ul className="bg-legend">
+        <li><span className="bg-swatch bg-swatch-essential" />Essentials <strong>{formatEur(essential)}</strong></li>
+        <li><span className="bg-swatch bg-swatch-want" />Discretionary <strong>{formatEur(discretionary)}</strong></li>
+      </ul>
+    </div>
+  )
+}
 /** `today` is injected so the tests own time. `initialMonth` defaults to the month `today` falls in. */
 export default function Budget({ today, initialMonth }: { today: string; initialMonth?: string }): ReactNode {
   const [month, chooseMonth] = useState(initialMonth ?? today.slice(0, 7))
@@ -277,16 +310,16 @@ export default function Budget({ today, initialMonth }: { today: string; initial
   }
 
   const heading = <h1 ref={headingRef} tabIndex={-1}>Budget</h1>
-  if (loadError) return <section className="budget">{heading}<div role="alert" className="notice notice-refusal"><p>{loadError}</p></div></section>
+  if (loadError) return <section className="budget bg-screen">{heading}<div role="alert" className="notice notice-refusal"><p>{loadError}</p></div></section>
 
   const nav = (
-    <div className="budget-nav">
-      <button type="button" className="btn" onClick={() => { setStatus(null); chooseMonth(previousMonth(month)) }}>Previous month</button>
+    <div className="budget-nav bg-nav">
+      <button type="button" className="btn bg-step" aria-label="Previous month" onClick={() => { setStatus(null); chooseMonth(previousMonth(month)) }}><span aria-hidden="true">‹</span></button>
       <h2 aria-live="polite">{monthTitle(month)}</h2>
-      <button type="button" className="btn" onClick={() => { setStatus(null); chooseMonth(nextMonth(month)) }}>Next month</button>
+      <button type="button" className="btn bg-step" aria-label="Next month" onClick={() => { setStatus(null); chooseMonth(nextMonth(month)) }}><span aria-hidden="true">›</span></button>
     </div>
   )
-  if (!data) return <section className="budget">{heading}{nav}<p role="status">Loading your budget…</p></section>
+  if (!data) return <section className="budget bg-screen">{heading}{nav}<p role="status">Loading your budget…</p></section>
 
   const { budget } = data
   const { income, totals } = budget
@@ -301,16 +334,20 @@ export default function Budget({ today, initialMonth }: { today: string; initial
   const editingRow = editing?.existing ?? null
 
   return (
-    <section className="budget">
+    <section className="budget bg-screen">
       {heading}
       {nav}
       {status && <div role="status" className="notice"><p>{status}</p></div>}
 
-      <div role="note" className="notice"><p>{incomeSentence(income)}</p></div>
+      <details className="tip">
+        <summary>Where the income figure comes from</summary>
+        <p>{incomeSentence(income)}</p>
+      </details>
       {budget.partial && (
-        <div role="note" className="notice">
+        <details className="tip">
+          <summary>About spending so far</summary>
           <p>This month is still running. Spending shows what you have spent so far, up to {formatSpanishDate(today)}, against the full month&apos;s plan.</p>
-        </div>
+        </details>
       )}
       {budget.unallocatedCents < 0 && (
         <div role="note" className="notice">
@@ -333,13 +370,19 @@ export default function Budget({ today, initialMonth }: { today: string; initial
         </p>
       ) : (
         <>
+          <div className="stat-grid">
+            <div className="stat"><span className="stat-label">Income</span><span className="stat-value">{formatEur(income.cents)}</span>{note && <span className="stat-note">{note}</span>}</div>
+            <div className="stat"><span className="stat-label">Spent</span><span className="stat-value">{formatEur(totals.spentCents)}</span>{ofIncome(totals.spentCents) !== null && <span className="stat-note">{formatBp(ofIncome(totals.spentCents) ?? 0)} of income</span>}</div>
+            <div className="stat"><span className="stat-label">Left</span><span className="stat-value">{formatEur(income.cents - totals.spentCents)}</span></div>
+            <div className="stat"><span className="stat-label">Saved</span><span className="stat-value">{formatEur(totals.savingsCents)}</span>{totals.savingsRateBp !== null && <span className="stat-note">{formatBp(totals.savingsRateBp)} of income</span>}</div>
+          </div>
           <h2>Your plan</h2>
           {budgeted.length === 0
             ? <p>No amounts are planned for this month yet. Use Add an allocation to plan one.</p>
-            : <ul className="budget-lines">{budgeted.map((l) => <BudgetedRow key={keyOf(l.targetKind, l.targetId)} line={l} budget={budget} onOpen={openLine} />)}</ul>}
+            : <ul className="budget-lines bg-lines">{budgeted.map((l) => <BudgetedRow key={keyOf(l.targetKind, l.targetId)} line={l} budget={budget} onOpen={openLine} />)}</ul>}
 
           {income.basis !== 'none' && budget.unallocatedCents > 0 && (
-            <p>
+            <p className="muted">
               Not yet allocated: {formatEur(budget.unallocatedCents)}
               <Share bp={ofIncome(budget.unallocatedCents)} note={note} />
             </p>
@@ -348,10 +391,13 @@ export default function Budget({ today, initialMonth }: { today: string; initial
           {outside.length > 0 && (
             <>
               <h2>Spending outside your budget</h2>
-              <p>These had spending {budget.partial ? 'so far this month' : 'this month'} but no planned amount. Together with your plan above, they account for everything spent.</p>
-              <ul className="budget-lines">
+              <details className="tip">
+                <summary>What is counted here</summary>
+                <p>These had spending {budget.partial ? 'so far this month' : 'this month'} but no planned amount. Together with your plan above, they account for everything spent.</p>
+              </details>
+              <ul className="budget-lines bg-lines">
                 {outside.map((l) => (
-                  <li key={`out:${l.targetId}`} className="budget-line" data-budget-outside={l.targetId}>
+                  <li key={`out:${l.targetId}`} className="budget-line bg-card" data-budget-outside={l.targetId}>
                     <span className="budget-label">{l.label}</span>
                     <p className="budget-fig">{budget.partial ? 'Spent so far' : 'Spent'}: {formatEur(l.spentCents)}</p>
                     {l.targetId !== '' && data.categories.some((c) => c.id === l.targetId) && (
@@ -368,6 +414,9 @@ export default function Budget({ today, initialMonth }: { today: string; initial
           )}
 
           <h2>{budget.partial ? 'So far this month' : 'This month'}</h2>
+          <SplitBar essential={totals.essentialCents} discretionary={totals.discretionaryCents} />
+          <details className="tip">
+            <summary>The month in words</summary>
           <ul className="budget-totals">
             <li>Total spent: {formatEur(totals.spentCents)}<Share bp={ofIncome(totals.spentCents)} note={note} /></li>
             <li>Essentials: {formatEur(totals.essentialCents)}<Share bp={ofIncome(totals.essentialCents)} note={note} /></li>
@@ -375,6 +424,7 @@ export default function Budget({ today, initialMonth }: { today: string; initial
             {/* savingsRateBp is null when the income basis is zero; Share then draws nothing. */}
             <li>Saved: {formatEur(totals.savingsCents)}<Share bp={totals.savingsRateBp} note={note} /></li>
           </ul>
+          </details>
         </>
       )}
 
