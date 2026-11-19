@@ -134,3 +134,12 @@ html, body { max-width: 100%; overflow-x: clip; }
 .recurring-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .recurring-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
 .recurring-actions button, .recurring-list > li > button { min-height: 44px; padding: 0 0.875rem; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-weight: 600; cursor: pointer; }
+
+/* Dashboard: what is in each account. */
+.accounts-list { list-style: none; margin: 0.25rem 0; }
+.screen ul.accounts-list { padding-left: 0; }
+.accounts-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--hair); }
+.accounts-list li:last-child { border-bottom: 0; }
+.accounts-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.accounts-card strong { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.accounts-total { border-top: 2px solid var(--hair); padding-top: 0.5rem; margin-top: 0.25rem; }
