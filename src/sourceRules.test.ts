@@ -122,7 +122,7 @@ describe('source rules, over every file in src/', () => {
       'import/pairing.ts': 'stamps matchedAt on a proposed transfer',
       'import/refunds.ts': 'stamps matchedAt on a refund link',
       'ui/routes.tsx': "the one place the app learns today's date, and the instant beside it, handed down to every screen that needs either as a prop (Budget, WorthIt, Dashboard, Reports, Intelligence)",
-      'ui/screens/Settings.tsx': 'names the backup file with the UTC day (a file name, not a date the owner reads)',
+      'ui/screens/Settings.tsx': 'names the backup file with the UTC day (a file name, not a date the owner reads), and hands the daily backup the day and the instant it stamps',
       'ui/screens/Transactions.tsx': 'stamps deletedAt when the owner deletes a row, and createdAt when the owner names a merchant',
     }
     const users = files.filter((f) => /\bDate\.now\b/.test(f.code)).map((f) => f.rel)

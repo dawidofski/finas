@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react'
 import { epochMsToIso } from '../lib/dates'
 import { AccountsCard } from './AccountsCard'
+import { DailyBackupCard } from './DailyBackup'
 import Budget from './screens/Budget'
 import Categories from './screens/Categories'
 import Dashboard from './screens/Dashboard'
@@ -53,7 +54,7 @@ function DashboardRoute() {
   const now = Date.now()
   const today = epochMsToIso(now)
   // The purchases waiting for a second look sit under the month's figures, so there is no separate screen to remember.
-  return <><AccountsCard /><Dashboard today={today} computedAt={now} /><DayMood today={today} /><WorthIt today={today} embedded /></>
+  return <><AccountsCard /><DailyBackupCard today={today} at={now} /><Dashboard today={today} computedAt={now} /><DayMood today={today} /><WorthIt today={today} embedded /></>
 }
 
 /** Same reading of the clock as the dashboard: the day and the instant together, handed down so no screen reads it. */

@@ -1,4 +1,5 @@
 import { CoachKey } from '../CoachKey'
+import { DailyBackupSettings } from '../DailyBackup'
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { rebuildAnalytics } from '../../analytics/cache'
 import { exportBundle, inspectBundle, restoreBundle, type RestoreReport } from '../../db/backup'
@@ -56,6 +57,8 @@ function readText(file: File): Promise<string> {
 // The file name keeps the sortable year-month-day form on purpose: it is a name for a file, not a date the owner reads
 // in the app. It uses the UTC day, like every other date in the app, never a local-timezone Date method.
 const today = () => epochMsToIso(Date.now())
+/** The instant, for the daily backup to stamp the day it last ran. Read here for the same reason as the day above. */
+const nowMs = () => Date.now()
 
 /** The message of whatever refused a write, as it was written. The accounts guard words its own refusals for the owner. */
 const reasonOf = (e: unknown) => (e instanceof Error && e.message ? e.message : 'Nothing was changed.')
@@ -438,6 +441,9 @@ export default function Settings(): ReactNode {
       )}
 
       <RebuildFigures />
+
+      <h2>Daily backup</h2>
+      <DailyBackupSettings today={today()} at={nowMs()} />
 
       <h2>AI coach key</h2>
       <CoachKey />
