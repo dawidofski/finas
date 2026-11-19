@@ -77,6 +77,7 @@ describe('the request', () => {
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('omit')
     expect(init.referrerPolicy).toBe('no-referrer')
+    expect(init.redirect).toBe('error')
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer test-key-not-real')
     expect(body).not.toContain('test-key-not-real')
     expect(url).not.toContain('test-key-not-real')

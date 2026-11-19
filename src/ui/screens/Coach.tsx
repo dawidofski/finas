@@ -11,7 +11,7 @@ type Outcome = SendResult | { ok: false; kind: 'no-data' } | { ok: false; kind: 
 function failureText(o: Exclude<Outcome, { ok: true }>): string {
   switch (o.kind) {
     case 'blocked':
-      return 'The question did not get through, and nothing was received. Either your browser did not allow this page to contact DeepSeek directly, or this device is offline; the app cannot tell which of the two happened. You can copy your question and totals below and paste them into DeepSeek’s own chat instead.'
+      return 'The question did not get through, and nothing was received. The app cannot tell what stopped it: for example, your browser may not have allowed this page to contact DeepSeek directly, this device may be offline, or the saved key may hold a character that cannot be sent. You can copy your question and totals below and paste them into DeepSeek’s own chat instead.'
     case 'refused':
       return `DeepSeek answered with an error (number ${o.status}) and gave no reply. Number 401 is the one DeepSeek gives for a key it does not accept, and 402 for an account with no balance left.`
     case 'unreadable':
@@ -27,7 +27,9 @@ function failureText(o: Exclude<Outcome, { ok: true }>): string {
  * The optional AI coach (design 13.5). Off until the owner saves a key of their own. Nothing is sent on load, on typing or
  * on preparing: the only request this screen can make is the one behind "Send this to DeepSeek", and the text it sends is
  * the text shown above that button, character for character (`prepared.body` is built once and passed on unchanged).
- * Editing the question discards what was prepared, so an approved text can never be sent with a different question.
+ * The question cannot be edited while a text is being prepared or sent (the field is read-only then), and any edit
+ * discards what was prepared, so the text shown always holds the question as it stands in the field. Discard is not
+ * offered while a send is under way: a request that has left cannot be called back, and the screen does not pretend it can.
  *
  * Only monthly totals are ever included. Sending transactions or descriptions is not offered at all.
  * The key field is uncontrolled, has no `name`, is read once and emptied: the key is never in React state.
@@ -103,9 +105,9 @@ export default function Coach({ today, computedAt }: { today: string; computedAt
       </p>
       <div className="notice" role="note">
         <p>
-          <strong>This is the one place where something can leave this device.</strong> It happens only when you press the send button, and only after
-          you have read the exact text. What is sent is your question, as you typed it, and the totals of up to {COACH_MONTHS} completed months:
-          income, spending, saving and what was left over. No transaction, description, shop, person, account number or note is ever included.
+          <strong>This is the one place where something can leave this device.</strong> It happens only when you press the send button, and the exact
+          text is shown to you first. What is sent is your question, exactly as you typed it, and the totals of up to {COACH_MONTHS} completed months:
+          income, spending, saving and what was left over. The app adds no transaction, description, shop, person, account number or note to it.
         </p>
       </div>
 
@@ -135,7 +137,8 @@ export default function Coach({ today, computedAt }: { today: string; computedAt
         <p><label htmlFor={questionId}>What would you like to ask? It is sent as you type it, so leave out anything you would not want to share.</label></p>
         <textarea
           id={questionId} rows={4} maxLength={QUESTION_MAX_CHARS} value={question}
-          onChange={(e) => { setQuestion(e.target.value); if (prepared || outcome) discard() }}
+          readOnly={busy}
+          onChange={(e) => { if (busy) return; setQuestion(e.target.value); discard() }}
         />
         <div className="actions">
           <button type="submit" className="btn btn-primary" aria-disabled={busy || question.trim() === ''}>Show what would be sent</button>
@@ -157,7 +160,7 @@ export default function Coach({ today, computedAt }: { today: string; computedAt
               </button>
             )}
             <button type="button" className="btn" onClick={() => { void copy() }}>Copy my question and totals</button>
-            <button type="button" className="btn" onClick={discard}>Discard</button>
+            {!busy && <button type="button" className="btn" onClick={discard}>Discard</button>}
           </div>
           {!hasKey && <p>Sending from here needs a key, which you have not added. You can still copy your question and totals and paste them into DeepSeek&rsquo;s own chat.</p>}
           {copied === 'yes' && <p role="status">Copied. Paste it into DeepSeek&rsquo;s own chat. Nothing was sent from this app.</p>}

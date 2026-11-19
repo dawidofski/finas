@@ -34,7 +34,7 @@ export function buildRequest(question: string, months: readonly CoachMonth[]): s
 
 export type SendResult =
   | { ok: true; reply: string }
-  /** blocked: the request never completed (the browser refused the connection, or the device is offline). */
+  /** blocked: the request never completed, for a cause the page is not told. */
   | { ok: false; kind: 'blocked' }
   /** refused: DeepSeek answered with an error status. */
   | { ok: false; kind: 'refused'; status: number }
@@ -55,8 +55,8 @@ function replyOf(parsed: unknown): string | null {
 
 /**
  * Sends `body` exactly as given. No cookie or referrer goes with it; the key goes only in the Authorization header, to
- * DEEPSEEK_URL and nowhere else. A browser that refuses the connection and a device that is offline both reject the same
- * way, so 'blocked' claims neither. Never throws.
+ * DEEPSEEK_URL and nowhere else. A browser that refuses the connection, a device that is offline, a redirect and a key
+ * that cannot be put in a header all reject the same way, so 'blocked' claims none of them. Never throws.
  */
 export async function sendRequest(body: string, key: string): Promise<SendResult> {
   let response: Response
@@ -68,6 +68,8 @@ export async function sendRequest(body: string, key: string): Promise<SendResult
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
       cache: 'no-store',
+      // The key is for this one address: a reply that points somewhere else is an error, not something to follow.
+      redirect: 'error',
     })
   } catch { return { ok: false, kind: 'blocked' } }
   if (!response.ok) return { ok: false, kind: 'refused', status: response.status }

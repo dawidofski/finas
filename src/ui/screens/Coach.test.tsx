@@ -45,7 +45,7 @@ describe('AI coach', () => {
     render(<Coach today={TODAY} computedAt={AT} />)
     expect(screen.getByRole('heading', { level: 1, name: 'AI coach' })).toBeInTheDocument()
     expect(document.body.textContent).toMatch(/stays off until you add a key of your own/)
-    expect(document.body.textContent).toMatch(/No transaction, description, shop, person, account number or note is ever included/)
+    expect(document.body.textContent).toMatch(/The app adds no transaction, description, shop, person, account number or note to it/)
     expect(document.body.textContent).toMatch(/anything with access to this device or this browser profile can read it/)
     expect(document.body.textContent).toMatch(/spending limit/)
     await prepare()
@@ -55,7 +55,7 @@ describe('AI coach', () => {
     expect(document.body.textContent).toMatch(/Nothing has been sent yet/)
   })
 
-  it('keeps the key out of the page, out of state and out of the field once saved, and removes it on request', () => {
+  it('keeps the key out of the page and out of the field once saved, and removes it on request', () => {
     render(<Coach today={TODAY} computedAt={AT} />)
     const field = screen.getByLabelText('DeepSeek key') as HTMLInputElement
     expect(field.type).toBe('password')
@@ -108,6 +108,44 @@ describe('AI coach', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('does not let the question change while the text is being prepared, so the text shown is never an older question', async () => {
+    let release: (months: CoachMonth[]) => void = () => {}
+    vi.spyOn(context, 'coachContext').mockImplementation(() => new Promise((resolve) => { release = resolve }))
+    saveCoachKey(KEY)
+    render(<Coach today={TODAY} computedAt={AT} />)
+    ask('A question that names Tienda Ejemplo')
+    press(/Show what would be sent/)
+    const field = screen.getByRole('textbox', { name: /What would you like to ask/ }) as HTMLTextAreaElement
+    await waitFor(() => expect(field.readOnly).toBe(true))
+    // An edit attempted meanwhile is not taken, so the field and the prepared text cannot come apart.
+    ask('A question with the shop taken out')
+    expect(field.value).toBe('A question that names Tienda Ejemplo')
+    release(MONTHS)
+    await screen.findByRole('heading', { name: 'Exactly what would be sent' })
+    expect(shown()).toBe(buildRequest(field.value, MONTHS))
+    // Once it is shown the field is editable again, and editing discards what was prepared.
+    expect(field.readOnly).toBe(false)
+    ask('A question with the shop taken out')
+    expect(shown()).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('offers no discard while a send is under way, and keeps the question fixed until the reply', async () => {
+    let answer: (r: Response) => void = () => {}
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve }))
+    saveCoachKey(KEY)
+    render(<Coach today={TODAY} computedAt={AT} />)
+    await prepare()
+    press(/Send this to DeepSeek/)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull())
+    expect((screen.getByRole('textbox', { name: /What would you like to ask/ }) as HTMLTextAreaElement).readOnly).toBe(true)
+    press(/Sending/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    answer(reply('Done.'))
+    await screen.findByRole('heading', { name: /DeepSeek.s reply/ })
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument()
+  })
+
   it('shows a reply as text, never as markup', async () => {
     fetchMock.mockResolvedValue(reply('<img src=x onerror="window.__hit = 1"><b>bold</b>'))
     saveCoachKey(KEY)
@@ -130,7 +168,7 @@ describe('AI coach', () => {
     press(/Send this to DeepSeek/)
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toMatch(/did not get through, and nothing was received/)
-    expect(alert.textContent).toMatch(/the app cannot tell which of the two happened/)
+    expect(alert.textContent).toMatch(/The app cannot tell what stopped it: for example/)
     // The prepared text is still there, and copying takes the plain question and totals, not the request wrapper.
     press(/Copy my question and totals/)
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(questionText('How am I doing?', MONTHS)))

@@ -418,7 +418,7 @@ export default function Settings(): ReactNode {
         </p>
         <p>
           Nothing is uploaded anywhere. The one thing that can leave this device is a question you choose to send from the AI coach screen,
-          with monthly totals only, after you have read the exact text.
+          with monthly totals only, and the exact text is shown to you first.
         </p>
       </div>
 
