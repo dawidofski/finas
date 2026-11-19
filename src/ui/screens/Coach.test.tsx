@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Coach from './Coach'
+import { CoachKey } from '../CoachKey'
 import * as context from '../../coach/context'
 import type { CoachMonth } from '../../coach/context'
 import { COACH_KEY, readCoachKey, saveCoachKey } from '../../coach/key'
@@ -46,8 +47,7 @@ describe('AI coach', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'AI coach' })).toBeInTheDocument()
     expect(document.body.textContent).toMatch(/stays off until you add a key of your own/)
     expect(document.body.textContent).toMatch(/The app adds no transaction, description, shop, person, account number or note to it/)
-    expect(document.body.textContent).toMatch(/anything with access to this device or this browser profile can read it/)
-    expect(document.body.textContent).toMatch(/spending limit/)
+    expect(screen.getByRole('link', { name: /add your DeepSeek key in Settings/ })).toHaveAttribute('href', '#/settings')
     await prepare()
     // Preparing reads the totals and shows the text. It does not send, and without a key there is no send button at all.
     expect(fetchMock).not.toHaveBeenCalled()
@@ -55,8 +55,11 @@ describe('AI coach', () => {
     expect(document.body.textContent).toMatch(/Nothing has been sent yet/)
   })
 
-  it('keeps the key out of the page and out of the field once saved, and removes it on request', () => {
-    render(<Coach today={TODAY} computedAt={AT} />)
+  it('keeps the key out of the page and out of the field once saved, and removes it on request (the key section, shown in Settings)', () => {
+    render(<CoachKey />)
+    // What a key in browser storage means is said beside the field, before it is saved.
+    expect(document.body.textContent).toMatch(/anything with access to this device or this browser profile can read it/)
+    expect(document.body.textContent).toMatch(/spending limit/)
     const field = screen.getByLabelText('DeepSeek key') as HTMLInputElement
     expect(field.type).toBe('password')
     expect(field.name).toBe('')
@@ -73,7 +76,7 @@ describe('AI coach', () => {
   })
 
   it('refuses an empty key and says so', () => {
-    render(<Coach today={TODAY} computedAt={AT} />)
+    render(<CoachKey />)
     press(/Save the key/)
     expect(screen.getByRole('alert').textContent).toMatch(/Type or paste your key first/)
     expect(readCoachKey()).toBeNull()

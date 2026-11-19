@@ -54,7 +54,15 @@ type Choice = 'confirm' | 'dismiss' | 'cancel' | 'restore'
 function Row({ v, name, onChoose, headingRef }: { v: RecurringView; name: string; onChoose: (c: Choice) => void; headingRef: (el: HTMLHeadingElement | null) => void }): ReactNode {
   return (
     <article className="recurring-item" aria-labelledby={`recurring-${v.id}`}>
-      <h3 id={`recurring-${v.id}`} tabIndex={-1} ref={headingRef}><q>{name}</q></h3>
+      <div className="recurring-row">
+        <div className="recurring-main">
+          <h3 id={`recurring-${v.id}`} tabIndex={-1} ref={headingRef}><q>{name}</q></h3>
+          <span className="tx-meta">{FREQUENCY[v.frequency]} · {v.cancelled ? 'cancelled' : v.lapsed ? 'seems to have stopped' : v.overdue ? 'late' : `last paid ${formatSpanishDate(v.lastSeenDate)}`}</span>
+        </div>
+        <strong className="recurring-amount">{formatEur(v.amountCents)}</strong>
+      </div>
+      <details className="tip">
+      <summary>Details and choices</summary>
       <dl>
         <dt>Amount</dt>
         <dd>{formatEur(v.amountCents)}</dd>
@@ -111,6 +119,7 @@ function Row({ v, name, onChoose, headingRef }: { v: RecurringView; name: string
             </div>
           </>
         )}
+      </details>
     </article>
   )
 }
@@ -192,19 +201,25 @@ export default function Recurring({ today, computedAt }: { today: string; comput
   return (
     <section className="recurring">
       {heading}
-      <p>
-        Payments that come again and again, found from the gaps between payments to the same merchant. You can confirm one, say it is not recurring, or say you cancelled it.
-      </p>
+      <details className="tip">
+        <summary>What this page shows</summary>
+        <p>
+          Payments that come again and again, found from the gaps between payments to the same merchant. You can confirm one, say it is not recurring, or say you cancelled it.
+        </p>
+      </details>
       <h2 tabIndex={-1} ref={regionHeading}>Monthly cost</h2>
       {actionError && <div role="alert" className="notice notice-refusal"><p>{actionError}</p></div>}
       {inTotal.length > 0
         ? <p>Together, the payments counted come to {formatEur(total)} a month.</p>
         : <p>There is no monthly total yet: none of the payments below has a monthly figure to count.</p>}
+      <details className="tip">
+      <summary>What the total counts</summary>
       <p>
         The total counts each payment that comes at a regular interval, has not seemed to stop, and that you have not marked as cancelled. It includes payments you have not yet confirmed.
         It leaves out payments with no regular interval, payments that seem to have stopped, cancelled ones, and any you said are not recurring.
         A weekly or three-monthly payment is worked out as a cost per month.
       </p>
+      </details>
       {views.length === 0
         ? (
           <>
@@ -214,10 +229,13 @@ export default function Recurring({ today, computedAt }: { today: string; comput
               : (
                 <>
                   <p>No recurring payments have been found yet. This is the normal starting point, not a problem with your records.</p>
+                  <details className="tip">
+                  <summary>When a payment is found</summary>
                   <p>
                     A payment is found when your records show at least {COUNT_WORD[MIN_OCCURRENCES] ?? String(MIN_OCCURRENCES)} payments to the same merchant at a steady interval, such as every week, every month
                     or every three months. A yearly bill is not found here: the records read cover about fourteen months. A payment with no merchant set is grouped by the bank's description, leaving out any numbers in it. If you have not yet, <a href="#/import">import your bank statements</a>.
                   </p>
+                  </details>
                 </>
               )}
           </>

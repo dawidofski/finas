@@ -132,6 +132,8 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
   }
 
   const run = unbrokenRun(points)
+  // In a tile, an amount and its euro sign stay on one line: the space between them is a non-breaking one here.
+  const tight = (line: string): string => line.replace(/ €/g, '\u00a0€')
   const incomeLine = current.incomeBasis === 'actual' ? `Income: ${formatEur(current.incomeCents)}`
     : current.incomeBasis === 'trailing-average' ? `Income: ${formatEur(current.incomeCents)} (an estimate: the average of your last three months)`
       : 'Income: none recorded yet this month'
@@ -156,10 +158,10 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
       <h2>{title}</h2>
       <p className="muted">{partial ? `Figures up to ${formatSpanishDate(today)}.` : 'Figures for the whole month.'}</p>
       <ul className="dashboard-figures stat-grid">
-        <li className="stat stat-line">{incomeLine}</li>
-        <li className="stat stat-line">Spent: {formatEur(current.spentCents)}</li>
-        <li className="stat stat-line">Saved: {formatEur(current.savedCents)}</li>
-        <li className="stat stat-line">{netLine}</li>
+        <li className="stat stat-line">{tight(incomeLine)}</li>
+        <li className="stat stat-line">{tight(`Spent: ${formatEur(current.spentCents)}`)}</li>
+        <li className="stat stat-line">{tight(`Saved: ${formatEur(current.savedCents)}`)}</li>
+        <li className="stat stat-line">{tight(netLine)}</li>
       </ul>
       {current.uncategorisedCents < 0 && (
         <p>
@@ -185,7 +187,7 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
         ? <div className="card"><Line points={run.map((p) => ({ label: formatMonthTitle(p.month), cents: p.spentCents }))} title={partial ? 'Spending by month (the latest month is still running)' : 'Spending by month'} /></div>
         : <p>A line of your spending month by month appears once two months in a row have records. You have {run.length} so far.</p>}
 
-      <p className="link-row"><a className="btn" href="#/budget">Open the budget</a> · <a className="btn" href="#/transactions">See your transactions</a></p>
+      <div className="link-row"><a className="btn" href="#/budget">Open the budget</a><a className="btn" href="#/transactions">See your transactions</a></div>
     </section>
   )
 }

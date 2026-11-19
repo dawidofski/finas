@@ -80,7 +80,7 @@ Everything, by default: transactions, balances, notes, settings. The app has no 
 
 The only outbound request the app can ever make is the optional DeepSeek question on the AI coach screen, which you trigger yourself, with the exact text shown to you first. Without that, the app makes no requests of its own beyond loading itself from the site it is served from. The site's security policy allows connections to its own address and to `api.deepseek.com`, and to nothing else.
 
-**Your DeepSeek key** is something you type in; it is in no source file. It is kept in this browser's storage, which is not encrypted, so anything with access to the device or the browser profile can read it: use a key made only for this app, with a spending limit. It is deliberately **not** written into backup files, so after restoring on another device you type it in again.
+**Your DeepSeek key** is something you type in, on the Settings screen; it is in no source file. It is kept in this browser's storage, which is not encrypted, so anything with access to the device or the browser profile can read it: use a key made only for this app, with a spending limit. It is deliberately **not** written into backup files, so after restoring on another device you type it in again.
 
 ## Developer note
 

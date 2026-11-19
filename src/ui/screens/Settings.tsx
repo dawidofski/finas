@@ -1,3 +1,4 @@
+import { CoachKey } from '../CoachKey'
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { rebuildAnalytics } from '../../analytics/cache'
 import { exportBundle, inspectBundle, restoreBundle, type RestoreReport } from '../../db/backup'
@@ -437,6 +438,9 @@ export default function Settings(): ReactNode {
       )}
 
       <RebuildFigures />
+
+      <h2>AI coach key</h2>
+      <CoachKey />
 
       <h2>Restore</h2>
       <fieldset className="modes" disabled={busy}>
