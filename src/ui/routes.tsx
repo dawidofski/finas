@@ -15,7 +15,14 @@ import Coach from './screens/Coach'
 import Settings from './screens/Settings'
 import Transactions from './screens/Transactions'
 
-export interface RouteDef { path: string; title: string; element: ReactNode; primary: boolean }
+/** The five destinations of the navigation. Every screen belongs to one; 'none' is a screen reached another way. */
+export type Group = 'home' | 'transactions' | 'budget' | 'insights' | 'settings' | 'none'
+
+/**
+ * `primary` marks the screen a destination opens on. `tab` is the screen's label in the row of tabs its group shows above
+ * the content; a screen with no `tab` is not in that row (it is reached from a card or a link on another screen).
+ */
+export interface RouteDef { path: string; title: string; element: ReactNode; primary: boolean; group: Group; tab?: string }
 
 /** Placeholder screen. A later plan replaces each of these with the real thing. */
 function Stub({ title }: { title: string }) {
@@ -41,7 +48,9 @@ function BudgetRoute() {
 /** The analytics cache stamps its rows with `computedAt`, so the instant is read here beside the day and both are handed down. */
 function DashboardRoute() {
   const now = Date.now()
-  return <Dashboard today={epochMsToIso(now)} computedAt={now} />
+  const today = epochMsToIso(now)
+  // The purchases waiting for a second look sit under the month's figures, so there is no separate screen to remember.
+  return <><Dashboard today={today} computedAt={now} /><WorthIt today={today} embedded /></>
 }
 
 /** Same reading of the clock as the dashboard: the day and the instant together, handed down so no screen reads it. */
@@ -95,24 +104,27 @@ function WorthItRoute() {
 }
 
 const screen = (path: string, title: string, primary = false): RouteDef =>
-  ({ path, title, element: <Stub title={title} />, primary })
+  ({ path, title, element: <Stub title={title} />, primary, group: 'none' })
 
-/** Order is the navigation order. The five `primary` entries make up the mobile tab bar. */
+/**
+ * The five `primary` entries, in this order, are the tab bar on a phone and the side bar on a wide screen. Within a group the
+ * order here is the order of its tabs.
+ */
 export const ROUTES: ReadonlyArray<RouteDef> = [
-  { path: '/', title: 'Dashboard', element: <DashboardRoute />, primary: true },
-  { path: '/import', title: 'Import', element: <Import />, primary: true },
-  { path: '/transactions', title: 'Transactions', element: <Transactions />, primary: true },
-  { path: '/budget', title: 'Budget', element: <BudgetRoute />, primary: true },
-  { path: '/intelligence', title: 'Intelligence', element: <IntelligenceRoute />, primary: true },
-  { path: '/mood', title: 'Mood', element: <Mood />, primary: false },
-  { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false },
-  { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false },
-  { path: '/coach', title: 'AI coach', element: <CoachRoute />, primary: false },
-  { path: '/goals', title: 'Goals', element: <GoalsRoute />, primary: false },
-  { path: '/recurring', title: 'Recurring', element: <RecurringRoute />, primary: false },
-  { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false },
-  { path: '/score', title: 'Money Score', element: <ScoreRoute />, primary: false },
-  { path: '/settings', title: 'Settings', element: <Settings />, primary: false },
+  { path: '/', title: 'Dashboard', element: <DashboardRoute />, primary: true, group: 'home' },
+  { path: '/worth-it', title: 'Worth it?', element: <WorthItRoute />, primary: false, group: 'home' },
+  { path: '/mood', title: 'Mood', element: <Mood />, primary: false, group: 'home' },
+  { path: '/transactions', title: 'Transactions', element: <Transactions />, primary: true, group: 'transactions', tab: 'All' },
+  { path: '/recurring', title: 'Recurring', element: <RecurringRoute />, primary: false, group: 'transactions', tab: 'Recurring' },
+  { path: '/budget', title: 'Budget', element: <BudgetRoute />, primary: true, group: 'budget', tab: 'Spending plan' },
+  { path: '/goals', title: 'Goals', element: <GoalsRoute />, primary: false, group: 'budget', tab: 'Savings goals' },
+  { path: '/intelligence', title: 'Intelligence', element: <IntelligenceRoute />, primary: true, group: 'insights', tab: 'Patterns' },
+  { path: '/score', title: 'Money Score', element: <ScoreRoute />, primary: false, group: 'insights', tab: 'Score' },
+  { path: '/learning', title: 'Learning', element: <LearningRoute />, primary: false, group: 'insights', tab: 'Advice' },
+  { path: '/reports', title: 'Reports', element: <ReportsRoute />, primary: false, group: 'insights', tab: 'Month report' },
+  { path: '/settings', title: 'Settings', element: <Settings />, primary: true, group: 'settings', tab: 'General' },
+  { path: '/import', title: 'Import', element: <Import />, primary: false, group: 'settings', tab: 'Import a statement' },
+  { path: '/coach', title: 'AI coach', element: <CoachRoute />, primary: false, group: 'none' },
 ]
 
 const KNOWN = new Set(ROUTES.map(r => r.path))

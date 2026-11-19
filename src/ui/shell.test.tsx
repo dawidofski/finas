@@ -32,8 +32,8 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('shell', () => {
   it('declares all fourteen screens', () => {
     expect(ROUTES.map(r => r.path)).toEqual([
-      '/', '/import', '/transactions', '/budget', '/intelligence', '/mood', '/worth-it',
-      '/learning', '/coach', '/goals', '/recurring', '/reports', '/score', '/settings'])
+      '/', '/worth-it', '/mood', '/transactions', '/recurring', '/budget', '/goals', '/intelligence',
+      '/score', '/learning', '/reports', '/settings', '/import', '/coach'])
   })
   it('renders the screen named by the hash', async () => {
     window.location.hash = '#/transactions'
@@ -86,7 +86,7 @@ describe('shell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Reports' })).toBeInTheDocument()
   })
   it('exposes exactly five primary destinations for the mobile tab bar', () => {
-    expect(ROUTES.filter(r => r.primary).map(r => r.path)).toEqual(['/', '/import', '/transactions', '/budget', '/intelligence'])
+    expect(ROUTES.filter(r => r.primary).map(r => r.path)).toEqual(['/', '/transactions', '/budget', '/intelligence', '/settings'])
   })
   // A stub renders a level-1 heading with its title, exactly as a real screen does, so a heading assertion alone cannot tell
   // them apart: on a previous plan a headline screen was unreachable while every test passed. "Not built yet" is what tells them apart.
@@ -162,65 +162,68 @@ describe('shell', () => {
   })
 })
 
-describe('More sheet', () => {
-  const open = async () => {
+describe('navigation: five destinations, everything else a tab inside one', () => {
+  const at = async (hash: string) => {
+    window.location.hash = hash
     render(<App />)
-    const toggle = await screen.findByRole('button', { name: 'More' })
-    fireEvent.click(toggle)
-    return toggle
+    return screen.findByRole('navigation', { name: 'Main' })
   }
-  it('announces expandability and moves focus into the sheet on open', async () => {
-    render(<App />)
-    const toggle = await screen.findByRole('button', { name: 'More' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(toggle).toHaveAttribute('aria-controls', 'nav-more')
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    const sheet = document.getElementById('nav-more')!
-    expect(sheet).toHaveAttribute('data-open', 'true')
-    expect(sheet.contains(document.activeElement)).toBe(true)
+  const tabs = () => within(screen.getByRole('navigation', { name: 'Sections' })).getAllByRole('link')
+
+  it('shows the five destinations and no menu to open', async () => {
+    const main = await at('#/')
+    expect(within(main).getAllByRole('link').map(a => a.querySelector('span:last-child')?.textContent)).toEqual(['Dashboard', 'Transactions', 'Budget', 'Intelligence', 'Settings'])
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull()
   })
-  it('Escape closes the sheet and returns focus to the trigger', async () => {
-    const toggle = await open()
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(document.getElementById('nav-more')).toHaveAttribute('data-open', 'false')
-    expect(toggle).toHaveFocus()
+
+  it.each([
+    ['#/transactions', ['All', 'Recurring'], 'All', 'Transactions'],
+    ['#/recurring', ['All', 'Recurring'], 'Recurring', 'Transactions'],
+    ['#/budget', ['Spending plan', 'Savings goals'], 'Spending plan', 'Budget'],
+    ['#/goals', ['Spending plan', 'Savings goals'], 'Savings goals', 'Budget'],
+    ['#/intelligence', ['Patterns', 'Score', 'Advice', 'Month report'], 'Patterns', 'Intelligence'],
+    ['#/score', ['Patterns', 'Score', 'Advice', 'Month report'], 'Score', 'Intelligence'],
+    ['#/import', ['General', 'Import a statement'], 'Import a statement', 'Settings'],
+  ])('%s shows its group of tabs, marks its own, and keeps its destination lit', async (hash, labels, own, destination) => {
+    const main = await at(hash)
+    expect(tabs().map(a => a.textContent)).toEqual(labels)
+    expect(tabs().filter(a => a.getAttribute('aria-current') === 'page').map(a => a.textContent)).toEqual([own])
+    const lit = within(main).getAllByRole('link').filter(a => a.hasAttribute('aria-current'))
+    expect(lit).toHaveLength(1)
+    expect(lit[0]?.textContent).toContain(destination)
   })
-  it('a press outside closes it, but a press inside does not', async () => {
-    const toggle = await open()
-    fireEvent.pointerDown(document.getElementById('nav-more')!)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.pointerDown(document.body)
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+  it('every screen with a tab is reachable from its group, and every screen is in a group or reached another way', () => {
+    for (const r of ROUTES) {
+      if (r.tab !== undefined) expect(ROUTES.some(p => p.primary && p.group === r.group), r.path).toBe(true)
+    }
+    // The screens with no tab: the dashboard (a destination on its own), the two queues it links to, and the coach (the floating button).
+    expect(ROUTES.filter(r => r.tab === undefined).map(r => r.path)).toEqual(['/', '/worth-it', '/mood', '/coach'])
   })
-  it('activating a sheet link closes it and lands focus on the content', async () => {
-    const toggle = await open()
-    fireEvent.click(within(document.getElementById('nav-more')!).getByRole('link', { name: 'Mood' }))
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(document.activeElement).toBe(document.getElementById('main'))
+
+  it('shows no tabs on a screen that stands alone', async () => {
+    await at('#/')
+    expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
   })
-  it('closes when focus leaves the navigation', async () => {
-    const toggle = await open()
-    act(() => document.getElementById('main')!.focus())
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+  it('a tab is a link, so choosing one changes the screen', async () => {
+    await at('#/budget')
+    expect(tabs().map(a => a.getAttribute('href'))).toEqual(['#/budget', '#/goals'])
+    await act(async () => { window.location.hash = '#/goals' })
+    expect(await screen.findByRole('heading', { level: 1, name: 'Goals' })).toBeInTheDocument()
   })
-  it('stays open when focus moves between items inside it', async () => {
-    const toggle = await open()
-    act(() => screen.getByLabelText(/theme/i).focus())
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+  it('offers the AI coach from every screen, as a link to it, and not on the coach screen itself', async () => {
+    await at('#/budget')
+    expect(screen.getByRole('link', { name: 'Ask the AI coach' })).toHaveAttribute('href', '#/coach')
+    await act(async () => { window.location.hash = '#/coach' })
+    await screen.findByRole('heading', { level: 1, name: 'AI coach' })
+    expect(screen.queryByRole('link', { name: 'Ask the AI coach' })).toBeNull()
   })
-  it('ignores an Escape that a native control already consumed', async () => {
-    const toggle = await open()
-    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-    ev.preventDefault()
-    screen.getByLabelText(/theme/i).dispatchEvent(ev)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  })
-  it('lists the secondary screens as list items', async () => {
-    await open()
-    const items = within(screen.getByRole('list')).getAllByRole('listitem')
-    expect(items).toHaveLength(9)
+
+  it('offers the theme on the Settings screen as well as in the side bar', async () => {
+    await at('#/settings')
+    expect(screen.getAllByLabelText(/theme/i)).toHaveLength(2)
   })
 })
 

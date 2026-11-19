@@ -17,7 +17,11 @@ type Load = { state: 'loading' } | { state: 'failed' } | { state: 'ready'; days:
  * few days old, with no judgement yet. One at a time, oldest first. Skipping writes nothing, so a skipped transaction
  * stays unanswered and is offered again. `today` is injected by the route.
  */
-export default function WorthIt({ today }: { today: string }): ReactNode {
+/**
+ * `embedded` is the form the Dashboard shows: a card under the month's figures, with a second-level heading, that takes no
+ * room at all while nothing is waiting (or while it loads, or cannot be read). The full screen keeps its own route.
+ */
+export default function WorthIt({ today, embedded = false }: { today: string; embedded?: boolean }): ReactNode {
   const [load, setLoad] = useState<Load>({ state: 'loading' })
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -55,6 +59,7 @@ export default function WorthIt({ today }: { today: string }): ReactNode {
     } finally { setBusy(false) }
   }
 
+  if (embedded && load.state !== 'ready') return null
   if (load.state === 'loading') return <section><h1>Worth it?</h1><Live text="" /><p role="status">Loading…</p></section>
   if (load.state === 'failed') return <section><h1>Worth it?</h1><Live text="" /><p role="alert">Your transactions could not be read just now. Nothing has been changed.</p></section>
 
@@ -99,9 +104,10 @@ export default function WorthIt({ today }: { today: string }): ReactNode {
     })
   }
 
+  if (embedded && current === undefined && pending.length === 0) return null
   return (
-    <section className="mood-queue">
-      <h1>Worth it?</h1>
+    <section className={embedded ? 'mood-queue card' : 'mood-queue'}>
+      {embedded ? <h2>Worth it?</h2> : <h1>Worth it?</h1>}
       <Live text={liveText} />
       <p>A look back at spending from at least {load.days} {load.days === 1 ? 'day' : 'days'} ago that you had already noted a feeling or reason for.</p>
       {error !== null && <p role="alert">{error}</p>}
@@ -131,11 +137,11 @@ export default function WorthIt({ today }: { today: string }): ReactNode {
           </div>
         </article>
       )}
-      <div className="worth-delay">
+      {!embedded && <div className="worth-delay">
         <label htmlFor="worth-delay-days">Ask about spending at least this many days old</label>
         <input id="worth-delay-days" inputMode="numeric" value={daysText} onChange={(e) => setDaysText(e.target.value)} disabled={busy} />
         <button type="button" className="btn" disabled={busy} onClick={saveDays}>Save</button>
-      </div>
+      </div>}
     </section>
   )
 }

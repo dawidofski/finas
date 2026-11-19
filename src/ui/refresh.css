@@ -1,0 +1,75 @@
+/* ---------------------------------------------------------------------------------------------------------------------
+   The phone-first look, loaded after app.css. Palette tokens only (so contrast.test.ts still covers every pair); softer
+   lines are the border token mixed with transparency, never a new colour.
+   ------------------------------------------------------------------------------------------------------------------ */
+:root { --hair: color-mix(in srgb, var(--border) 30%, transparent); --tint: color-mix(in srgb, var(--accent) 12%, transparent); --radius: 16px; }
+body { background: var(--surface); -webkit-text-size-adjust: 100%; }
+.screen { padding: 0.75rem 0.75rem calc(9rem + env(safe-area-inset-bottom)); margin: 0 auto; }
+.screen > section, .card { background: var(--bg); border: 1px solid var(--hair); border-radius: var(--radius); padding: 1rem; margin: 0 0 0.75rem; box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent); }
+.screen > section .card { box-shadow: none; background: var(--surface); }
+.screen h1 { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.01em; margin: 0 0 0.5rem; }
+.screen h2 { font-size: 1.125rem; line-height: 1.3; margin: 1.5rem 0 0.5rem; }
+.screen h3 { font-size: 1rem; margin: 1rem 0 0.25rem; }
+.screen p { max-width: 68ch; margin: 0.5rem 0; }
+.screen ul, .screen ol { padding-left: 1.25rem; }
+.screen dl { margin: 0.5rem 0; }
+.screen dt { color: var(--muted); font-size: 0.8125rem; margin-top: 0.5rem; }
+.screen dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.screen input, .screen select, .screen textarea, .screen button { font: inherit; }
+.screen input:not([type='checkbox']):not([type='radio']):not([type='file']), .screen select, .screen textarea { min-height: 48px; max-width: 100%; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.25rem 0.75rem; }
+.btn { border-radius: 12px; font-weight: 600; }
+.notice { border-radius: 12px; border-color: var(--hair); }
+.notice-refusal, .notice-warn { border-color: var(--border); }
+
+/* The five destinations. */
+.nav { background: var(--bg); border-top: 1px solid var(--hair); }
+.nav-primary .nav-link { min-height: 60px; font-size: 0.6875rem; color: var(--muted); gap: 0.125rem; }
+.nav-primary .nav-glyph { font-size: 1.375rem; line-height: 1; padding: 0.2rem 1rem; border-radius: 999px; }
+.nav-primary .nav-link[aria-current] { color: var(--accent); font-weight: 700; box-shadow: none; }
+.nav-primary .nav-link[aria-current] .nav-glyph { background: var(--tint); }
+.nav-theme { display: none; }
+.settings-theme { margin: 0 0 0.75rem; padding: 0.5rem 1rem; background: var(--bg); border: 1px solid var(--hair); border-radius: var(--radius); justify-content: space-between; }
+
+/* Tabs inside a destination: a row of pills that scrolls sideways on its own, never the page. */
+.tabs { display: flex; gap: 0.5rem; overflow-x: auto; margin: 0 -0.75rem 0.75rem; padding: 0.25rem 0.75rem; scrollbar-width: none; position: sticky; top: 0; z-index: 5; background: var(--surface); }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 1rem; border-radius: 999px; background: var(--bg); border: 1px solid var(--hair); color: var(--text); text-decoration: none; font-weight: 600; white-space: nowrap; }
+.tab[aria-current='page'] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* The AI coach, one tap away. Sits above the tab bar on a phone. */
+.fab { position: fixed; right: 1rem; bottom: calc(60px + 1rem + env(safe-area-inset-bottom)); z-index: 9; width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent); text-decoration: none; font-size: 1.5rem; box-shadow: 0 4px 12px color-mix(in srgb, var(--text) 25%, transparent); }
+
+/* Shared pieces for the screens. */
+.stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin: 0.75rem 0; }
+.stat { background: var(--surface); border-radius: 12px; padding: 0.75rem; min-width: 0; }
+.stat-label { display: block; color: var(--muted); font-size: 0.8125rem; }
+.stat-value { display: block; font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat-note { display: block; color: var(--muted); font-size: 0.8125rem; }
+progress.meter { appearance: none; -webkit-appearance: none; display: block; width: 100%; height: 10px; border: 0; border-radius: 999px; background: var(--hair); overflow: hidden; margin: 0.375rem 0; }
+progress.meter::-webkit-progress-bar { background: var(--hair); border-radius: 999px; }
+progress.meter::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+progress.meter::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+progress.meter[data-over='true']::-webkit-progress-value { background: var(--text); }
+progress.meter[data-over='true']::-moz-progress-bar { background: var(--text); }
+.row-between { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+.row-between > :last-child { text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+/* An explanation behind a small "i": out of the way until it is wanted, and it works by touch (no hover needed). */
+details.tip { display: block; margin: 0.25rem 0; }
+details.tip > summary { list-style: none; display: inline-flex; align-items: center; gap: 0.5rem; min-height: 44px; cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.875rem; }
+details.tip > summary::-webkit-details-marker { display: none; }
+details.tip > summary::before { content: 'i'; display: inline-flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 2px solid var(--accent); font-weight: 700; font-style: italic; font-family: Georgia, serif; }
+details.tip[open] > summary { margin-bottom: 0.25rem; }
+details.tip > :not(summary) { background: var(--surface); border-radius: 12px; padding: 0.5rem 0.75rem; margin: 0 0 0.5rem; }
+.muted { color: var(--muted); }
+
+@media (min-width: 768px) {
+  .screen { padding: 1.5rem 2rem 6rem; margin: 0; }
+  .nav { border-right: 1px solid var(--hair); }
+  .nav-primary .nav-link { min-height: 48px; font-size: 1rem; }
+  .nav-primary .nav-glyph { padding: 0.2rem 0.5rem; }
+  .nav-theme { display: flex; margin-top: 1rem; }
+  .settings-theme { display: none; }
+  .tabs { margin: 0 0 1rem; padding: 0.25rem 0; }
+  .fab { bottom: 1.5rem; right: 1.5rem; }
+  .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
