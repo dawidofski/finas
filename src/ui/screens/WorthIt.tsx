@@ -35,12 +35,17 @@ export default function WorthIt({ today, embedded = false }: { today: string; em
   const refocus = useRef(false)
   const [daysText, setDaysText] = useState('')
 
+  // Nothing is set once the card is gone: a read that finishes (or fails) after the screen was left must not touch it.
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const reload = useCallback(async () => {
     try {
       const days = await worthwhileDelayDays()
-      setLoad({ state: 'ready', days, queue: await worthwhileQueue({ olderThanDays: days, today }) })
+      const queue = await worthwhileQueue({ olderThanDays: days, today })
+      if (!mounted.current) return
+      setLoad({ state: 'ready', days, queue })
       setDaysText(String(days))
-    } catch { setLoad({ state: 'failed' }) }
+    } catch { if (mounted.current) setLoad({ state: 'failed' }) }
   }, [today])
   useEffect(() => { void reload() }, [reload])
   useEffect(() => {
