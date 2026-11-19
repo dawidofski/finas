@@ -157,7 +157,7 @@ describe('Reports screen', () => {
     expect(within(panel('Small purchases')).getByText(/There were no purchases under/)).toBeInTheDocument()
     expect(within(panel('Small purchases')).queryByText(/middle amount/)).toBeNull()
     expect(within(panel('Purchases by mood')).getByText(/No purchase in November 2026 has a mood recorded yet/)).toBeInTheDocument()
-    expect(within(panel('Purchases by mood')).getByRole('link', { name: 'Record a mood' })).toHaveAttribute('href', '#/mood')
+    expect(within(panel('Purchases by mood')).getByRole('link', { name: 'Note today\'s mood' })).toHaveAttribute('href', '#/')
     expect(within(panel('Looking back: worth it or not')).getByRole('link', { name: 'Answer for a purchase' })).toHaveAttribute('href', '#/worth-it')
     // Only the charts that can be drawn are drawn: with nothing to draw there is no empty chart.
     for (const name of ['Month by month', 'Small purchases', 'Purchases by mood', 'Purchases by reason you gave', 'Looking back: worth it or not']) {
@@ -467,9 +467,9 @@ describe('Reports screen', () => {
     expect(document.querySelectorAll('[tabindex]:not([tabindex="0"]):not([tabindex="-1"])')).toHaveLength(0)
     const links = screen.getAllByRole('link')
     expect(links.length).toBeGreaterThan(0)
-    for (const a of links) expect(a.getAttribute('href')).toMatch(/^#\/[a-z-]+/)
+    for (const a of links) expect(a.getAttribute('href')).toMatch(/^#\/[a-z-]*/)
 
-    const mood = screen.getByRole('link', { name: 'Record a mood' })
+    const mood = screen.getByRole('link', { name: 'Note today\'s mood' })
     mood.focus()
     fireEvent.click(mood)
     expect(document.activeElement).toBe(mood)

@@ -169,7 +169,12 @@ interface Answers {
  * annotatedTransactions, so it is bounded by the owner's own annotations and never reads the whole ledger (§39.4).
  */
 async function answeredSpends(keep: (a: Omit<Answers, 'bankDate'>) => boolean): Promise<Answers[]> {
-  const bank = await annotatedTransactions((a) => keep({ moodId: a.moodId, reasonId: a.purchaseReasonId, worthwhile: a.worthwhile }))
+  // A mood may be the day's rather than the purchase's own, so the annotation test assumes one is there (the rest of keep
+  // still applies) and the purchases on days with a mood are added; keep is applied again on the resolved answers below.
+  const bank = await annotatedTransactions(
+    (a) => keep({ moodId: a.moodId ?? 'day', reasonId: a.purchaseReasonId, worthwhile: a.worthwhile }),
+    { orDayMood: true },
+  )
   const out: Answers[] = []
   // The one definition of a spend, shared with rank.ts: treatmentOf spending and a strictly negative bank amount.
   for (const s of await spendsOf(bank)) {

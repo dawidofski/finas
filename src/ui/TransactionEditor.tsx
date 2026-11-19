@@ -8,7 +8,6 @@ import { centsToTypedString, formatEur, parseTypedAmount } from '../lib/money'
 // The threshold is imported, never retyped: the sentence beside a control is part of the behaviour (§45), so a
 // hard-coded "twice" here would quietly lie to the owner if the rule changed, with the suite still green.
 import { CORRECTIONS_NEEDED } from '../learning/memory'
-import MoodRow from './annotations/MoodRow'
 import ReasonChips from './annotations/ReasonChips'
 import WorthwhileButtons from './annotations/WorthwhileButtons'
 
@@ -26,7 +25,6 @@ export interface EditorForm {
   kind: TransactionKind
   paymentMethod: string
   note: string
-  moodId: string | null
   purchaseReasonId: string | null
   worthwhile: boolean | null
 }
@@ -41,7 +39,6 @@ export function formFor(tx: ResolvedTransaction): EditorForm {
     kind: tx.kind,
     paymentMethod: tx.paymentMethod ?? '',
     note: tx.note ?? '',
-    moodId: tx.moodId,
     purchaseReasonId: tx.purchaseReasonId,
     worthwhile: tx.worthwhile,
   }
@@ -51,7 +48,7 @@ export type PatchResult = { ok: true; patch: Partial<AnnotationRow> } | { ok: fa
 
 /**
  * The ONE patch for a save: every changed field and nothing else, so the write is one transaction that emits one
- * learning event per changed tracked field (§34.6). Mood, reason and worthwhile are deliberately NOT tracked yet (see
+ * learning event per changed tracked field (§34.6). The editor has no mood control (the mood is noted once for the day, on the Dashboard); a purchase's own older mood is never in the patch, so a save leaves it as it is. Reason and worthwhile are deliberately NOT tracked yet (see
  * NOT_YET_TRACKED in db/annotations.ts): learningEvents is append-only, so their event shape waits for Plan 4's consumer. A date, amount, description or kind that is put back to the bank's own
  * value clears its override instead of storing a copy of the bank's value. `shown` is what the editor opened with.
  */
@@ -88,7 +85,6 @@ export function buildPatch(bank: TransactionRow, shown: ResolvedTransaction, for
   if (method !== (shown.paymentMethod ?? '')) patch.paymentMethod = method || null
   const note = form.note.trim()
   if (note !== (shown.note ?? '')) patch.note = note || null
-  if (form.moodId !== shown.moodId) patch.moodId = form.moodId
   if (form.purchaseReasonId !== shown.purchaseReasonId) patch.purchaseReasonId = form.purchaseReasonId
   if (form.worthwhile !== shown.worthwhile) patch.worthwhile = form.worthwhile
 
@@ -249,7 +245,6 @@ export default function TransactionEditor(props: Props): ReactNode {
             <label htmlFor={field('method')}>Payment method</label>
             <input id={field('method')} type="text" value={form.paymentMethod} onChange={(e) => set('paymentMethod', e.target.value)} />
 
-            <MoodRow value={form.moodId} onChange={(v) => set('moodId', v)} disabled={busy} />
             <ReasonChips value={form.purchaseReasonId} onChange={(v) => set('purchaseReasonId', v)} disabled={busy} />
             <WorthwhileButtons value={form.worthwhile} onChange={(v) => set('worthwhile', v)} disabled={busy} />
 

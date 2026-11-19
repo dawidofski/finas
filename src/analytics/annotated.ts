@@ -5,6 +5,7 @@ import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { loadCategoryKinds } from '../analysis/queues'
 import { treatmentOf } from '../analysis/income'
 import { annotatedTransactions } from '../learning/regret'
+import { dayMoods, moodFor } from '../mood/day'
 import { cached } from './cache'
 
 /**
@@ -50,14 +51,14 @@ interface Spend { cents: number; moodId: string | null; reasonId: string | null;
 
 async function candidates(month: string | null, field: Field): Promise<TransactionRow[]> {
   // All history is bounded by the owner's own annotations (§39.4); the shared helper explains how.
-  if (month === null) return annotatedTransactions((a) => a[field] !== null)
+  if (month === null) return annotatedTransactions((a) => a[field] !== null, { orDayMood: field === 'moodId' })
   return liveTransactionsBetween(month, month)
 }
 
 async function spends(month: string | null, field: Field): Promise<{ items: Spend[]; base: number | null }> {
   const bank = await candidates(month, field)
   const byId = new Map(bank.map((t) => [t.id, t]))
-  const [resolved, kinds] = await Promise.all([resolveMany(bank), loadCategoryKinds()])
+  const [resolved, kinds, days] = await Promise.all([resolveMany(bank), loadCategoryKinds(), dayMoods()])
   const out: Spend[] = []
   for (const r of resolved) {
     const t = byId.get(r.id)
@@ -65,7 +66,7 @@ async function spends(month: string | null, field: Field): Promise<{ items: Spen
     if (!t || t.amountCents >= 0) continue
     const categoryKind = r.categoryId === null ? null : (kinds.get(r.categoryId) ?? null)
     if (treatmentOf(r.kind, categoryKind) !== 'spending') continue
-    out.push({ cents: -t.amountCents, moodId: r.moodId, reasonId: r.purchaseReasonId, worthwhile: r.worthwhile })
+    out.push({ cents: -t.amountCents, moodId: moodFor(r.moodId, t.valueDate, days), reasonId: r.purchaseReasonId, worthwhile: r.worthwhile })
   }
   return { items: out, base: month === null ? null : out.length }
 }

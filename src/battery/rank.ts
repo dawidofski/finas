@@ -6,6 +6,7 @@ import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { cached } from '../analytics/cache'
 import { treatmentOf } from '../analysis/income'
 import { addDays, isoWeekday } from '../lib/dates'
+import { dayMoods, moodFor } from '../mood/day'
 import { mannWhitneyU, spearmanRhoBp } from './stats'
 import { mannWhitneyBracket, spearmanBracket, type Bracket } from './critical'
 import { BATTERY, isMet, type BatteryData, type Gate, type RelationshipId } from './battery'
@@ -72,7 +73,7 @@ export interface Spend {
 export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
   const byId = new Map(bank.map(t => [t.id, t]))
   const resolved = await resolveMany(bank)
-  const [moods, categories] = await Promise.all([db.moods.toArray(), db.categories.toArray()])
+  const [moods, categories, days] = await Promise.all([db.moods.toArray(), db.categories.toArray(), dayMoods()])
   const valence = new Map(moods.map(m => [m.id, m.valence]))
   const kindOf = new Map(categories.map(c => [c.id, c.kind as string]))
   // Both legs of every transfer that is not a refund link: a refund's purchase leg is deliberately kept (see above).
@@ -83,13 +84,15 @@ export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
     if (transferLegs.has(r.id)) continue
     const categoryKind = r.categoryId === null ? null : kindOf.get(r.categoryId) ?? null
     if (!t || t.amountCents >= 0 || treatmentOf(r.kind, categoryKind) !== 'spending') continue
+    // The purchase's own mood, else the mood of its BANK day (src/mood/day.ts), else none.
+    const moodId = moodFor(r.moodId, t.valueDate, days)
     out.push({
       id: t.id,
       merchantId: r.merchantId,
       centsOut: -t.amountCents,
       date: t.valueDate,
-      moodId: r.moodId,
-      valence: r.moodId === null ? null : valence.get(r.moodId) ?? null,
+      moodId,
+      valence: moodId === null ? null : valence.get(moodId) ?? null,
       discretionary: r.categoryId !== null && kindOf.get(r.categoryId) === 'discretionary',
       categoryKind,
       reasonId: r.purchaseReasonId,
@@ -100,11 +103,11 @@ export async function spendsOf(bank: TransactionRow[]): Promise<Spend[]> {
 }
 
 /**
- * Mood and stress read ANNOTATIONS: a mood exists only as an annotation, so a purchase with no mood cannot enter a mood
- * correlation. That limit is intrinsic and belongs in the finding's limitation line.
+ * Mood and stress read the purchases that carry a mood: their own (an annotation) or their day's (src/mood/day.ts). A
+ * purchase with neither cannot enter a mood correlation. That limit is intrinsic and belongs in the finding's limitation line.
  */
 const loadAnnotatedSpends = async (keep: Parameters<typeof annotatedTransactions>[0]): Promise<Spend[]> =>
-  spendsOf(await annotatedTransactions(keep))
+  spendsOf(await annotatedTransactions(keep, { orDayMood: true }))
 
 const EMPTY: BatteryData = {
   discretionarySpendsWithMood: 0, moodGroupsOfTen: 0, weeksOfMoodCoverage: 0, stressedSpends: 0, unstressedSpends: 0,

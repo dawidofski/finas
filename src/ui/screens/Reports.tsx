@@ -409,7 +409,7 @@ export default function Reports({ today, computedAt, month: shown }: { today: st
       <UnusualPanel report={detail.unusual} title={title} />
       <SmallPanel small={detail.small} byMonth={detail.smallByMonth} partial={partial} title={title} />
       <PaydayPanel payday={detail.payday} month={month} today={today} partial={partial} title={title} />
-      <AnnotatedPanel id="reports-mood" heading="Purchases by mood" noun="Mood recorded" none="a mood recorded" rows={detail.mood} title={title} hint={<><a href="#/mood">Record a mood</a> on a purchase to see this.</>} />
+      <AnnotatedPanel id="reports-mood" heading="Purchases by mood" noun="Mood recorded" none="a mood recorded" rows={detail.mood} title={title} hint={<><a href="#/">Note today's mood</a> on the Dashboard to see this.</>} />
       <AnnotatedPanel id="reports-reason" heading="Purchases by reason you gave" noun="Reason recorded" none="a reason recorded" rows={detail.reason} title={title} hint={<>Open a purchase in <a href="#/transactions">Transactions</a> and choose a reason to see this.</>} />
       <AnnotatedPanel id="reports-worth" heading="Looking back: worth it or not" noun="Looked back at" none="a judgement of whether it was worth it" rows={detail.worth} title={title} hint={<><a href="#/worth-it">Answer for a purchase</a> whether it was worth it to see this.</>} />
     </section>

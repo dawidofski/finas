@@ -3,6 +3,8 @@ import { resolveMany, writeAnnotation, type ResolvedTransaction } from '../db/an
 import { getSettings } from '../db/seed'
 import type { CategoryKind } from '../db/schema'
 import { daysBetween } from '../lib/dates'
+import { dayMoods, moodFor } from '../mood/day'
+import type { TransactionRow } from '../db/schema'
 
 /**
  * The owner's annotation queues (§15). One definition of "worth annotating" lives here and every queue builds on it,
@@ -43,7 +45,11 @@ const byAge = (a: ResolvedTransaction, b: ResolvedTransaction): number =>
 
 /** Resolved transactions, oldest first, that are worth annotating (soft-deleted rows never are). Reads at call time. */
 async function worthAnnotatingNow(): Promise<ResolvedTransaction[]> {
-  const [resolved, kinds] = await Promise.all([resolveMany(await db.transactions.toArray()), loadCategoryKinds()])
+  return worthAnnotatingOf(await db.transactions.toArray())
+}
+
+async function worthAnnotatingOf(bank: TransactionRow[]): Promise<ResolvedTransaction[]> {
+  const [resolved, kinds] = await Promise.all([resolveMany(bank), loadCategoryKinds()])
   return resolved.filter((t) => worthAnnotating(t, kinds)).sort(byAge)
 }
 
@@ -72,7 +78,7 @@ export async function moodQueue(): Promise<ResolvedTransaction[]> {
  */
 export async function dayMood(date: string, moodId: string): Promise<number> {
   if ((await db.moods.get(moodId)) === undefined) throw new Error(`Unknown mood ${moodId}`)
-  return db.transaction('rw', db.transactions, db.annotations, db.learningEvents, db.categories, async () => {
+  return db.transaction('rw', db.transactions, db.annotations, db.learningEvents, db.categories, db.settings, async () => {
     const candidates = (await worthAnnotatingNow()).filter((t) => t.valueDate === date && t.moodId === null)
     for (const c of candidates) await writeAnnotation(c.id, { moodId }, 'owner')
     return candidates.length
@@ -101,15 +107,19 @@ export async function setWorthwhileDelayDays(days: number): Promise<void> {
  *     (deliberate, §41's scope paragraph: no figure is computed here and no money moves. When the owner corrected a
  *     date because the bank posted it wrongly, the corrected date is the better answer to "has enough time passed
  *     for hindsight to be honest". Do not switch this to the bank date.)
- *  3. the owner recorded a mood OR a reason, which is what makes this a revisit rather than a second triage, and
+ *  3. the owner recorded a mood (the purchase's own, or its day's) OR a reason, which is what makes this a revisit rather than a second triage, and
  *  4. no judgement yet: `worthwhile === null` means unanswered, so a skipped transaction stays here. Skipping is never
  *     recorded, and nothing in this module writes.
  * Oldest first. `today` is injected; this module never reads a clock.
  */
 export async function worthwhileQueue(opts: { olderThanDays?: number; today: string }): Promise<ResolvedTransaction[]> {
   const olderThanDays = opts.olderThanDays ?? DEFAULT_WORTHWHILE_DELAY_DAYS
-  return (await worthAnnotatingNow()).filter((t) =>
+  const bank = await db.transactions.toArray()
+  const bankDate = new Map(bank.map((t) => [t.id, t.valueDate]))
+  const days = await dayMoods()
+  return (await worthAnnotatingOf(bank)).filter((t) =>
     daysBetween(t.valueDate, opts.today) >= olderThanDays
-    && (t.moodId !== null || t.purchaseReasonId !== null)
+    // The mood is the purchase's own, else the one for its BANK day (an owner-corrected date does not move it).
+    && (moodFor(t.moodId, bankDate.get(t.id) ?? t.valueDate, days) !== null || t.purchaseReasonId !== null)
     && t.worthwhile === null)
 }

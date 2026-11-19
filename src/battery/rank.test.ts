@@ -3,8 +3,10 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { addDays } from '../lib/dates'
+import { annotatedTransactions } from '../learning/regret'
 import { BATTERY } from './battery'
-import { moodAmount, stressDiscretionary, weekend, type RankFinding } from './rank'
+import { setDayMood } from '../mood/day'
+import { moodAmount, spendsOf, stressDiscretionary, weekend, type RankFinding } from './rank'
 
 // 2026-01-03 is a Saturday (2026-11-21 is, and 46 weeks = 322 days earlier); 2026-01-05 is a Monday.
 const tx = (id: string, over: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -58,6 +60,51 @@ async function seedMoodSpends(opts: { happyOverrideCents?: number; extraOther?: 
   await db.transactions.bulkAdd(txs)
   await db.annotations.bulkAdd(anns)
 }
+
+describe('the mood of a purchase', () => {
+  it('is the mood of its day when it has none of its own, with that mood\'s valence', async () => {
+    const bank = tx('d1', { valueDate: '2026-03-02' })
+    await db.transactions.add(bank)
+    await setDayMood('2026-03-02', 'mood.sad')
+    const [s] = await spendsOf([bank])
+    expect(s?.moodId).toBe('mood.sad')
+    expect(s?.valence).toBe((await db.moods.get('mood.sad'))?.valence)
+  })
+
+  it('is its own mood when it has one, even when the day has another', async () => {
+    const bank = tx('d2', { valueDate: '2026-03-02' })
+    await db.transactions.add(bank)
+    await db.annotations.add(ann('d2', { moodId: 'mood.happy' }))
+    await setDayMood('2026-03-02', 'mood.sad')
+    const [s] = await spendsOf([bank])
+    expect(s?.moodId).toBe('mood.happy')
+    expect(s?.valence).toBe((await db.moods.get('mood.happy'))?.valence)
+  })
+
+  it('is none when neither exists, and a day mood is read from the bank date', async () => {
+    const bank = tx('d3', { valueDate: '2026-03-02' })
+    await db.transactions.add(bank)
+    await db.annotations.add(ann('d3', { dateOverride: '2026-03-09' }))
+    await setDayMood('2026-03-09', 'mood.sad')
+    const [s] = await spendsOf([bank])
+    expect(s?.moodId).toBeNull()
+    expect(s?.valence).toBeNull()
+  })
+
+  it('reaches the battery with no annotation at all: ten purchases on a day with a mood are counted', async () => {
+    const txs = Array.from({ length: 10 }, (_, k) => tx(`w${k}`, { valueDate: '2026-03-02', amountCents: -100 * (k + 1) }))
+    await db.transactions.bulkAdd(txs)
+    await db.annotations.bulkAdd(txs.map((t) => ann(t.id, { categoryId: cat })))
+    await setDayMood('2026-03-02', 'mood.sad')
+    const lone = tx('lone', { valueDate: '2026-03-03' })
+    await db.transactions.add(lone)
+    await db.annotations.add(ann('lone', { categoryId: cat }))
+    const loaded = await annotatedTransactions((a) => a.moodId !== null, { orDayMood: true })
+    expect(loaded.map((t) => t.id).sort()).toEqual(txs.map((t) => t.id).sort())
+    const gates = await moodAmount(1)
+    expect(Array.isArray(gates) ? gates.map((g) => g.have) : []).toContain(10)
+  })
+})
 
 describe('moodAmount', () => {
   it('correlates mood valence against the bank amount, not an amount the owner corrected', async () => {

@@ -215,7 +215,7 @@ const weekOf = (date: string): string => addDays(date, -(isoWeekday(date) - 1))
 export function moodFrequency(computedAt: number, today: string): Promise<MoodFrequencyResult> {
   return cached(`battery.trend.mood-frequency:${today}`, async (): Promise<MoodFrequencyResult> => {
     // The shared spend loader of rank.ts: one definition of what counts as a spend, bank sign, amount and date.
-    const spends = await spendsOf(await annotatedTransactions(a => a.moodId !== null))
+    const spends = await spendsOf(await annotatedTransactions(a => a.moodId !== null, { orDayMood: true }))
     const perWeek = new Map<string, { low: number; good: number; first: string; last: string }>()
     for (const s of spends) {
       if (s.valence === null || s.valence === 0) continue

@@ -3,6 +3,7 @@ import { resolveMany } from '../db/annotations'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { isoWeekday, spanishWeekdayName } from '../lib/dates'
 import { liveTransactionsBetween } from '../analysis/transactionsInRange'
+import { dayMoods } from '../mood/day'
 
 export interface RegretCluster {
   by: 'reason' | 'merchant' | 'category' | 'mood' | 'weekday'
@@ -18,6 +19,7 @@ const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 /**
  * Every live transaction whose annotation satisfies `keep`, for a whole-history branch. The regret screen passes "worth-it answered";
  * the mood, reason and worth-it breakdowns in src/analytics/annotated.ts pass their own field. One bounded read, shared.
+ * orDayMood also admits every purchase dated on a day with a day mood (src/mood/day.ts), for the readers of a MOOD.
  *
  * Driven from `annotations`, never from `transactions`: §39.4 forbids a screen reading the whole ledger, and this
  * branch is the Intelligence screen's default view on a route that sits in the mobile tab bar, re-run on every period
@@ -28,11 +30,24 @@ const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
  * set. `bulkGet` can return undefined for an annotation whose transaction was hard-deleted; soft-deleted rows are
  * dropped here exactly as the month branch's `liveTransactionsBetween` drops them.
  */
-export async function annotatedTransactions(keep: (a: AnnotationRow) => boolean): Promise<TransactionRow[]> {
+export async function annotatedTransactions(
+  keep: (a: AnnotationRow) => boolean,
+  opts: { orDayMood?: boolean } = {},
+): Promise<TransactionRow[]> {
   const answered = (await db.annotations.toArray()).filter(keep)
-  if (answered.length === 0) return []
-  const rows = await db.transactions.bulkGet(answered.map((a) => a.transactionId))
-  return rows.filter((t): t is TransactionRow => t !== undefined && t.deletedAt === null)
+  const rows = answered.length === 0 ? [] : await db.transactions.bulkGet(answered.map((a) => a.transactionId))
+  const live = rows.filter((t): t is TransactionRow => t !== undefined && t.deletedAt === null)
+  if (opts.orDayMood !== true) return live
+  // orDayMood: a purchase on a day the owner gave a mood has a mood with no annotation at all. Only the dates that
+  // have a day mood are read (one bounded key lookup per account), never the whole ledger.
+  const dates = [...(await dayMoods()).keys()]
+  if (dates.length === 0) return live
+  const accountIds = await db.transactions.orderBy('accountId').uniqueKeys()
+  const onThoseDays = (await Promise.all(accountIds.map((accountId) =>
+    db.transactions.where('[accountId+valueDate]').anyOf(dates.map((d) => [accountId, d])).toArray()))).flat()
+  const byId = new Map(live.map((t) => [t.id, t]))
+  for (const t of onThoseDays) if (t.deletedAt === null) byId.set(t.id, t)
+  return [...byId.values()]
 }
 
 /**

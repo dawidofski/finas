@@ -272,7 +272,7 @@ const TEMPLATES: { [K in RelationshipId]: (result: BatteryResults[K]) => Parts }
     effect: { label: 'How closely the mood you recorded and the size of a discretionary purchase moved together', bp: r.effectBp, scale: 'closeness' },
     limitation: `This is ${count(r.n, 'discretionary purchase', 'discretionary purchases')} you gave a mood to. Rent, bills and the other fixed essentials are left out on purpose, as they cannot move with a mood, and a purchase you gave no mood to is not here at all: these are the purchases you chose to annotate, not everything you spent.`,
     meaning: 'One reading is that how you feel and what a want seems worth travel together in the moment of buying. Another is that the purchases you stop to annotate are the ones you already felt something about, which would look the same from here.',
-    action: 'Next time you are about to buy something you want rather than need, record the mood first on the Mood screen and give it an hour before you decide.',
+    action: 'Next time you are about to buy something you want rather than need, note how the day is going on the Dashboard first, and give it an hour before you decide.',
   }),
 
   // trend.ts moodFrequency: a = the LOW-mood weeks, so a POSITIVE r means more purchases in weeks of low mood. A mood

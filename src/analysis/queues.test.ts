@@ -4,6 +4,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import { writeAnnotation } from '../db/annotations'
 import type { TransactionKind, TransactionRow } from '../db/schema'
+import { setDayMood } from '../mood/day'
 
 const GROCERIES: [string, string] = ['Alimentación', 'Supermercados y alimentación'] // essential
 const RESTAURANTS: [string, string] = ['Ocio y viajes', 'Cafeterías y restaurantes'] // discretionary
@@ -192,6 +193,24 @@ describe('worthwhileQueue', () => {
     await writeAnnotation('both', { moodId: 'mood.sad', purchaseReasonId: 'reason.planned' }, 'owner')
     await writeAnnotation('exactly-seven', { moodId: 'mood.happy' }, 'owner')
     expect(await wids()).toEqual(['mood', 'reason', 'both', 'exactly-seven'])
+  })
+
+  it('queues a purchase on a day with a day mood even with no annotation, but not one with neither mood nor reason', async () => {
+    await tx('felt', '2026-11-01')
+    await tx('other-day', '2026-11-02')
+    await tx('felt-but-young', '2026-11-14')
+    await setDayMood('2026-11-01', 'mood.happy')
+    await setDayMood('2026-11-14', 'mood.happy')
+    expect(await wids()).toEqual(['felt'])
+  })
+
+  it('looks the day mood up on the bank date, not an owner-corrected one', async () => {
+    await tx('moved', '2026-11-01')
+    await writeAnnotation('moved', { dateOverride: '2026-11-03' }, 'owner')
+    await setDayMood('2026-11-03', 'mood.happy')
+    expect(await wids()).toEqual([])
+    await setDayMood('2026-11-01', 'mood.happy')
+    expect(await wids()).toEqual(['moved'])
   })
 
   it('excludes spending younger than the threshold', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
+import { setDayMood } from '../mood/day'
 import { moodBreakdown, reasonBreakdown, worthwhileBreakdown } from './annotated'
 
 const tx = (id: string, over: Partial<TransactionRow> = {}): TransactionRow => ({
@@ -51,6 +52,18 @@ describe('moodBreakdown', () => {
     expect(await moodBreakdown('2026-11', NOW)).toEqual([{ ...row, spendsInScope: 1 }])
     expect(await moodBreakdown('2026-12', NOW)).toEqual([])
     expect(await moodBreakdown(null, NOW)).toEqual([{ ...row, spendsInScope: null }])
+  })
+
+  it('counts a purchase by the mood of its day, and a purchase with its own mood by its own', async () => {
+    await db.transactions.bulkAdd([tx('a', { amountCents: -1000 }), tx('b', { amountCents: -2500 }), tx('c', { amountCents: -400, valueDate: '2026-11-17' })])
+    await db.annotations.add(ann('b', { moodId: 'mood.happy' }))
+    await setDayMood('2026-11-16', 'mood.bored')
+    const expected = (spendsInScope: number | null) => [
+      { key: 'mood.happy', label: 'Happy', transactions: 1, totalCents: 2500, answeredOf: 2, spendsInScope },
+      { key: 'mood.bored', label: 'Bored', transactions: 1, totalCents: 1000, answeredOf: 2, spendsInScope },
+    ]
+    expect(await moodBreakdown('2026-11', NOW)).toEqual(expected(3))
+    expect(await moodBreakdown(null, NOW + 1)).toEqual(expected(null))
   })
 
   it('rejects a malformed month', async () => {

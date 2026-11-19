@@ -1,0 +1,5 @@
+.day-mood { max-width: 100%; }
+.day-mood .mood-row { grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr)); }
+.day-mood .mood-btn { min-height: 56px; min-width: 44px; }
+.day-mood-yesterday { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--hair); }
+.day-mood-yesterday h3 { margin: 0 0 0.5rem; }

@@ -280,18 +280,25 @@ describe('the transaction editor', () => {
 
   beforeEach(async () => { await db.accounts.add(account); await db.transactions.add(tx()) })
 
-  it('writes mood, reason and worthwhile through writeAnnotation in one patch', async () => {
+  it('has no mood control: the mood is noted once for the day, not on every payment', async () => {
+    const dialog = await open('Invented cafe')
+    await within(dialog).findByRole('button', { name: 'Impulse' })
+    expect(within(dialog).queryByRole('button', { name: /Stressed/ })).toBeNull()
+    expect(within(dialog).queryByText(/How did it feel/)).toBeNull()
+    expect(dialog.querySelector('.mood-row')).toBeNull()
+  })
+
+  it('writes reason and worthwhile through writeAnnotation in one patch', async () => {
     const put = vi.spyOn(db.annotations, 'put')
     const dialog = await open('Invented cafe')
-    fireEvent.click(await within(dialog).findByRole('button', { name: /Stressed/ }))
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Impulse' }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Impulse' }))
     fireEvent.click(within(dialog).getByRole('button', { name: /Not worth it/ }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
-    expect(put).toHaveBeenCalledTimes(1) // one write for the three fields, not one per control
-    expect(await db.annotations.get('tx1')).toMatchObject({ moodId: 'mood.stressed', purchaseReasonId: 'reason.impulse', worthwhile: false })
-    // Mood, reason and worthwhile are deliberately not learning-event fields yet (NOT_YET_TRACKED): the row holds the value.
+    expect(put).toHaveBeenCalledTimes(1) // one write for both fields, not one per control
+    expect(await db.annotations.get('tx1')).toMatchObject({ moodId: null, purchaseReasonId: 'reason.impulse', worthwhile: false })
+    // Reason and worthwhile are deliberately not learning-event fields yet (NOT_YET_TRACKED): the row holds the value.
     expect(await db.learningEvents.count()).toBe(0)
   })
 
@@ -309,20 +316,21 @@ describe('the transaction editor', () => {
     expect(await db.learningEvents.count()).toBe(0)
   })
 
-  it('clears a saved mood back to none', async () => {
+  it('keeps a purchase\'s own older mood when something else is saved', async () => {
     await db.annotations.put({
       transactionId: 'tx1', categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
       note: null, moodId: 'mood.happy', purchaseReasonId: null, worthwhile: null, reviewed: false,
       dateOverride: null, amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
     })
     const dialog = await open('Invented cafe')
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Clear mood' }))
+    expect(within(dialog).queryByRole('button', { name: 'Clear mood' })).toBeNull()
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Impulse' }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect((await db.annotations.get('tx1'))?.moodId).toBeNull()
+    expect(await db.annotations.get('tx1')).toMatchObject({ moodId: 'mood.happy', purchaseReasonId: 'reason.impulse' })
   })
 
-  it('opens a transaction carrying an archived mood with that mood shown by label', async () => {
+  it('leaves an archived own mood in the data when the transaction is saved', async () => {
     await db.moods.update('mood.guilty', { archived: true })
     await db.annotations.put({
       transactionId: 'tx1', categoryId: null, subcategoryId: null, merchantId: null, typeOverride: null, paymentMethod: null,
@@ -330,9 +338,10 @@ describe('the transaction editor', () => {
       dateOverride: null, amountCentsOverride: null, descriptionOverride: null, updatedAt: 1,
     })
     const dialog = await open('Invented cafe')
-    const guilty = await within(dialog).findByRole('button', { name: /Guilty/ })
-    expect(pressed(guilty)).toBe('true')
-    // Saving without touching it must not drop it.
+    await within(dialog).findByRole('button', { name: 'Impulse' })
+    expect(within(dialog).queryByRole('button', { name: /Guilty/ })).toBeNull()
+    // Saving must not drop it.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Impulse' }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect((await db.annotations.get('tx1'))?.moodId).toBe('mood.guilty')
