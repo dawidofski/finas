@@ -13,7 +13,8 @@ import {
   type Bracket, type CorrectionVerdict, type Finding, type Observation, type SmallPurchasesContext,
 } from '../../battery/finding'
 import { epochMsToIso, formatMonthTitle, formatSpanishDate } from '../../lib/dates'
-import { formatBp, formatEur } from '../../lib/money'
+import { divRound, formatBp, formatEur } from '../../lib/money'
+import './insights.css'
 
 /**
  * When a group of purchases is shown as a finding. regretClusters deliberately returns a group even when it is one
@@ -81,6 +82,9 @@ type Body =
   | { kind: 'nothing'; why: string; n: number; period: { from: string; to: string } | null }
   | { kind: 'untested'; state: string; finding: Finding; own: readonly string[] }
   | { kind: 'looked'; bracket: Bracket; finding: (verdict: CorrectionVerdict) => Finding; own: readonly string[] }
+
+/** The one `untested` state that is a real answer: a plain count of the owner's own purchases. */
+const COUNT_STATE = 'A count of your own purchases, not a comparison'
 
 const gated = (gates: Gate[]): Body => ({ kind: 'gated', gates })
 const looked = (bracket: Bracket, finding: (verdict: CorrectionVerdict) => Finding, own: readonly string[] = []): Body =>
@@ -160,7 +164,7 @@ async function loadBattery(today: string, computedAt: number): Promise<Loaded> {
     ? gated(unmetGates('small-purchases', { fullMonths: complete.length }))
     : {
       kind: 'untested',
-      state: 'A count of your own purchases, not a comparison',
+      state: COUNT_STATE,
       finding: findingFor('small-purchases', {
         small, month: latest.month, ceilingCents: SMALL_PURCHASE_CEILING_CENTS, monthSpendCents: latest.spentCents,
       } satisfies SmallPurchasesContext, UNJUDGED),
@@ -309,47 +313,88 @@ function stateText(body: Body, verdict: CorrectionVerdict): string {
   return verdict.survives ? 'A finding' : 'Shown, and not called a finding'
 }
 
-function Battery({ rows, judged }: { rows: Record<RelationshipId, Body>; judged: readonly { item: RelationshipId; bracket: Bracket }[] }): ReactNode {
+/** Whether a question has a real answer on the page: a valid comparison, or the plain count of small purchases. */
+const isAnswered = (body: Body): boolean => body.kind === 'looked' || (body.kind === 'untested' && body.state === COUNT_STATE)
+
+/** The size of an effect as a whole number out of 100: the figure the finding already carries (basis points), over 100. */
+const effectPercent = (finding: Finding): number => Math.min(100, divRound(Math.abs(finding.effect.bp), 100))
+
+function Battery({ rows, judged, intro }: {
+  rows: Record<RelationshipId, Body>
+  judged: readonly { item: RelationshipId; bracket: Bracket }[]
+  intro: ReactNode
+}): ReactNode {
   // WHICH relationships enter the correction is decided once, in src/battery/run.ts (`enteredBrackets`), and arrives
   // here as `judged`. Only a validly tested relationship enters; see the entry rule there.
   const { verdicts, thresholdBp } = correct(judged)
+  const answeredCount = BATTERY.filter((r) => isAnswered(rows[r.id])).length
 
   return (
     <>
-      <p>{correctionText(judged.length, [...verdicts.values()].filter((c) => c.survives).length, thresholdBp)}</p>
+      <p className="insight-summary">{answeredCount} of {BATTERY.length} questions answered</p>
+      {intro}
+      <details className="tip">
+        <summary>How the app weighs them together</summary>
+        <p>{correctionText(judged.length, [...verdicts.values()].filter((c) => c.survives).length, thresholdBp)}</p>
+      </details>
       <ul className="intelligence-list battery-list" aria-label="Each question and what it can say">
         {BATTERY.map((relationship) => {
           const body = rows[relationship.id]
           const verdict: CorrectionVerdict = body.kind === 'looked'
             ? verdicts.get(relationship.id) ?? { bracket: body.bracket, survives: false }
             : UNJUDGED
+          const finding = body.kind === 'looked' ? body.finding(verdict) : body.kind === 'untested' ? body.finding : null
+          const own = body.kind === 'looked' || body.kind === 'untested' ? body.own : []
+          const answered = isAnswered(body)
           return (
-            <li key={relationship.id}>
-              <p className="battery-question"><strong>{relationship.question}</strong></p>
-              <p className="battery-state">{stateText(body, verdict)}</p>
-              {body.kind === 'gated' && (
-                <>
-                  <p>What this one still needs:</p>
-                  <ul className="intelligence-list" aria-label={`What is still needed: ${relationship.question}`}>
-                    {body.gates.map((g) => <li key={g.what}>{g.what}</li>)}
-                  </ul>
-                </>
+            <li key={relationship.id} className={answered ? 'battery-item is-answered' : 'battery-item'}>
+              <div className="battery-head">
+                <p className="battery-question"><strong>{relationship.question}</strong></p>
+                <span className={answered ? 'chip chip-on' : 'chip'}>{answered ? 'Answered' : 'Needs more data'}</span>
+              </div>
+              <p className="battery-state muted">{stateText(body, verdict)}</p>
+              {answered && finding !== null && (
+                <div className="battery-size">
+                  <span className="muted">Size of the effect</span>
+                  <progress className="meter" max={100} value={effectPercent(finding)} aria-label={`Size of the effect, ${effectPercent(finding)} of 100`} />
+                </div>
               )}
-              {body.kind === 'nothing' && (
-                <>
-                  <p>{body.why}</p>
-                  {body.period !== null && (
-                    <p><strong>Read from:</strong> {plural(body.n, 'purchase', 'purchases')}, {formatSpanishDate(body.period.from)} to {formatSpanishDate(body.period.to)}</p>
-                  )}
-                </>
-              )}
-              {body.kind === 'untested' && <Fields finding={body.finding} own={body.own} />}
-              {body.kind === 'looked' && <Fields finding={body.finding(verdict)} own={body.own} />}
+              <details className="battery-more">
+                <summary>{body.kind === 'gated' ? 'What it still needs' : 'More about this'}</summary>
+                {body.kind === 'gated' && (
+                  <>
+                    <p>What this one still needs:</p>
+                    <ul className="intelligence-list" aria-label={`What is still needed: ${relationship.question}`}>
+                      {body.gates.map((g) => <li key={g.what}>{g.what}</li>)}
+                    </ul>
+                  </>
+                )}
+                {body.kind === 'nothing' && (
+                  <>
+                    <p>{body.why}</p>
+                    {body.period !== null && (
+                      <p><strong>Read from:</strong> {plural(body.n, 'purchase', 'purchases')}, {formatSpanishDate(body.period.from)} to {formatSpanishDate(body.period.to)}</p>
+                    )}
+                  </>
+                )}
+                {finding !== null && <Fields finding={finding} own={own} />}
+              </details>
             </li>
           )
         })}
       </ul>
     </>
+  )
+}
+
+/** A long list tucked behind a summary that states how many there are; a short one is shown as it is. */
+function Collapsible({ count, noun, children }: { count: number; noun: string; children: ReactNode }): ReactNode {
+  if (count <= 5) return <>{children}</>
+  return (
+    <details className="insight-more">
+      <summary>Show all {count} {noun}</summary>
+      {children}
+    </details>
   )
 }
 
@@ -407,107 +452,135 @@ export default function Intelligence({ today, computedAt }: { today: string; com
   const findings = (clusters ?? []).filter(isFinding)
   const heldBack = (clusters ?? []).length - findings.length
 
+  const batteryIntro = (
+    <details className="tip">
+      <summary>What these questions are</summary>
+      <p>
+        These are the questions the app asks of your own records, and the only ones. Each needs a certain amount
+        recorded before it can be looked at, and until then it lists what it is still short of in place of a figure.
+        Ten questions with nothing behind them yet is the ordinary state of a new set of records.
+      </p>
+      <p>
+        Nothing is held back from you: as soon as one of them has enough behind it, it appears below with its figure,
+        how sure the app is of it, and what it cannot tell you — three separate things.
+      </p>
+    </details>
+  )
+
   return (
     <section className="intelligence">
       {heading}
 
-      <h2>What I have learned about your merchants</h2>
-      {taught === null ? <p role="status">Loading what has been learned…</p> : (
-        <>
-          {learned.length === 0 && (
-            <div role="note" className="notice">
-              <p>
-                Nothing learned yet. A merchant&apos;s category becomes the default once you have corrected it the same way {times(CORRECTIONS_NEEDED)}.
-                {learning.length === 0
-                  ? ' So far you have not corrected any merchant, so there is nothing to go on.'
-                  : ` ${plural(learning.length, 'merchant has', 'merchants have')} one correction so far.`}
-              </p>
-              <p>
-                To start: in <a href="#/transactions">Transactions</a>, name the merchant on a purchase and set its category, then do the same
-                on a second purchase from that merchant.
-              </p>
-            </div>
-          )}
-          {learned.length > 0 && (
-            <ul className="intelligence-list" aria-label="Learned merchants">
-              {learned.map((t) => (
-                <li key={t.merchantId}>
-                  {t.merchant}: {t.category}. Corrected {times(t.corrections)}, most recently on {formatSpanishDate(epochMsToIso(t.lastAt))}.
-                </li>
-              ))}
-            </ul>
-          )}
-          {learning.length > 0 && (
-            <>
-              <h3>Not enough corrections yet</h3>
-              <ul className="intelligence-list" aria-label="Merchants still being learned">
-                {learning.map((t) => (
-                  <li key={t.merchantId}>
-                    {t.merchant}: {t.category}. Corrected {times(t.corrections)}; {CORRECTIONS_NEEDED - t.corrections} more of the same
-                    correction and it becomes the default.
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </>
-      )}
-
-      <h2>Purchases you marked as not worth it</h2>
-      <div className="actions" role="group" aria-label="Period">
-        <button type="button" className="btn" aria-pressed={period === 'all'} onClick={() => setPeriod('all')}>All time</button>
-        <button type="button" className="btn" aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>{formatMonthTitle(month)}</button>
+      <div className="card insight-card">
+        <h2>What I have learned about your merchants</h2>
+        {taught === null ? <p role="status">Loading what has been learned…</p> : (
+          <>
+            <p className="insight-summary">
+              {plural(learned.length, 'merchant', 'merchants')} learned{learning.length > 0 ? `, ${learning.length} still being learned` : ''}
+            </p>
+            {learned.length === 0 && (
+              <div role="note" className="notice">
+                <p>
+                  Nothing learned yet. A merchant&apos;s category becomes the default once you have corrected it the same way {times(CORRECTIONS_NEEDED)}.
+                  {learning.length === 0
+                    ? ' So far you have not corrected any merchant, so there is nothing to go on.'
+                    : ` ${plural(learning.length, 'merchant has', 'merchants have')} one correction so far.`}
+                </p>
+                <p>
+                  To start: in <a href="#/transactions">Transactions</a>, name the merchant on a purchase and set its category, then do the same
+                  on a second purchase from that merchant.
+                </p>
+              </div>
+            )}
+            {learned.length > 0 && (
+              <>
+                <details className="tip">
+                  <summary>What counts as learned</summary>
+                  <p>A merchant&apos;s category becomes the default once you have corrected it the same way {times(CORRECTIONS_NEEDED)}.</p>
+                </details>
+                <Collapsible count={learned.length} noun="learned merchants">
+                  <ul className="intelligence-list insight-list" aria-label="Learned merchants">
+                    {learned.map((t) => (
+                      <li key={t.merchantId}>
+                        {t.merchant}: {t.category}. Corrected {times(t.corrections)}, most recently on {formatSpanishDate(epochMsToIso(t.lastAt))}.
+                      </li>
+                    ))}
+                  </ul>
+                </Collapsible>
+              </>
+            )}
+            {learning.length > 0 && (
+              <>
+                <h3>Not enough corrections yet</h3>
+                <Collapsible count={learning.length} noun="merchants still being learned">
+                  <ul className="intelligence-list insight-list" aria-label="Merchants still being learned">
+                    {learning.map((t) => (
+                      <li key={t.merchantId}>
+                        {t.merchant}: {t.category}. Corrected {times(t.corrections)}; {CORRECTIONS_NEEDED - t.corrections} more of the same
+                        correction and it becomes the default.
+                      </li>
+                    ))}
+                  </ul>
+                </Collapsible>
+              </>
+            )}
+          </>
+        )}
       </div>
-      {clusters === null ? <p role="status">Loading your answers…</p> : (
-        <>
-          {clusters.length === 0 && (
-            <div role="note" className="notice">
-              <p>
-                Nothing to show for {periodName}: no purchase is marked as not worth it. Counts appear here once you have answered
-                &quot;Worth it?&quot; on a few purchases; each group needs at least {MIN_REGRETTED} marked not worth it out of at least {MIN_ANSWERED} you
-                answered.
-              </p>
-            </div>
-          )}
-          {clusters.length > 0 && findings.length === 0 && (
-            <div role="note" className="notice">
-              <p>
-                Not enough to say anything yet for {periodName}. A group is shown once at least {MIN_REGRETTED} of its purchases are marked
-                not worth it, out of at least {MIN_ANSWERED} you answered.
-              </p>
-            </div>
-          )}
-          {findings.length > 0 && (
-            <ul className="intelligence-list" aria-label={`Not worth it, ${periodName}`}>
-              {findings.map((c) => (
-                <li key={`${c.by}:${c.key}`}>
-                  {DIMENSION[c.by]}: {c.label}. {c.regretted} of {c.total} answered purchases marked not worth it, {formatEur(c.cents)} in total
-                  ({periodName}).
-                </li>
-              ))}
-            </ul>
-          )}
-          {findings.length > 0 && heldBack > 0 && (
-            <p>{plural(heldBack, 'other group is', 'other groups are')} not shown: each has fewer than {MIN_REGRETTED} marked not worth it, or fewer than {MIN_ANSWERED} answered.</p>
-          )}
-        </>
-      )}
 
-      <section className="battery" aria-labelledby="battery-heading">
+      <div className="card insight-card">
+        <h2>Purchases you marked as not worth it</h2>
+        <div className="actions insight-period" role="group" aria-label="Period">
+          <button type="button" className="btn" aria-pressed={period === 'all'} onClick={() => setPeriod('all')}>All time</button>
+          <button type="button" className="btn" aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>{formatMonthTitle(month)}</button>
+        </div>
+        {clusters === null ? <p role="status">Loading your answers…</p> : (
+          <>
+            <p className="insight-summary">
+              {plural(findings.length, 'group', 'groups')} shown{heldBack > 0 ? `, ${heldBack} held back` : ''}
+            </p>
+            {clusters.length === 0 && (
+              <div role="note" className="notice">
+                <p>
+                  Nothing to show for {periodName}: no purchase is marked as not worth it. Counts appear here once you have answered
+                  &quot;Worth it?&quot; on a few purchases; each group needs at least {MIN_REGRETTED} marked not worth it out of at least {MIN_ANSWERED} you
+                  answered.
+                </p>
+              </div>
+            )}
+            {clusters.length > 0 && findings.length === 0 && (
+              <div role="note" className="notice">
+                <p>
+                  Not enough to say anything yet for {periodName}. A group is shown once at least {MIN_REGRETTED} of its purchases are marked
+                  not worth it, out of at least {MIN_ANSWERED} you answered.
+                </p>
+              </div>
+            )}
+            {findings.length > 0 && (
+              <Collapsible count={findings.length} noun="groups">
+                <ul className="intelligence-list insight-list" aria-label={`Not worth it, ${periodName}`}>
+                  {findings.map((c) => (
+                    <li key={`${c.by}:${c.key}`}>
+                      {DIMENSION[c.by]}: {c.label}. {c.regretted} of {c.total} answered purchases marked not worth it, {formatEur(c.cents)} in total
+                      ({periodName}).
+                    </li>
+                  ))}
+                </ul>
+              </Collapsible>
+            )}
+            {findings.length > 0 && heldBack > 0 && (
+              <p className="muted">{plural(heldBack, 'other group is', 'other groups are')} not shown: each has fewer than {MIN_REGRETTED} marked not worth it, or fewer than {MIN_ANSWERED} answered.</p>
+            )}
+          </>
+        )}
+      </div>
+
+      <section className="battery card insight-card" aria-labelledby="battery-heading">
         <h2 id="battery-heading">{BATTERY.length} questions about your spending</h2>
-        <p>
-          These are the questions the app asks of your own records, and the only ones. Each needs a certain amount
-          recorded before it can be looked at, and until then it lists what it is still short of in place of a figure.
-          Ten questions with nothing behind them yet is the ordinary state of a new set of records.
-        </p>
-        <p>
-          Nothing is held back from you: as soon as one of them has enough behind it, it appears below with its figure,
-          how sure the app is of it, and what it cannot tell you — three separate things.
-        </p>
-        {batteryError !== null && <div role="alert" className="notice notice-refusal"><p>{batteryError}</p></div>}
+        {batteryError !== null && <>{batteryIntro}<div role="alert" className="notice notice-refusal"><p>{batteryError}</p></div></>}
         {batteryError === null && (battery === null
-          ? <p role="status">Loading what your records can answer…</p>
-          : <Battery rows={battery.rows} judged={battery.judged} />)}
+          ? <>{batteryIntro}<p role="status">Loading what your records can answer…</p></>
+          : <Battery rows={battery.rows} judged={battery.judged} intro={batteryIntro} />)}
       </section>
     </section>
   )

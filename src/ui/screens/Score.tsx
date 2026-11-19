@@ -11,6 +11,7 @@ import { GOAL_MONTHS, goalWindow } from '../../goals/window'
 import { addDays, monthKeyOf } from '../../lib/dates'
 import { divRound } from '../../lib/money'
 import { budgetAwareness, goalProgress, improvement, learning, savingsConsistency, spendingAwareness, type Component } from '../../score/components'
+import './insights.css'
 import { moneyScore, type ComponentId, type MoneyScore, type ScoredComponent } from '../../score/score'
 
 /** Completed months the series-based measures look back over. Improvement needs six of them to have spending, so this leaves room for gaps. */
@@ -89,21 +90,40 @@ function Item({ item }: { item: ScoredComponent }): ReactNode {
   const c = item.component
   return (
     <li className="score-item">
-      <h3>{item.label}</h3>
-      <dl>
-        <dt>Status</dt>
-        <dd>{c.kind === 'measured' ? `Measured: ${c.score} out of 100` : 'Not yet measured'}</dd>
-        <dt>Weight</dt>
-        <dd>{item.weight}</dd>
-        <dt>Inputs</dt>
-        <dd>{c.kind === 'measured' ? c.inputs : c.why}</dd>
-        <dt>Arithmetic</dt>
-        <dd>
-          {c.kind === 'measured'
-            ? `${c.score} × ${item.weight} = ${c.score * item.weight}`
-            : 'Left out of the sum and out of the divisor. It is not counted as 0.'}
-        </dd>
-      </dl>
+      <div className="score-row">
+        <h3>{item.label}</h3>
+        <span className="muted score-weight">Weight {item.weight}</span>
+      </div>
+      {c.kind === 'measured'
+        ? (
+          <div className="score-bar">
+            <progress className="meter" max={100} value={c.score} aria-label={`${item.label}: ${c.score} out of 100`} />
+            <span className="score-points">{c.score}</span>
+          </div>
+        )
+        : (
+          <>
+            <p className="score-waiting"><strong>Not yet measured</strong></p>
+            <p className="muted score-why">{c.why}</p>
+          </>
+        )}
+      <details className="tip">
+        <summary>How it was worked out</summary>
+        <dl>
+          <dt>Status</dt>
+          <dd>{c.kind === 'measured' ? `Measured: ${c.score} out of 100` : 'Not yet measured'}</dd>
+          <dt>Weight</dt>
+          <dd>{item.weight}</dd>
+          <dt>Inputs</dt>
+          <dd>{c.kind === 'measured' ? c.inputs : c.why}</dd>
+          <dt>Arithmetic</dt>
+          <dd>
+            {c.kind === 'measured'
+              ? `${c.score} × ${item.weight} = ${c.score * item.weight}`
+              : 'Left out of the sum and out of the divisor. It is not counted as 0.'}
+          </dd>
+        </dl>
+      </details>
     </li>
   )
 }
@@ -113,13 +133,42 @@ function Total({ result }: { result: MoneyScore }): ReactNode {
   const sum = result.components.reduce((n, c) => n + (c.component.kind === 'measured' ? c.component.score * c.weight : 0), 0)
   const rounded = divRound(sum, result.weightUsed)
   return (
-    <>
+    <div className="card">
       <h2>How the total is worked out</h2>
-      <p>Weight measured: {result.weightUsed} of {all}. Only what could be measured is added up, and the total is divided by the weight of exactly those parts.</p>
-      {rounded > (result.score ?? 0)
-        ? <p>{sum} ÷ {result.weightUsed}, rounded to a whole number, would be {rounded}. It is shown as {result.score} because 100 appears only when every measured part scored 100.</p>
-        : <p>{sum} ÷ {result.weightUsed}, rounded to a whole number, gives {result.score}. A score of 100 appears only when every measured part scored 100.</p>}
-    </>
+      <details className="tip">
+        <summary>Show the arithmetic</summary>
+        <p>Weight measured: {result.weightUsed} of {all}. Only what could be measured is added up, and the total is divided by the weight of exactly those parts.</p>
+        {rounded > (result.score ?? 0)
+          ? <p>{sum} ÷ {result.weightUsed}, rounded to a whole number, would be {rounded}. It is shown as {result.score} because 100 appears only when every measured part scored 100.</p>
+          : <p>{sum} ÷ {result.weightUsed}, rounded to a whole number, gives {result.score}. A score of 100 appears only when every measured part scored 100.</p>}
+      </details>
+    </div>
+  )
+}
+
+/**
+ * The total as a ring. The circle's path length is declared as 100, so the drawn arc is simply the score: a dash of
+ * `score` units followed by a gap of 100. Nothing measured draws no arc and no number, never a 0.
+ */
+function Ring({ score }: { score: number | null }): ReactNode {
+  if (score === null) {
+    return (
+      <div className="score-ring score-ring-empty" role="img" aria-label="No Money Score yet: nothing can be measured so far">
+        <span aria-hidden="true">–</span>
+      </div>
+    )
+  }
+  return (
+    <svg className="score-ring" viewBox="0 0 120 120" role="img" aria-label={`Your Money Score is ${score} out of 100`}>
+      <circle className="ring-track" cx="60" cy="60" r="52" fill="none" strokeWidth="10" />
+      {score > 0 && (
+        <circle
+          className="ring-arc" cx="60" cy="60" r="52" fill="none" strokeWidth="10" strokeLinecap="round"
+          pathLength="100" strokeDasharray={`${score} 100`} transform="rotate(-90 60 60)"
+        />
+      )}
+      <text className="ring-number" x="60" y="60" textAnchor="middle" dominantBaseline="central">{score}</text>
+    </svg>
   )
 }
 
@@ -148,24 +197,29 @@ export default function Score({ today, computedAt }: { today: string; computedAt
   return (
     <section className="score">
       {heading}
-      {result.score === null
-        ? (
-          <>
-            <p>
-              Your Money Score cannot be given yet. Nothing can be measured from your records so far, so there is no number to show.
-              This is the normal starting point, not a result.
-            </p>
-            {recorded
-              ? <p>Your records are in, but they do not yet cover enough to measure anything: most parts need a few completed months. Each of the six parts below says what it is waiting for.</p>
-              : <p>To begin, <a href="#/import">import your bank statements</a>. Each of the six parts below says what it is waiting for.</p>}
-          </>
-        )
-        : <p>Your Money Score: {result.score} out of 100</p>}
+      <div className="card score-hero">
+        <Ring score={result.score} />
+        {result.score === null
+          ? (
+            <>
+              <p>
+                Your Money Score cannot be given yet. Nothing can be measured from your records so far, so there is no number to show.
+                This is the normal starting point, not a result.
+              </p>
+              {recorded
+                ? <p>Your records are in, but they do not yet cover enough to measure anything: most parts need a few completed months. Each of the six parts below says what it is waiting for.</p>
+                : <p>To begin, <a href="#/import">import your bank statements</a>. Each of the six parts below says what it is waiting for.</p>}
+            </>
+          )
+          : <p className="score-caption">Your Money Score: {result.score} out of 100</p>}
+      </div>
+      <div className="card">
+        <h2>The six parts</h2>
+        <ol aria-label="The six parts of the Money Score" className="score-items">
+          {result.components.map((item) => <Item key={item.id} item={item} />)}
+        </ol>
+      </div>
       {result.score !== null && <Total result={result} />}
-      <h2>The six parts</h2>
-      <ol aria-label="The six parts of the Money Score" className="score-items">
-        {result.components.map((item) => <Item key={item.id} item={item} />)}
-      </ol>
     </section>
   )
 }
