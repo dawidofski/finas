@@ -42,7 +42,7 @@ const MESSAGES = {
   legacyXls:
     'This is an older Excel format (.xls), which cannot be imported. The export ING produces is the newer format, so download your movements from ING again and choose that file.',
   unsupported:
-    'PDF and CSV files cannot be imported yet. In ING, export your movements as an Excel spreadsheet and choose that file instead.',
+    'This PDF or CSV file is not one the app reads. For bank movements, export them from ING as an Excel spreadsheet and choose that file. The one CSV it does read is a Trading 212 history file.',
   unreadable:
     'The spreadsheet could be opened, but its contents could not be read. It may have been changed after ING exported it. Download your movements from ING again and choose the new file.',
   tooManyRows:

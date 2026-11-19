@@ -72,6 +72,34 @@ describe('Import screen', () => {
     expect(pwa.resumeReload).toHaveBeenCalledTimes(1)
   })
 
+  it('takes a Trading 212 history file here too, sends it to Investments, and writes no bank transaction', async () => {
+    // Every row is invented.
+    const csv = [
+      'Action,Time (UTC),ISIN,Ticker,Name,Notes,ID,No. of shares,Price / share,Currency (Price / share),Exchange rate,Result,Currency (Result),Gross Total,Currency (Gross Total),Withholding tax,Currency (Withholding tax),Currency conversion fee,Currency (Currency conversion fee),Record Date',
+      'Deposit,2026-01-05 10:00:00+00:00,,,,"Bank Transfer",dep-1,,,,,,,300.00,"EUR",,,,,',
+      'Market buy,2026-01-05 10:05:00+00:00,XX0000000001,EJEM,"Empresa Ejemplo",,B1,10.0000000000,10.00,EUR,1.00,,,100.00,"EUR",,,0.15,"EUR",',
+    ].join('\n')
+    render(<Import />)
+    pick(fileOf(new TextEncoder().encode(csv), 'whatever-name.csv'))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/That is a Trading 212 file, so it went to Investments\. Added 2 rows\./))
+    expect(screen.getByRole('link', { name: 'See your investments' })).toHaveAttribute('href', '#/investments')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(await db.transactions.count()).toBe(0)
+    expect((await db.settings.get('singleton'))?.investments).toHaveLength(2)
+    // The same file again adds nothing and says so.
+    pick(fileOf(new TextEncoder().encode(csv), 'whatever-name.csv'))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/Nothing new: all 2 rows were already there/))
+  })
+
+  it('still refuses a CSV that is not a Trading 212 file, and says which CSV it does read', async () => {
+    render(<Import />)
+    pick(fileOf(new TextEncoder().encode('fecha;importe\n01/01/2026;-5,00\n'), 'banco.csv'))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/Excel spreadsheet/)
+    expect(alert.textContent).toMatch(/Trading 212 history file/)
+    expect((await db.settings.get('singleton'))?.investments ?? []).toHaveLength(0)
+  })
+
   it('saves a correction chosen in the preview as an annotation', async () => {
     render(<Import />)
     pick(fileOf(statement({ moves: BASE, opening: 100000 })))

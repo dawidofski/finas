@@ -7,6 +7,7 @@ import { commitPreview } from '../../import/commit'
 import { ImportError } from '../../import/detect'
 import { REVIEW_REASON_TEXT } from '../../import/dedup'
 import { buildPreview, type ImportPreview } from '../../import/pipeline'
+import { importTrading212, type ImportOutcome } from '../../investments/store'
 import { MAX_FILE_BYTES, TOO_LARGE_MESSAGE } from '../../import/xlsx'
 import { resumeReload, suspendReload } from '../../reloadHold'
 
@@ -27,6 +28,15 @@ function readBytes(file: File): Promise<Uint8Array> {
     reader.onerror = () => reject(reader.error ?? new Error('read failed'))
     reader.readAsArrayBuffer(file)
   })
+}
+
+/**
+ * A Trading 212 history file, told from a bank statement by its content: it is text whose first line begins with the
+ * export's own first heading. Returns the text when it is one, else null. The file's name is never looked at.
+ */
+function trading212Text(bytes: Uint8Array): string | null {
+  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 64)).replace(/^\uFEFF/, '')
+  return head.startsWith('Action,') ? new TextDecoder('utf-8').decode(bytes) : null
 }
 
 /** A refusal is the sentence the pipeline wrote for the owner; anything else is reported without claiming a cause. */
@@ -73,6 +83,8 @@ const PAGE = 100
 export default function Import(): ReactNode {
   const [stage, setStage] = useState<Stage>({ kind: 'idle' })
   const [error, setError] = useState<string | null>(null)
+  /** The result of a Trading 212 file chosen here: it goes to Investments, not into the bank transactions. */
+  const [broker, setBroker] = useState<ImportOutcome | null>(null)
   const [categories, setCategories] = useState<CategoryRow[]>([])
   const [dragging, setDragging] = useState(false)
   const [shown, setShown] = useState(PAGE)
@@ -105,18 +117,27 @@ export default function Import(): ReactNode {
 
   function reset() {
     pickSeq.current++
-    setStage({ kind: 'idle' }); setError(null); setShown(PAGE)
+    setStage({ kind: 'idle' }); setError(null); setShown(PAGE); setBroker(null)
     if (fileRef.current) fileRef.current.value = ''
   }
 
   async function onFile(file: File | undefined) {
     if (!file || stage.kind === 'saving') return
     const seq = ++pickSeq.current
-    setError(null); setShown(PAGE)
+    setError(null); setShown(PAGE); setBroker(null)
     if (file.size > MAX_FILE_BYTES) { setStage({ kind: 'idle' }); setError(TOO_LARGE_MESSAGE); return }
     setStage({ kind: 'reading' })
     try {
-      const preview = await buildPreview(await readBytes(file), file.name)
+      const bytes = await readBytes(file)
+      const brokerText = trading212Text(bytes)
+      if (brokerText !== null) {
+        // Not a bank statement: its rows are investments. Stored at once (there is nothing to correct in a preview), each row once.
+        const outcome = await importTrading212(brokerText)
+        if (seq !== pickSeq.current) return
+        setStage({ kind: 'idle' }); setBroker(outcome)
+        return
+      }
+      const preview = await buildPreview(bytes, file.name)
       if (seq !== pickSeq.current) return
       setStage({ kind: 'preview', preview, edits: new Map(), acknowledged: false })
     } catch (e) {
@@ -179,12 +200,25 @@ export default function Import(): ReactNode {
             <input id={inputId} ref={fileRef} type="file" accept=".xlsx,.xls,.pdf,.csv" disabled={busy}
                    onChange={(e) => { void onFile(e.target.files?.[0]) }} />
             <p>You can also drop the file here. Choosing a file only checks it: nothing is saved until you confirm.</p>
+            <p>A Trading 212 history file (.csv) can be chosen here too. It is added to Investments straight away.</p>
           </div>
           {stage.kind === 'reading' && <p role="status">Reading the file…</p>}
         </>
       )}
 
       {error && <div role="alert" className="notice notice-refusal"><p>{error}</p></div>}
+
+      {broker && (
+        <div role="status" className="notice">
+          <p>
+            That is a Trading 212 file, so it went to Investments.{' '}
+            {broker.added === 0
+              ? `Nothing new: all ${broker.inFile} rows were already there.`
+              : `Added ${broker.added} ${broker.added === 1 ? 'row' : 'rows'}${broker.already > 0 ? `; ${broker.already} were already there` : ''}.`}{' '}
+            <a href="#/investments">See your investments</a>
+          </p>
+        </div>
+      )}
 
       {(stage.kind === 'preview' || stage.kind === 'saving') && (
         <PreviewView
