@@ -265,6 +265,8 @@ export interface SettingsRow {
    * Kept on the settings row so it travels in a backup and needs no new table. Absent means no rules.
    */
   categoryRules?: CategoryRule[]
+  /** Ids of the rules the app itself has added once. A rule listed here is never added again, so one the owner removed stays removed. */
+  seededRules?: string[]
   /** The owner's mood for a whole day, by ISO date ('YYYY-MM-DD') -> mood id. Absent means none recorded. */
   dayMoods?: Record<string, string>
   /** Rows of imported Trading 212 history files (src/investments). Kept here so they travel in a backup. Absent means none. */

@@ -92,6 +92,14 @@ async function addMissing<T extends { id: string }>(table: EntityTable<T, 'id'>,
 
 const INVESTMENTS_ID = 'cat.investments'
 const TRADING_RULE_ID = 'rule.trading-212'
+/**
+ * Rules added once to an installation, including one that already exists. This owner's bank lists a deposit to the broker as
+ * "Transferencia internacional emitida" and a reference number, never by the broker's name, so the Trading 212 rule alone
+ * files none of them. Each is added a single time (settings.seededRules remembers it); the owner can remove it for good.
+ */
+const ONCE_RULES: ReadonlyArray<{ id: string; contains: string; categoryId: string }> = [
+  { id: 'rule.international-transfer', contains: 'Transferencia internacional emitida', categoryId: INVESTMENTS_ID },
+]
 
 /** Idempotent: safe to call on every launch. The account salt is created once and never replaced. */
 export async function seedDatabase(): Promise<void> {
@@ -114,6 +122,16 @@ export async function seedDatabase(): Promise<void> {
       const rules = settings?.categoryRules ?? []
       if (!rules.some((r) => r.id === TRADING_RULE_ID)) {
         await db.settings.update('singleton', { categoryRules: [...rules, { id: TRADING_RULE_ID, contains: 'trading 212', categoryId: INVESTMENTS_ID }] })
+      }
+    }
+    {
+      const settings = await db.settings.get('singleton')
+      const done = new Set(settings?.seededRules ?? [])
+      const pending = ONCE_RULES.filter((r) => !done.has(r.id))
+      if (settings && pending.length > 0) {
+        const rules = settings.categoryRules ?? []
+        const fresh = pending.filter((r) => !rules.some((x) => x.id === r.id))
+        await db.settings.update('singleton', { categoryRules: [...rules, ...fresh], seededRules: [...done, ...pending.map((r) => r.id)] })
       }
     }
     await addMissing(db.moods, MOODS.map((m, i): MoodRow => ({ ...m, isCustom: false, order: i, archived: false })))

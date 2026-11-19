@@ -159,7 +159,23 @@ describe('seeded investments', () => {
   it('seeds Investments as a savings category with the Trading 212 rule', async () => {
     await seedDatabase()
     expect(await db.categories.get('cat.investments')).toMatchObject({ name: 'Investments', kind: 'savings', isUserCreated: false })
-    expect((await getSettings()).categoryRules).toEqual([{ id: 'rule.trading-212', contains: 'trading 212', categoryId: 'cat.investments' }])
+    expect((await getSettings()).categoryRules).toEqual([
+      { id: 'rule.trading-212', contains: 'trading 212', categoryId: 'cat.investments' },
+      { id: 'rule.international-transfer', contains: 'Transferencia internacional emitida', categoryId: 'cat.investments' },
+    ])
+  })
+
+  it('gives an installation that already exists the international-transfer rule once, and never again after the owner removes it', async () => {
+    await seedDatabase()
+    // An installation from before the rule existed: it has the Trading 212 rule and no record of once-added rules.
+    await db.settings.update('singleton', { categoryRules: [{ id: 'rule.trading-212', contains: 'trading 212', categoryId: 'cat.investments' }], seededRules: undefined })
+    await seedDatabase()
+    expect((await getSettings()).categoryRules?.map((r) => r.id)).toEqual(['rule.trading-212', 'rule.international-transfer'])
+    await seedDatabase()
+    expect((await getSettings()).categoryRules).toHaveLength(2)
+    await db.settings.update('singleton', { categoryRules: [] })
+    await seedDatabase()
+    expect((await getSettings()).categoryRules).toEqual([])
   })
   it('a second seed changes nothing, and a removed rule does not come back', async () => {
     await seedDatabase()
