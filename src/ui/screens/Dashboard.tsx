@@ -48,7 +48,7 @@ function Comparison({ previous, current, partial, days }: { previous: MonthPoint
   const incomeKnown = current.incomeBasis !== 'none' && previous.incomeBasis !== 'none'
   const estimate = current.incomeBasis === 'trailing-average' || previous.incomeBasis === 'trailing-average'
   return (
-    <>
+    <div className="card">
       <h2>Compared with {last}</h2>
       <ul className="dashboard-changes">
         {line('Spending', 'spentCents', false)}
@@ -57,6 +57,8 @@ function Comparison({ previous, current, partial, days }: { previous: MonthPoint
         {incomeKnown && line('Left over', 'netCents', estimate)}
       </ul>
       {!incomeKnown && <p>Income and what is left over are not compared, because income is not recorded for both months.</p>}
+      <details className="tip">
+        <summary>About this comparison</summary>
       {partial
         ? (
           <p>
@@ -65,7 +67,8 @@ function Comparison({ previous, current, partial, days }: { previous: MonthPoint
           </p>
         )
         : <p>Both months are complete.</p>}
-    </>
+      </details>
+    </div>
   )
 }
 
@@ -151,12 +154,12 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
     <section className="dashboard">
       {heading}
       <h2>{title}</h2>
-      <p>{partial ? `Figures up to ${formatSpanishDate(today)}.` : 'Figures for the whole month.'}</p>
-      <ul className="dashboard-figures">
-        <li>{incomeLine}</li>
-        <li>Spent: {formatEur(current.spentCents)}</li>
-        <li>Saved: {formatEur(current.savedCents)}</li>
-        <li>{netLine}</li>
+      <p className="muted">{partial ? `Figures up to ${formatSpanishDate(today)}.` : 'Figures for the whole month.'}</p>
+      <ul className="dashboard-figures stat-grid">
+        <li className="stat stat-line">{incomeLine}</li>
+        <li className="stat stat-line">Spent: {formatEur(current.spentCents)}</li>
+        <li className="stat stat-line">Saved: {formatEur(current.savedCents)}</li>
+        <li className="stat stat-line">{netLine}</li>
       </ul>
       {current.uncategorisedCents < 0 && (
         <p>
@@ -176,13 +179,13 @@ export default function Dashboard({ today, computedAt, month: shown }: { today: 
         ? <Comparison previous={previous} current={current} partial={partial} days={Number(today.slice(8, 10))} />
         : <p>There is no earlier month with records to compare {title} with.</p>}
 
-      {current.spentCents > 0 && <Bars points={split} title={`Where ${title} spending went`} />}
+      {current.spentCents > 0 && <div className="card"><Bars points={split} title={`Where ${title} spending went`} /></div>}
 
       {run.length >= 2
-        ? <Line points={run.map((p) => ({ label: formatMonthTitle(p.month), cents: p.spentCents }))} title={partial ? 'Spending by month (the latest month is still running)' : 'Spending by month'} />
+        ? <div className="card"><Line points={run.map((p) => ({ label: formatMonthTitle(p.month), cents: p.spentCents }))} title={partial ? 'Spending by month (the latest month is still running)' : 'Spending by month'} /></div>
         : <p>A line of your spending month by month appears once two months in a row have records. You have {run.length} so far.</p>}
 
-      <p><a href="#/budget">Open the budget</a> · <a href="#/transactions">See your transactions</a></p>
+      <p className="link-row"><a className="btn" href="#/budget">Open the budget</a> · <a className="btn" href="#/transactions">See your transactions</a></p>
     </section>
   )
 }

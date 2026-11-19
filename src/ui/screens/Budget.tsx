@@ -373,7 +373,7 @@ export default function Budget({ today, initialMonth }: { today: string; initial
           <div className="stat-grid">
             <div className="stat"><span className="stat-label">Income</span><span className="stat-value">{formatEur(income.cents)}</span>{note && <span className="stat-note">{note}</span>}</div>
             <div className="stat"><span className="stat-label">Spent</span><span className="stat-value">{formatEur(totals.spentCents)}</span>{ofIncome(totals.spentCents) !== null && <span className="stat-note">{formatBp(ofIncome(totals.spentCents) ?? 0)} of income</span>}</div>
-            <div className="stat"><span className="stat-label">Left</span><span className="stat-value">{formatEur(income.cents - totals.spentCents)}</span></div>
+            <div className="stat"><span className="stat-label">Left over</span><span className="stat-value">{income.basis === 'none' ? 'Not known yet' : formatEur(income.cents - totals.spentCents - totals.savingsCents)}</span><span className="stat-note">income less spending and saving</span></div>
             <div className="stat"><span className="stat-label">Saved</span><span className="stat-value">{formatEur(totals.savingsCents)}</span>{totals.savingsRateBp !== null && <span className="stat-note">{formatBp(totals.savingsRateBp)} of income</span>}</div>
           </div>
           <h2>Your plan</h2>

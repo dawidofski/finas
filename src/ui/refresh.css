@@ -62,6 +62,18 @@ details.tip[open] > summary { margin-bottom: 0.25rem; }
 details.tip > :not(summary) { background: var(--surface); border-radius: 12px; padding: 0.5rem 0.75rem; margin: 0 0 0.5rem; }
 .muted { color: var(--muted); }
 
+/* Dashboard: the month's figures as tiles, the changes as a short list, each chart on its own card. */
+.dashboard-figures, .dashboard-changes { list-style: none; padding: 0; }
+.screen ul.dashboard-figures, .screen ul.dashboard-changes { padding-left: 0; }
+.stat-line { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.dashboard-changes li { padding: 0.5rem 0; border-bottom: 1px solid var(--hair); font-variant-numeric: tabular-nums; }
+.dashboard-changes li:last-child { border-bottom: 0; }
+.card > h2:first-child, .card > .chart:first-child { margin-top: 0; }
+.card .chart { margin-bottom: 0; }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; color: transparent; }
+.link-row .btn { color: var(--text); flex: 1 1 10rem; }
+
 @media (min-width: 768px) {
   .screen { padding: 1.5rem 2rem 6rem; margin: 0; }
   .nav { border-right: 1px solid var(--hair); }
@@ -72,4 +84,17 @@ details.tip > :not(summary) { background: var(--surface); border-radius: 12px; p
   .tabs { margin: 0 0 1rem; padding: 0.25rem 0; }
   .fab { bottom: 1.5rem; right: 1.5rem; }
   .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Transactions on a phone: each row reads as two lines (date and amount, then what it was) instead of a wide table. */
+@media (max-width: 767px) {
+  .transactions table[aria-label='Transactions'] { display: block; min-width: 0; }
+  .transactions table[aria-label='Transactions'] thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .transactions table[aria-label='Transactions'] tbody { display: block; }
+  .transactions tr.tx-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; padding: 0.625rem 0; border-bottom: 1px solid var(--hair); }
+  .transactions tr.tx-row td { border: 0; padding: 0; }
+  .transactions tr.tx-row td:nth-child(1) { grid-column: 1; grid-row: 1; color: var(--muted); font-size: 0.8125rem; }
+  .transactions tr.tx-row td:nth-child(2) { grid-column: 1; grid-row: 2; min-width: 0; overflow-wrap: anywhere; }
+  .transactions tr.tx-row td:nth-child(3) { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-weight: 700; }
+  .tx-filters { grid-template-columns: 1fr; }
 }
