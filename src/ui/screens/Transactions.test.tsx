@@ -242,14 +242,17 @@ describe('Transactions screen', () => {
     let dialog = await openEditor('Quiet')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(await db.annotations.count()).toBe(0)
+    // Nothing about the transaction changed, and no learning event is written. The one thing recorded is that it was looked at.
+    const quiet = await db.annotations.toArray()
+    expect(quiet).toHaveLength(1)
+    expect(quiet[0]).toMatchObject({ reviewed: true, categoryId: null, merchantId: null, note: null, amountCentsOverride: null, descriptionOverride: null })
     expect(await db.learningEvents.count()).toBe(0)
 
     dialog = await openEditor('Quiet')
     change('Amount in euros', 'twelve', dialog)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/amount/i)
-    expect(await db.annotations.count()).toBe(0)
+    expect((await db.annotations.toArray())[0]?.amountCentsOverride).toBeNull()
   })
 
   it('puts a field back to the bank value by clearing its override', async () => {
@@ -365,25 +368,33 @@ describe('Transactions editor: amounts, payment method and category label', () =
     change('Amount in euros', '-1.850,00', dialog)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(await db.annotations.count()).toBe(0)
+    // The amount was not changed: no override and no learning event (the save only marks the transaction as checked).
+    expect((await db.annotations.toArray()).map((a) => a.amountCentsOverride)).toEqual([null])
     expect(await db.learningEvents.count()).toBe(0)
     dialog = await openEditor('Same')
     change('Amount in euros', '1,200', dialog)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/amount/i)
-    expect(await db.annotations.count()).toBe(0)
+    expect((await db.annotations.toArray()).map((a) => a.amountCentsOverride)).toEqual([null])
   })
 
-  it('records a payment-method correction as exactly one paymentMethod event', async () => {
+  it('has no payment-method field, and says beside the merchant list how a merchant is added', async () => {
     await db.transactions.add(tx({ description: 'Pay method' }))
     render(<Transactions />)
     const dialog = await openEditor('Pay method')
-    change('Payment method', 'Tarjeta', dialog)
+    expect(within(dialog).queryByLabelText('Payment method')).toBeNull()
+    expect(dialog.textContent).toMatch(/Not in the list\? Type its name under .Name this merchant., a little further down/)
+  })
+
+  it('lists what has not been checked first and what has been checked after it, and saving moves a transaction across', async () => {
+    await db.transactions.bulkAdd([tx({ description: 'First' }), tx({ description: 'Second' })])
+    render(<Transactions />)
+    const table = await screen.findByRole('table', { name: 'Transactions' })
+    const groups = () => [...table.querySelectorAll('tbody.tx-group')].map((g) => `${g.getAttribute('data-label')}: ${[...g.querySelectorAll('.tx-open')].map((b) => b.textContent).sort().join(', ')}`)
+    await waitFor(() => expect(groups()).toEqual(['Not checked (2): First, Second']))
+    const dialog = await openEditor('Second')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    const events = await db.learningEvents.toArray()
-    expect(events.map((e) => e.type)).toEqual(['paymentMethod'])
-    expect(events[0]?.payload).toEqual({ transactionId: 'tx1', field: 'paymentMethod', old: null, new: 'Tarjeta' })
+    await waitFor(() => expect(groups()).toEqual(['Not checked (1): First', 'Checked (1): Second']))
   })
 
   it("labels the empty category option for what it does: back to ING's category when there is a pair, else none", async () => {

@@ -475,8 +475,10 @@ export default function Transactions(): ReactNode {
                     <th scope="col" className="num">Amount</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {visible.map((r) => {
+                {[{ key: 'unchecked', label: 'Not checked', rows: visible.filter((r) => !r.reviewed) }, { key: 'checked', label: 'Checked', rows: visible.filter((r) => r.reviewed) }]
+                  .filter((g) => g.rows.length > 0).map((g) => (
+                <tbody key={g.key} className="tx-group" data-group={g.key} data-label={`${g.label} (${g.rows.length})`} aria-label={g.label}>
+                  {g.rows.map((r) => {
                     const deleted = r.deletedAt !== null
                     const category = categoryName(r.categoryId)
                     const merchant = r.merchantId ? data.merchants.find((m) => m.id === r.merchantId)?.canonicalName : undefined
@@ -504,6 +506,7 @@ export default function Transactions(): ReactNode {
                     )
                   })}
                 </tbody>
+                ))}
               </table>
             </div>
           )}

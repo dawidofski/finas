@@ -81,12 +81,12 @@ export function buildPatch(bank: TransactionRow, shown: ResolvedTransaction, for
   if (form.categoryId !== (shown.categoryId ?? '')) patch.categoryId = form.categoryId || null
   if (form.merchantId !== (shown.merchantId ?? '')) patch.merchantId = form.merchantId || null
 
-  const method = form.paymentMethod.trim()
-  if (method !== (shown.paymentMethod ?? '')) patch.paymentMethod = method || null
   const note = form.note.trim()
   if (note !== (shown.note ?? '')) patch.note = note || null
   if (form.purchaseReasonId !== shown.purchaseReasonId) patch.purchaseReasonId = form.purchaseReasonId
   if (form.worthwhile !== shown.worthwhile) patch.worthwhile = form.worthwhile
+  // Saving is the owner saying "I have looked at this one": it moves from Not checked to Checked, changed or not.
+  if (!shown.reviewed) patch.reviewed = true
 
   return { ok: true, patch }
 }
@@ -210,6 +210,7 @@ export default function TransactionEditor(props: Props): ReactNode {
               <option value="">None</option>
               {merchants.map((m) => <option key={m.id} value={m.id}>{m.canonicalName}</option>)}
             </select>
+            {props.onNameMerchant && <small>Not in the list? Type its name under &ldquo;Name this merchant&rdquo;, a little further down, and it is added here.</small>}
 
             <label htmlFor={field('amount')}>Amount in euros</label>
             <input id={field('amount')} type="text" inputMode="decimal" value={form.amount} onChange={(e) => set('amount', e.target.value)}
@@ -241,9 +242,6 @@ export default function TransactionEditor(props: Props): ReactNode {
             </select>
             <small>The kind decides which figure this transaction counts in: spending, income, savings, or none of them.
               Changing it changes your budget, in the month the bank dated it. The amount, the sign and that month stay the bank's.</small>
-
-            <label htmlFor={field('method')}>Payment method</label>
-            <input id={field('method')} type="text" value={form.paymentMethod} onChange={(e) => set('paymentMethod', e.target.value)} />
 
             <ReasonChips value={form.purchaseReasonId} onChange={(v) => set('purchaseReasonId', v)} disabled={busy} />
             <WorthwhileButtons value={form.worthwhile} onChange={(v) => set('worthwhile', v)} disabled={busy} />

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { AccountsCard } from './AccountsCard'
 import { accountBalances } from '../accounts/balances'
+import { importTrading212 } from '../investments/store'
 import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AccountRow, TransactionRow } from '../db/schema'
@@ -63,6 +64,22 @@ describe('accounts card', () => {
     const items = screen.getAllByRole('listitem').map((li) => li.textContent?.replace(/ /g, ' '))
     expect(items).toEqual([`Ahorro ejemploBalance on 30/09/2026${formatEur(800000)}`, `Cuenta ejemploBalance on 10/11/2026${formatEur(123456)}`])
     expect(document.body.textContent?.replace(/ /g, ' ')).toContain(`Together${formatEur(923456)}`)
+  })
+
+  it('adds Trading 212 as a line, at what the holdings cost, and counts it in the sum', async () => {
+    await db.accounts.add(account('a', 'Cuenta ejemplo'))
+    await db.transactions.add(tx('a', '2026-11-10', 123456))
+    // Invented rows: 100,00 bought, nothing sold.
+    await importTrading212([
+      'Action,Time (UTC),ISIN,Ticker,Name,Notes,ID,No. of shares,Price / share,Currency (Price / share),Exchange rate,Result,Currency (Result),Gross Total,Currency (Gross Total),Withholding tax,Currency (Withholding tax),Currency conversion fee,Currency (Currency conversion fee),Record Date',
+      'Market buy,2026-11-05 10:05:00+00:00,XX0000000001,EJEM,"Empresa Ejemplo",,B1,10.0000000000,10.00,EUR,1.00,,,100.00,"EUR",,,,,',
+    ].join('\n'))
+    render(<AccountsCard />)
+    await screen.findByText('Trading 212')
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent?.replace(/\u00a0/g, ' '))
+    expect(items).toEqual([`Cuenta ejemploBalance on 10/11/2026${formatEur(123456)}`, `Trading 212What your holdings cost, to 05/11/2026${formatEur(10000)}`])
+    expect(document.body.textContent?.replace(/\u00a0/g, ' ')).toContain(`Together${formatEur(133456)}`)
+    expect(document.body.textContent).toMatch(/it is a cost,\s+not what they are worth today/)
   })
 
   it('shows no sum for a single account', async () => {

@@ -53,7 +53,7 @@ function DashboardRoute() {
   const now = Date.now()
   const today = epochMsToIso(now)
   // The purchases waiting for a second look sit under the month's figures, so there is no separate screen to remember.
-  return <><Dashboard today={today} computedAt={now} /><DayMood today={today} /><AccountsCard /><WorthIt today={today} embedded /></>
+  return <><AccountsCard /><Dashboard today={today} computedAt={now} /><DayMood today={today} /><WorthIt today={today} embedded /></>
 }
 
 /** Same reading of the clock as the dashboard: the day and the instant together, handed down so no screen reads it. */

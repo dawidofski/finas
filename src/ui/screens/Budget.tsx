@@ -3,6 +3,7 @@ import { db } from '../../db/db'
 import type { BudgetAllocationRow, CategoryRow, SavingsGoalRow } from '../../db/schema'
 import { AllocationError, allocationsFor, deleteAllocation, saveAllocation } from '../../budget/allocations'
 import { monthlyBudget, type BudgetLine, type MonthlyBudget } from '../../budget/month'
+import { CategoryPayments } from '../CategoryPayments'
 import { addDays, formatMonthTitle, formatSpanishDate, monthKeyOf } from '../../lib/dates'
 import { centsToTypedString, divRound, formatBp, formatEur, parseTypedAmount, percentBpOf } from '../../lib/money'
 import './budget-goals.css'
@@ -407,6 +408,7 @@ export default function Budget({ today, initialMonth }: { today: string; initial
                         Plan an amount
                       </button>
                     )}
+                    <CategoryPayments categoryId={l.targetId} label={l.label} month={month} categories={data.categories} onChanged={() => { void reload(true) }} />
                   </li>
                 ))}
               </ul>
