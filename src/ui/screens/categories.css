@@ -1,0 +1,18 @@
+.categories { max-width: 100%; min-width: 0; }
+.categories .cat-card { min-width: 0; }
+.categories .cat-list { list-style: none; margin: 0 0 1rem; padding: 0; }
+.categories .cat-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem;
+  min-width: 0; padding: 0.5rem 0; border-bottom: 1px solid var(--hair);
+}
+.categories .cat-text { flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; }
+.categories .cat-kind { display: block; }
+.categories .cat-row .btn { min-height: 44px; min-width: 44px; }
+.categories .cat-confirm { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.categories .cat-confirm p { margin: 0 0 0.5rem; color: var(--text); }
+.categories form label { display: block; min-width: 0; margin-bottom: 0.75rem; }
+.categories form input[type="text"], .categories form select {
+  display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-height: 44px;
+  margin-top: 0.25rem; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+}
+.categories form .btn { min-height: 44px; }

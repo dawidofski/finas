@@ -1,5 +1,6 @@
+import { ruleCategoryFor } from '../categories/rules'
 import { db } from './db'
-import type { AnnotationRow, LearningEventRow, LearningEventType, TransactionRow } from './schema'
+import type { AnnotationRow, CategoryRule, LearningEventRow, LearningEventType, TransactionRow } from './schema'
 
 /**
  * The resolved view (`transaction + annotation`) and the single annotation write path (§32.1, §34).
@@ -8,12 +9,20 @@ import type { AnnotationRow, LearningEventRow, LearningEventType, TransactionRow
  */
 
 /** ING "category / subcategory" pair -> category id. Keys use the seed's `ingMappings` format. */
-export type CategoryIndex = ReadonlyMap<string, string>
+export interface CategoryIndex extends ReadonlyMap<string, string> {
+  /** The owner's rules and the ids of every category that exists, read together with the pairs. Absent means no rules. */
+  readonly rules?: readonly CategoryRule[]
+  readonly known?: ReadonlySet<string>
+}
+
+class LoadedIndex extends Map<string, string> implements CategoryIndex {
+  constructor(readonly rules: readonly CategoryRule[], readonly known: ReadonlySet<string>) { super() }
+}
 
 const pairKey = (ing: string, ingSub: string) => `${ing} / ${ingSub}`
 
 export interface ResolvedTransaction extends TransactionRow {
-  /** Owner's category, else the category derived from the ING pair (§34.3), else null. */
+  /** Owner's category, else the first matching rule of the owner's, else the category derived from the ING pair (§34.3), else null. */
   categoryId: string | null
   subcategoryId: string | null
   merchantId: string | null
@@ -29,8 +38,10 @@ export interface ResolvedTransaction extends TransactionRow {
 
 /** One query over `categories`, used for a whole batch. */
 export async function buildCategoryIndex(): Promise<CategoryIndex> {
-  const index = new Map<string, string>()
-  for (const c of await db.categories.toArray()) {
+  const categories = await db.categories.toArray()
+  const rules = await db.settings.get('singleton')
+  const index = new LoadedIndex(rules?.categoryRules ?? [], new Set(categories.map((c) => c.id)))
+  for (const c of categories) {
     for (const m of c.ingMappings) {
       const claimed = index.get(m)
       if (claimed !== undefined) {
@@ -46,15 +57,28 @@ export async function categoryIdForIngPair(ing: string, ingSub: string): Promise
   return (await buildCategoryIndex()).get(pairKey(ing, ingSub)) ?? null
 }
 
+/**
+ * The category the app derives for a transaction when the owner has set none: the first matching rule of the owner's
+ * (on the BANK description), else the one for the bank's category pair. Used by `resolve` and by `writeAnnotation`, so the
+ * two cannot disagree.
+ */
+export function derivedCategory(tx: TransactionRow, categoryIndex: CategoryIndex): string | null {
+  const byRule = categoryIndex.rules !== undefined && categoryIndex.known !== undefined
+    ? ruleCategoryFor(tx.description, categoryIndex.rules, categoryIndex.known)
+    : null
+  if (byRule !== null) return byRule
+  return tx.ingCategory !== null && tx.ingSubcategory !== null
+    ? categoryIndex.get(pairKey(tx.ingCategory, tx.ingSubcategory)) ?? null
+    : null
+}
+
 /** Pure. The transaction's bank values with each owner override applied on top. */
 export function resolve(
   tx: TransactionRow,
   ann: AnnotationRow | undefined,
   categoryIndex: CategoryIndex,
 ): ResolvedTransaction {
-  const derived = tx.ingCategory !== null && tx.ingSubcategory !== null
-    ? categoryIndex.get(pairKey(tx.ingCategory, tx.ingSubcategory)) ?? null
-    : null
+  const derived = derivedCategory(tx, categoryIndex)
   const ownerCategory = ann?.categoryId ?? null
   // undefined = no override; an explicit null detaches the round-up link.
   const parentOverride = ann?.roundupParentIdOverride
@@ -178,7 +202,7 @@ export async function writeAnnotation(
       "and a stored one would be indistinguishable from the owner's.",
     )
   }
-  await db.transaction('rw', db.transactions, db.annotations, db.learningEvents, db.categories, async () => {
+  await db.transaction('rw', db.transactions, db.annotations, db.learningEvents, db.categories, db.settings, async () => {
     const tx = await db.transactions.get(transactionId)
     if (tx === undefined) {
       throw new Error(`Cannot annotate transaction ${transactionId}: it does not exist`)
@@ -198,9 +222,7 @@ export async function writeAnnotation(
     if (source === 'owner') {
       const at = Date.now()
       const events: LearningEventRow[] = []
-      const derived = tx.ingCategory !== null && tx.ingSubcategory !== null
-        ? await categoryIdForIngPair(tx.ingCategory, tx.ingSubcategory)
-        : null
+      const derived = derivedCategory(tx, await buildCategoryIndex())
       for (const [field, type] of Object.entries(EVENT_FOR_FIELD) as [keyof typeof EVENT_FOR_FIELD, LearningEventType][]) {
         if (field === 'roundupParentIdOverride') {
           if (before[field] === next[field]) continue

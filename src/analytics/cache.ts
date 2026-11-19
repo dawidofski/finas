@@ -1,5 +1,5 @@
 import { db, ENGINE_VERSION } from '../db/db'
-import type { AnalyticsCacheRow, BudgetAllocationRow, SavingsGoalRow } from '../db/schema'
+import type { AnalyticsCacheRow, BudgetAllocationRow, CategoryRow, SavingsGoalRow } from '../db/schema'
 import { sha256Hex } from '../lib/hash'
 
 /**
@@ -50,6 +50,10 @@ const allocationText = (a: BudgetAllocationRow): string =>
  */
 const goalText = (g: SavingsGoalRow): string =>
   JSON.stringify([g.id, g.name, g.targetCents, g.deadline, g.contributionPercentBp, g.createdAt, g.completedAt, g.archived])
+
+/** One category as text, for the content digest below: every field named, in a fixed order, JSON-escaped (`name` is free text). */
+const categoryText = (c: CategoryRow): string =>
+  JSON.stringify([c.id, c.name, c.parentId, c.kind, c.isUserCreated, c.ingMappings, c.needsReview ?? false])
 
 /**
  * WHICH TABLES A CACHED FIGURE IS COMPUTED FROM, and what this digest therefore has to key on.
@@ -102,7 +106,9 @@ const goalText = (g: SavingsGoalRow): string =>
  *
  * What is still NOT covered, stated rather than left to silence:
  *
- * categories is read by monthlyBudget and is not digested, because today it cannot change under a cached figure. Nothing
+ * categories (and the settings row's categoryRules and dayMoods) ARE digested now, by content: the owner can add and remove categories
+ *   and file purchases by rule, which moves a figure with no transaction changing. The paragraph that follows is the older reasoning,
+ *   kept for the two label tables it still describes. categories used to be read by monthlyBudget and not digested, because it could not change under a cached figure. Nothing
  *   outside seeding and import writes categories, and an import creates a category only alongside at least one new
  *   transaction (commitPreview refuses an import with nothing new), which moves the digest anyway. The same holds for the two
  *   label tables `moods` and `purchaseReasons`, read by the mood and reason breakdowns: seeding writes them and nothing else
@@ -138,11 +144,18 @@ export async function inputsHash(): Promise<string> {
   const transfers = (await db.transfers.toCollection().primaryKeys()).map(String).sort()
   const allocations = (await db.budgetAllocations.toArray()).map(allocationText).sort()
   const goals = (await db.savingsGoals.toArray()).map(goalText).sort()
+  // Categories change in place (a kind, a name, a removal) and rules file purchases under them, so the content of both is
+  // part of the digest, with the day moods that sit beside the rules on the settings row. Absent means empty.
+  const categories = (await db.categories.toArray()).map(categoryText).sort()
+  const settings = await db.settings.get('singleton')
+  const rules = (settings?.categoryRules ?? []).map((r) => JSON.stringify([r.id, r.contains, r.categoryId]))
+  const moods = Object.entries(settings?.dayMoods ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   const joined = [
     `live=${total - deleted}`, `deleted=${deleted}`, `newestDeleted=${newestDeleted}`,
     `annotations=${annotations}`, `newest=${newest}`,
     `transfers=${JSON.stringify(transfers)}`, `allocations=${JSON.stringify(allocations)}`,
     `goals=${JSON.stringify(goals)}`,
+    `categories=${JSON.stringify(categories)}`, `rules=${JSON.stringify(rules)}`, `dayMoods=${JSON.stringify(moods)}`,
   ].join('|')
   return sha256Hex(new TextEncoder().encode(joined))
 }

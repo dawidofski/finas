@@ -12,7 +12,7 @@ export const REFUND_WINDOW_DAYS = 90
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 
 /** Every table either path reads or writes, so a check and the write it guards happen in one transaction. */
-const stores = () => [db.transactions, db.annotations, db.categories, db.transfers]
+const stores = () => [db.transactions, db.annotations, db.categories, db.settings, db.transfers]
 
 /** The kind of the category a purchase is filed under (the owner's correction included), or null when it has none. */
 async function categoryKindFor(categoryId: string | null): Promise<string | null> {

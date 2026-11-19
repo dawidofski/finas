@@ -64,7 +64,7 @@ export function matchMerchant(description: string, merchants: MerchantRow[]): Me
 export async function rememberMerchantName(transactionId: string, canonicalName: string, createdAt: number): Promise<MerchantRow> {
   const name = canonicalName.trim().replace(/\s+/g, ' ')
   if (normalise(name) === '') throw new Error('A merchant needs a name. Nothing was saved.')
-  return db.transaction('rw', [db.merchants, db.transactions, db.annotations, db.learningEvents, db.categories], async () => {
+  return db.transaction('rw', [db.merchants, db.transactions, db.annotations, db.learningEvents, db.categories, db.settings], async () => {
     const tx = await db.transactions.get(transactionId)
     if (!tx) throw new Error('That transaction could not be found. Nothing was saved.')
     // When the bank text has no merchant left, the whole description is the pattern: still specific, never empty.

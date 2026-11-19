@@ -15,7 +15,7 @@ describe('seedDatabase', () => {
     expect(await db.table('categories').count()).toBe(a)
     expect(await db.table('moods').count()).toBe(m)
     expect(await db.table('purchaseReasons').count()).toBe(r)
-    expect(a).toBe(21)
+    expect(a).toBe(22) // 9 parents, 12 bank leaves, and Investments
   })
   it('does not overwrite owner edits on re-seed', async () => {
     await seedDatabase()
@@ -66,7 +66,7 @@ describe('seedDatabase', () => {
     }
     expect(new Set(ING_CATEGORY_MAP.map(m => m.categoryId)).size).toBe(12)
   })
-  it('seeds nine parents with null kind and twelve leaves with a kind, each leaf under its ING parent', async () => {
+  it('seeds nine parents with null kind and thirteen leaves with a kind (twelve from the bank, plus Investments), each leaf under its ING parent', async () => {
     await seedDatabase()
     const all = await db.table('categories').toArray() as CategoryRow[]
     const parents = all.filter(c => c.parentId === null)
@@ -74,7 +74,7 @@ describe('seedDatabase', () => {
     expect(parents.map(p => p.name).sort()).toEqual(
       ['Ahorro','Alimentación','Compras','Educación y salud','Hogar','Movimientos excluidos','Ocio y viajes','Otros gastos','Vehículo y transporte'].sort())
     expect(parents.every(p => p.kind === null)).toBe(true)
-    expect(leaves).toHaveLength(12)
+    expect(leaves).toHaveLength(13)
     expect(leaves.every(l => l.kind !== null)).toBe(true)
     for (const m of ING_CATEGORY_MAP) {
       const leaf = all.find(c => c.id === m.categoryId)!
@@ -152,5 +152,28 @@ describe('seedDatabase', () => {
     ])
     const pets = await db.table('categories').get('cat.pets')
     expect(pets.parentId).toBe('cat.group.compras')
+  })
+})
+
+describe('seeded investments', () => {
+  it('seeds Investments as a savings category with the Trading 212 rule', async () => {
+    await seedDatabase()
+    expect(await db.categories.get('cat.investments')).toMatchObject({ name: 'Investments', kind: 'savings', isUserCreated: false })
+    expect((await getSettings()).categoryRules).toEqual([{ id: 'rule.trading-212', contains: 'trading 212', categoryId: 'cat.investments' }])
+  })
+  it('a second seed changes nothing, and a removed rule does not come back', async () => {
+    await seedDatabase()
+    const before = [await db.categories.toArray(), (await getSettings()).categoryRules]
+    await seedDatabase()
+    expect([await db.categories.toArray(), (await getSettings()).categoryRules]).toEqual(before)
+    await db.settings.update('singleton', { categoryRules: [] })
+    await seedDatabase()
+    expect((await getSettings()).categoryRules).toEqual([])
+  })
+  it('does not overwrite what the owner changed on Investments', async () => {
+    await seedDatabase()
+    await db.categories.update('cat.investments', { kind: 'discretionary' })
+    await seedDatabase()
+    expect((await db.categories.get('cat.investments'))!.kind).toBe('discretionary')
   })
 })

@@ -90,6 +90,9 @@ async function addMissing<T extends { id: string }>(table: EntityTable<T, 'id'>,
   if (missing.length > 0) await table.bulkAdd(missing)
 }
 
+const INVESTMENTS_ID = 'cat.investments'
+const TRADING_RULE_ID = 'rule.trading-212'
+
 /** Idempotent: safe to call on every launch. The account salt is created once and never replaced. */
 export async function seedDatabase(): Promise<void> {
   await db.transaction('rw', [db.categories, db.moods, db.purchaseReasons, db.settings], async () => {
@@ -102,6 +105,17 @@ export async function seedDatabase(): Promise<void> {
       return { id: m.categoryId, name: m.ingSub, parentId, kind: m.kind, isUserCreated: false, ingMappings: [`${m.ing} / ${m.ingSub}`] }
     })
     await addMissing(db.categories, [...parents, ...leaves])
+    if (!(await db.settings.get('singleton'))) await db.settings.add(defaultSettings())
+    // Investments: counted as money put aside, like the round-up category. The Trading 212 rule is added only when the
+    // category is, so an owner who deletes the rule does not get it back at the next start.
+    if ((await db.categories.get(INVESTMENTS_ID)) === undefined) {
+      await db.categories.add({ id: INVESTMENTS_ID, name: 'Investments', parentId: 'cat.group.ahorro', kind: 'savings', isUserCreated: false, ingMappings: [] })
+      const settings = await db.settings.get('singleton')
+      const rules = settings?.categoryRules ?? []
+      if (!rules.some((r) => r.id === TRADING_RULE_ID)) {
+        await db.settings.update('singleton', { categoryRules: [...rules, { id: TRADING_RULE_ID, contains: 'trading 212', categoryId: INVESTMENTS_ID }] })
+      }
+    }
     await addMissing(db.moods, MOODS.map((m, i): MoodRow => ({ ...m, isCustom: false, order: i, archived: false })))
     await addMissing(db.purchaseReasons, REASONS.map((r, i): PurchaseReasonRow => ({ ...r, isCustom: false, order: i, archived: false })))
     if (!(await db.settings.get('singleton'))) await db.settings.add(defaultSettings())

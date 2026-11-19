@@ -420,7 +420,7 @@ describe('durable truth', () => {
   // touch durable data. `transfers` and `budgetAllocations` joined the readable list when the digest started keying on them
   // (a refund link and a budget change both move every figure and moved nothing this module looked at); the rule the test
   // enforces is unchanged — read freely, write only the disposable table.
-  const readable = ['transactions', 'annotations', 'transfers', 'budgetAllocations', 'savingsGoals']
+  const readable = ['transactions', 'annotations', 'transfers', 'budgetAllocations', 'savingsGoals', 'categories', 'settings']
   const readOnly = new Set(['count', 'where', 'above', 'each', 'get', 'toArray', 'orderBy', 'first', 'last', 'toCollection', 'primaryKeys'])
   const violations = (text: string): string[] => {
     const out: string[] = []
@@ -449,11 +449,12 @@ describe('durable truth', () => {
       // change an allocation, however convenient that would be.
       'db.transfers.add(row)', "db.transfers.delete('t1')", 'db.budgetAllocations.put(row)', 'db.budgetAllocations.clear()',
       'const a = db.budgetAllocations', 'db.savingsGoals.put(row)', 'db.savingsGoals.clear()', 'const g = db.savingsGoals',
-      'db.categories.toArray()',
+      'db.categories.put(row)', 'db.settings.update(1, {})', 'const s = db.settings', 'db.moods.toArray()',
     ]) expect(violations(bad), bad).not.toEqual([])
     for (const good of [
       'db.transactions.count()', "db.transactions.where('deletedAt').above(-Infinity).count()", 'db.analyticsCache.put(x)',
       'db.annotations.each(f)', 'db.transfers.toCollection().primaryKeys()', 'db.budgetAllocations.toArray()', 'db.savingsGoals.toArray()',
+      'db.categories.toArray()', "db.settings.get('singleton')",
     ]) {
       expect(violations(good), good).toEqual([])
     }

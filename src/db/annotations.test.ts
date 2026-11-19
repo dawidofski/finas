@@ -149,7 +149,7 @@ describe('resolve', () => {
     expect(out).toHaveLength(3000)
     expect(out.every(r => r.categoryId === 'cat.groceries')).toBe(true)
     expect(out.filter(r => r.note === 'x')).toHaveLength(500)
-    expect(reads).toBe(2) // one categories query + one annotations bulk get
+    expect(reads).toBe(3) // one categories query + one settings read (the owner's rules) + one annotations bulk get
   })
 })
 
