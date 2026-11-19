@@ -4,6 +4,7 @@ import { liveTransactionsBetween } from '../analysis/transactionsInRange'
 import { spendsOf } from '../battery/rank'
 import { addDays, daysBetween, monthKeyOf } from '../lib/dates'
 import { divRound } from '../lib/money'
+import { fold } from '../lib/text'
 import { detectRecurring, plausibleChange, type Detected, type Frequency } from './detect'
 
 export interface RecurringView extends Detected {
@@ -64,15 +65,41 @@ export function monthlyCostOf(frequency: Frequency, amountCents: number): number
   }
 }
 
+/** How a payment grouped by its description is marked in `merchantId`, so it can never be taken for a merchant's id. */
+export const DESCRIPTION_PREFIX = 'desc:'
+
+/**
+ * What a purchase with no merchant is grouped by: the bank's description with every word that holds a digit left out (a
+ * reference or card number changes from one payment to the next, the rest of the line does not), accents and case ignored
+ * and spaces collapsed. "Pago en TIENDA EJEMPLO* A1234" and "Pago en Tienda Ejemplo* B5678" are the same payee. Null when
+ * nothing is left to group by.
+ */
+export function descriptionKey(description: string): string | null {
+  const words = fold(description).toUpperCase().split(/\s+/).filter(w => w !== '' && !/\d/.test(w))
+  return words.length === 0 ? null : `${DESCRIPTION_PREFIX}${words.join(' ')}`
+}
+
+/** The name to show for a payment's `merchantId` when no merchant row carries one: a description key without its mark. */
+export function payeeName(merchantId: string): string {
+  return merchantId.startsWith(DESCRIPTION_PREFIX) ? merchantId.slice(DESCRIPTION_PREFIX.length) : merchantId
+}
+
 /**
  * Detection over the window, from the bank rows: spends only (via spendsOf, the project's one definition, so a refund can never
- * merge into the payments), by bank date, up to today. Spends with no merchant are left out: detection clusters by merchant,
- * and a spend without one has nothing to cluster on. Reads only; no clock.
+ * merge into the payments), by bank date, up to today. A spend is grouped by the merchant the owner set; one with no merchant
+ * is grouped by the bank's description (descriptionKey), since an import sets no merchant and most purchases never get one.
+ * The bank's description is used, not the owner's wording of it, so renaming a purchase does not split a payment in two.
+ * Reads only; no clock.
  */
 async function detectedNow(today: string): Promise<Detected[]> {
   const { first, last } = recurringWindow(today)
-  const spends = await spendsOf(await liveTransactionsBetween(first, last))
-  return detectRecurring(spends.flatMap(s => (s.merchantId === null || s.date > today ? [] : [{ merchantId: s.merchantId, valueDate: s.date, amountCents: s.centsOut }])))
+  const bank = await liveTransactionsBetween(first, last)
+  const described = new Map(bank.map(t => [t.id, t.description]))
+  const spends = await spendsOf(bank)
+  return detectRecurring(spends.flatMap(s => {
+    const group = s.merchantId ?? descriptionKey(described.get(s.id) ?? '')
+    return group === null || s.date > today ? [] : [{ merchantId: group, valueDate: s.date, amountCents: s.centsOut }]
+  }))
 }
 
 /**

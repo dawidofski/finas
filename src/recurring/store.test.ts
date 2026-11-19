@@ -4,7 +4,7 @@ import { db } from '../db/db'
 import { seedDatabase } from '../db/seed'
 import type { AnnotationRow, TransactionRow } from '../db/schema'
 import { addDays } from '../lib/dates'
-import { confirmRecurring, dismissRecurring, hiddenRecurring, markCancelled, monthlyCostOf, recurringPayments, recurringPreview, recurringWindow, restoreRecurring } from './store'
+import { confirmRecurring, descriptionKey, dismissRecurring, hiddenRecurring, markCancelled, monthlyCostOf, payeeName, recurringPayments, recurringPreview, recurringWindow, restoreRecurring } from './store'
 
 const TODAY = '2026-11-18'
 let n = 0
@@ -107,11 +107,32 @@ describe('recurring store', () => {
     expect(shown.map(v => v.merchantId)).toEqual(['m.in'])
   })
 
-  it('leaves out spends with no merchant, since they cannot be clustered', async () => {
+  it('groups spends with no merchant by the bank description, with the changing numbers left out', async () => {
     await monthly('m.x', M6.slice(0, 4), 1000)
-    const rows = M6.slice(0, 4).map(m => tx(`${m}-09`, -700))
-    await db.transactions.bulkAdd(rows)   // no annotation, so no merchant
-    expect((await recurringPayments(TODAY, 1)).map(v => v.merchantId)).toEqual(['m.x'])
+    const refs = ['A1001', 'B2002', 'C3003', 'D4004']
+    const rows = M6.slice(0, 4).map((m, i) => tx(`${m}-09`, -700, { description: `Pago en Televisión Ejemplo* ${refs[i]}` }))
+    const other = M6.slice(0, 4).map((m, i) => tx(`${m}-12`, -700, { description: `Pago en OTRA TIENDA ${refs[i]}` }))
+    await db.transactions.bulkAdd([...rows, ...other])   // no annotation, so no merchant
+    const found = await recurringPayments(TODAY, 1)
+    expect(found.map(v => v.merchantId).sort()).toEqual(['desc:PAGO EN OTRA TIENDA', 'desc:PAGO EN TELEVISION EJEMPLO*', 'm.x'])
+    expect(found.every(v => v.occurrences === 4)).toBe(true)
+    expect(payeeName('desc:PAGO EN OTRA TIENDA')).toBe('PAGO EN OTRA TIENDA')
+    expect(payeeName('m.x')).toBe('m.x')
+  })
+
+  it('has nothing to group a purchase by when its description is only numbers, and leaves it out', async () => {
+    expect(descriptionKey('  12345 678-9 ')).toBeNull()
+    expect(descriptionKey('Recibo  GIMNASIO   ejemplo 2026/11')).toBe('desc:RECIBO GIMNASIO EJEMPLO')
+    await db.transactions.bulkAdd(M6.slice(0, 4).map(m => tx(`${m}-09`, -700, { description: '000111 222' })))
+    expect(await recurringPayments(TODAY, 1)).toEqual([])
+  })
+
+  it('keeps a correction on a payment grouped by description', async () => {
+    await db.transactions.bulkAdd(M6.slice(0, 4).map((m, i) => tx(`${m}-09`, -1299, { description: `Pago en TELEVISION EJEMPLO ${i}9` })))
+    const [first] = await recurringPayments(TODAY, 1)
+    await dismissRecurring(first!.id)
+    expect(await recurringPayments(TODAY, 2)).toEqual([])
+    expect((await hiddenRecurring()).map(r => r.merchantId)).toEqual(['desc:PAGO EN TELEVISION EJEMPLO'])
   })
 
   it('marks a payment lapsed only once a whole cycle past its expected date is missed', async () => {

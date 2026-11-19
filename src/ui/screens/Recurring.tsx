@@ -4,7 +4,7 @@ import { formatSpanishDate } from '../../lib/dates'
 import { formatEur } from '../../lib/money'
 import { MIN_OCCURRENCES, type Frequency } from '../../recurring/detect'
 import type { RecurringRow } from '../../db/schema'
-import { confirmRecurring, dismissRecurring, hiddenRecurring, markCancelled, recurringPayments, restoreRecurring, type RecurringView } from '../../recurring/store'
+import { confirmRecurring, dismissRecurring, hiddenRecurring, markCancelled, payeeName, recurringPayments, restoreRecurring, type RecurringView } from '../../recurring/store'
 
 /**
  * How the evidence is put in words. The stored figure (basis points, 0 to 10000) says how many payments there are and what
@@ -40,7 +40,7 @@ async function load(today: string, computedAt: number): Promise<Loaded> {
   const ids = [...new Set([...views.map((v) => v.merchantId), ...hidden.map((r) => r.merchantId)])]
   const merchants = await db.merchants.bulkGet(ids)
   const names = new Map<string, string>()
-  ids.forEach((id, i) => names.set(id, merchants[i]?.canonicalName ?? id))
+  ids.forEach((id, i) => names.set(id, merchants[i]?.canonicalName ?? payeeName(id)))
   return { views, names, hidden }
 }
 
@@ -216,7 +216,7 @@ export default function Recurring({ today, computedAt }: { today: string; comput
                   <p>No recurring payments have been found yet. This is the normal starting point, not a problem with your records.</p>
                   <p>
                     A payment is found when your records show at least {COUNT_WORD[MIN_OCCURRENCES] ?? String(MIN_OCCURRENCES)} payments to the same merchant at a steady interval, such as every week, every month
-                    or every three months. A yearly bill is not found here: the records read cover about fourteen months. Payments that have no merchant cannot be grouped. If you have not yet, <a href="#/import">import your bank statements</a>.
+                    or every three months. A yearly bill is not found here: the records read cover about fourteen months. A payment with no merchant set is grouped by the bank's description, leaving out any numbers in it. If you have not yet, <a href="#/import">import your bank statements</a>.
                   </p>
                 </>
               )}
