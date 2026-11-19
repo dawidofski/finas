@@ -98,3 +98,21 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
   .transactions tr.tx-row td:nth-child(3) { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-weight: 700; }
   .tx-filters { grid-template-columns: 1fr; }
 }
+
+/* Nothing may make the page wider than the screen.
+   1. The five destinations share the width equally and may shrink below the width of their label: a track of plain 1fr
+      cannot go under its content, so five labels at a narrow width or a large text size pushed the whole page wider.
+   2. A table sizes itself to its content and ignores a 1px width, so the hidden reading of a chart stuck out past the
+      edge of a narrow screen. As a block it obeys the width and is clipped, and it is still announced as a table.
+   3. A last line of defence: the frame never scrolls sideways, whatever a screen puts inside it. */
+.nav-primary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.nav-primary .nav-link { min-width: 0; overflow: hidden; }
+.nav-primary .nav-link > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-primary .nav-glyph { padding: 0.2rem 0.75rem; }
+table.sr-only { display: block; max-width: 1px; }
+.sr-only { left: 0; }
+html, body { max-width: 100%; overflow-x: clip; }
+.shell { max-width: 100vw; overflow-x: clip; }
+.screen { min-width: 0; }
+.screen > section, .card, .stat { min-width: 0; max-width: 100%; }
+.screen img, .screen svg, .screen table, .screen pre { max-width: 100%; }
